@@ -1,0 +1,84 @@
+.layered-memory-root {
+    margin: 0.5rem 0;
+    padding: 0.25rem 0;
+}
+
+.layered-memory-root .lm-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-bottom: 0.5rem;
+}
+
+.layered-memory-root .lm-tab.active {
+    outline: 1px solid var(--SmartThemeBorderColor, #888);
+}
+
+.layered-memory-root .lm-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.layered-memory-root .lm-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 0.75rem;
+}
+
+.layered-memory-root .lm-list > li {
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #666) 40%, transparent);
+    padding: 0.4rem 0;
+}
+
+.layered-memory-root .lm-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+}
+
+.layered-memory-root .lm-muted {
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+.layered-memory-root .lm-warn {
+    color: #c45c26;
+    font-size: 0.85em;
+}
+
+.layered-memory-root .lm-pre {
+    white-space: pre-wrap;
+    font-family: inherit;
+    font-size: 0.9em;
+    margin: 0.25rem 0;
+    max-height: 12em;
+    overflow: auto;
+}
+
+.layered-memory-root .lm-pinned {
+    border-left: 3px solid var(--SmartThemeQuoteColor, #c9a227);
+    padding-left: 0.4rem;
+}
+
+.layered-memory-root .lm-field {
+    display: block;
+    margin: 0.4rem 0;
+}
+
+.layered-memory-root .lm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    gap: 0.35rem;
+    margin: 0.5rem 0;
+}
+
+.layered-memory-root .lm-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.9em;
+}

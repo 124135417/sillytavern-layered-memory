@@ -1,0 +1,13 @@
+{
+    "display_name": "分层长程记忆",
+    "loading_order": 50,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "124135417",
+    "version": "0.1.0",
+    "homePage": "https://github.com/124135417/sillytavern-layered-memory",
+    "auto_update": true,
+    "generate_interceptor": "layeredMemoryIntercept"
+}
