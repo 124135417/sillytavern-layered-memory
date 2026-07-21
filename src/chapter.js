@@ -9,9 +9,6 @@ import { estimateTokens } from './tokens.js';
 function buildKeywordIndex(data) {
     const index = {};
     for (const ch of data.chapters || []) {
-        if (ch.demoted) {
-            // still indexable for L4
-        }
         for (const kw of ch.keywords || []) {
             const k = String(kw).trim().toLowerCase();
             if (!k) {
@@ -25,7 +22,6 @@ function buildKeywordIndex(data) {
             }
         }
     }
-    // State table entities → chapter of established/updated floor if numeric pair in range
     for (const e of data.state_table?.entries || []) {
         for (const name of [e.subject, e.object]) {
             if (!name) {
@@ -61,20 +57,24 @@ function findChapterForFloorLabel(data, floorLabel) {
     return null;
 }
 
-export async function handleChapterSummaryJob(payload) {
-    if (payload.regenStale) {
-        await handleRegenStaleChapters();
-        return;
+function nextChapterId(data) {
+    if (!data.progress) {
+        data.progress = {};
     }
-    const { startPair, endPair } = payload;
-    const settings = getSettings();
-    const data = getChatData();
-    const existing = (data.chapters || []).find(c =>
-        c.floor_range?.[0] === startPair && c.floor_range?.[1] === endPair && !c.stale);
-    if (existing) {
-        return;
-    }
+    const seq = data.progress.next_chapter_seq || 1;
+    data.progress.next_chapter_seq = seq + 1;
+    return `ch_${String(seq).padStart(3, '0')}`;
+}
 
+function advanceChapterEnd(data, endPair) {
+    const cur = data.progress.last_chapter_end_pair ?? -1;
+    if (endPair > cur) {
+        data.progress.last_chapter_end_pair = endPair;
+    }
+}
+
+async function buildChapterBody(startPair, endPair, data) {
+    const settings = getSettings();
     const pairs = getPairs().filter(p => p.pairIndex >= startPair && p.pairIndex <= endPair && p.sealed);
     const texts = pairs.map(p => {
         const { userText, aiText } = getPairTexts(p);
@@ -83,26 +83,59 @@ export async function handleChapterSummaryJob(payload) {
     let body = texts.join('\n\n');
     const cap = settings.chapterInputTokenCap || 20000;
     if (estimateTokens(body) > cap) {
-        // Split halves, summarize each, then merge
         const mid = Math.floor(texts.length / 2);
-        const left = await summarizeChunk(texts.slice(0, mid).join('\n\n'), data);
-        const right = await summarizeChunk(texts.slice(mid).join('\n\n'), data);
+        const left = await summarizeChunk(texts.slice(0, mid).join('\n\n'));
+        const right = await summarizeChunk(texts.slice(mid).join('\n\n'));
         body = `上半摘要：${left.summary}\n下半摘要：${right.summary}`;
     }
 
-    const prev = (data.chapters || []).filter(c => !c.stale && c.floor_range?.[1] < startPair).at(-1);
+    const prev = (data.chapters || [])
+        .filter(c => !c.stale && c.floor_range?.[1] < startPair)
+        .sort((a, b) => a.floor_range[1] - b.floor_range[1])
+        .at(-1);
     const bridge = prev?.summary ? prev.summary.slice(-80) : '';
-    const userPrompt = [
+    return [
         bridge ? `上一章末尾（仅衔接）：…${bridge}\n\n` : '',
         body,
     ].join('');
+}
 
-    const result = await summarizeChunk(userPrompt, data);
-    const id = `ch_${String((data.chapters?.length || 0) + 1).padStart(3, '0')}`;
-    // Remove stale chapter with same range
-    data.chapters = (data.chapters || []).filter(c =>
-        !(c.floor_range?.[0] === startPair && c.floor_range?.[1] === endPair));
+export async function handleChapterSummaryJob(payload) {
+    if (payload.regenStale) {
+        await handleRegenStaleChapters();
+        return;
+    }
+    const { startPair, endPair } = payload;
+    const data = getChatData();
 
+    // Fresh non-stale chapter already present → noop
+    const fresh = (data.chapters || []).find(c =>
+        c.floor_range?.[0] === startPair && c.floor_range?.[1] === endPair && !c.stale);
+    if (fresh) {
+        return;
+    }
+
+    const userPrompt = await buildChapterBody(startPair, endPair, data);
+    const result = await summarizeChunk(userPrompt);
+
+    // Stale (or any) chapter with same range → in-place replace (keep id / volume_id / demoted / pinned)
+    const sameRange = (data.chapters || []).find(c =>
+        c.floor_range?.[0] === startPair && c.floor_range?.[1] === endPair);
+    if (sameRange) {
+        sameRange.summary = result.summary;
+        sameRange.keywords = result.keywords || [];
+        sameRange.stale = false;
+        sameRange.frozen = true;
+        advanceChapterEnd(data, endPair);
+        buildKeywordIndex(data);
+        await saveChatData();
+        appendLog('info', `章节摘要原地更新 ${sameRange.id} [${startPair}-${endPair}]`);
+        enqueue('volume_compress', { reason: 'budget_check' }, QUEUE_PRIORITY.volume_compress);
+        return;
+    }
+
+    const id = nextChapterId(data);
+    data.chapters = data.chapters || [];
     data.chapters.push({
         id,
         summary: result.summary,
@@ -114,16 +147,15 @@ export async function handleChapterSummaryJob(payload) {
         frozen: true,
         volume_id: null,
     });
-    data.progress.last_chapter_end_pair = endPair;
+    advanceChapterEnd(data, endPair);
     buildKeywordIndex(data);
     await saveChatData();
     appendLog('info', `章节摘要完成 ${id} [${startPair}-${endPair}]`);
 
-    // Check L2 budget
     enqueue('volume_compress', { reason: 'budget_check' }, QUEUE_PRIORITY.volume_compress);
 }
 
-async function summarizeChunk(text, data) {
+async function summarizeChunk(text) {
     const { text: out } = await callAuxModel({
         purpose: 'chapter_summary',
         systemPrompt: CHAPTER_SYSTEM,
@@ -163,12 +195,13 @@ export async function handleRegenStaleChapters() {
     const data = getChatData();
     const staleChapters = (data.chapters || []).filter(c => c.stale);
     for (const ch of staleChapters) {
+        // In-place path via same range match
         await handleChapterSummaryJob({
             startPair: ch.floor_range[0],
             endPair: ch.floor_range[1],
         });
     }
-    const staleVols = (data.volumes || []).filter(v => v.stale);
+    const staleVols = (getChatData().volumes || []).filter(v => v.stale);
     if (staleVols.length) {
         enqueue('volume_compress', { force: true, staleVolumes: staleVols.map(v => v.id) }, QUEUE_PRIORITY.volume_compress);
     }

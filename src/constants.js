@@ -27,13 +27,14 @@ export const QUEUE_PRIORITY = {
     migrate: 10,
 };
 
-/** Types where chat trimming must NOT run. */
+/**
+ * Types where chat trimming must NOT run.
+ * swipe / regenerate 与普通 generate 同形，必须裁剪，否则长聊 swipe 会打满历史。
+ */
 export const NO_TRIM_TYPES = new Set([
     'continue',
-    'regenerate',
     'impersonate',
     'quiet',
-    'swipe',
 ]);
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -57,6 +58,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     l4Enabled: false,
     mentionStatMode: 'summary_and_table', // or 'full_text'
     chapterInputTokenCap: 20000,
+    /** 仅在此模式下，手动改表才自动写入错例库 */
+    migrationReviewMode: false,
     eval_cases: [],
 });
 
@@ -77,6 +80,7 @@ export const EMPTY_CHAT_DATA = () => ({
         last_chapter_end_pair: -1,
         pairs_since_proofread: 0,
         next_entry_seq: 1,
+        next_chapter_seq: 1,
     },
     logs: [],
 });

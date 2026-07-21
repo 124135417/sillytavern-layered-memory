@@ -43,6 +43,23 @@ export function getChatData() {
     }
     if (!data.progress) {
         data.progress = blank.progress;
+    } else {
+        for (const pk of Object.keys(blank.progress)) {
+            if (!Object.hasOwn(data.progress, pk)) {
+                data.progress[pk] = blank.progress[pk];
+            }
+        }
+        // Recover next_chapter_seq from existing chapters if missing/stale low
+        if (!data.progress.next_chapter_seq || data.progress.next_chapter_seq < 1) {
+            data.progress.next_chapter_seq = 1;
+        }
+        const maxSeq = (data.chapters || []).reduce((m, c) => {
+            const n = Number(String(c.id || '').replace(/^ch_/, ''));
+            return Number.isFinite(n) ? Math.max(m, n) : m;
+        }, 0);
+        if (maxSeq >= data.progress.next_chapter_seq) {
+            data.progress.next_chapter_seq = maxSeq + 1;
+        }
     }
     return data;
 }

@@ -1,5 +1,5 @@
 import { QUEUE_PRIORITY } from './constants.js';
-import { appendLog, getChatData, saveChatData } from './settings.js';
+import { appendLog, getChatData, getSettings, saveChatData } from './settings.js';
 
 /** @type {{ id: string, type: string, priority: number, payload: any, status: string }[]} */
 let memoryQueue = [];
@@ -12,17 +12,41 @@ export function registerHandler(type, fn) {
     handlers.set(type, fn);
 }
 
+function isDuplicateJob(type, payload) {
+    const same = (j) => {
+        if (j.type !== type) {
+            return false;
+        }
+        if (type === 'extract') {
+            return j.payload?.floorKey && j.payload.floorKey === payload.floorKey;
+        }
+        if (type === 'chapter_summary') {
+            if (payload.regenStale) {
+                return Boolean(j.payload?.regenStale);
+            }
+            return j.payload?.startPair === payload.startPair && j.payload?.endPair === payload.endPair;
+        }
+        if (type === 'migrate_extract_chapter') {
+            return j.payload?.startPair === payload.startPair && j.payload?.endPair === payload.endPair;
+        }
+        if (type === 'volume_compress' && (payload.reason === 'budget' || payload.reason === 'budget_check')) {
+            return j.payload?.reason === 'budget' || j.payload?.reason === 'budget_check';
+        }
+        return false;
+    };
+    if (memoryQueue.some(j => j.status === 'queued' && same(j))) {
+        return true;
+    }
+    if (inFlight && same(inFlight)) {
+        return true;
+    }
+    return false;
+}
+
 export function enqueue(type, payload = {}, priority = QUEUE_PRIORITY[type] ?? 50) {
     const id = crypto.randomUUID();
-    // Deduplicate extract jobs for same floorKey
-    if (type === 'extract' && payload.floorKey) {
-        const dup = memoryQueue.find(j => j.type === 'extract' && j.payload?.floorKey === payload.floorKey && j.status === 'queued');
-        if (dup) {
-            return dup.id;
-        }
-        if (inFlight?.type === 'extract' && inFlight.payload?.floorKey === payload.floorKey) {
-            return inFlight.id;
-        }
+    if (isDuplicateJob(type, payload)) {
+        return null;
     }
     const job = { id, type, priority, payload, status: 'queued', createdAt: Date.now() };
     memoryQueue.push(job);
@@ -67,12 +91,79 @@ async function pump() {
 }
 
 /**
+ * Rollback extracted_keys that no longer map to a live sealed pair (e.g. deleted messages).
+ */
+async function rollbackOrphanExtracts(getPairs) {
+    const { rollbackFloor } = await import('./merge.js');
+    const data = getChatData();
+    const live = new Set(
+        getPairs().filter(p => p.sealed).map(p => p.floorKey),
+    );
+    const orphans = (data.extracted_keys || []).filter(k => !live.has(k));
+    for (const key of orphans) {
+        await rollbackFloor(key);
+        appendLog('info', `孤儿提取键已回滚: ${key}`);
+    }
+    return orphans.length;
+}
+
+/**
+ * Enqueue chapter summaries for fully-extracted ranges that lack a non-stale chapter.
+ * Compensates for jobs lost on refresh between extract-complete and chapter-summary.
+ */
+function enqueueMissingChapters(getPairs) {
+    const settings = getSettings();
+    const size = settings.chapterSize || 25;
+    const data = getChatData();
+    const pairs = getPairs();
+    const extracted = new Set(data.extracted_keys || []);
+    const sealedIndexes = pairs.filter(p => p.sealed).map(p => p.pairIndex);
+    if (!sealedIndexes.length) {
+        return 0;
+    }
+    const maxPair = Math.max(...sealedIndexes);
+    if (maxPair < size - 1) {
+        return 0;
+    }
+
+    let enqueued = 0;
+    for (let start = 0; start + size - 1 <= maxPair; start += size) {
+        const end = start + size - 1;
+        let complete = true;
+        for (let i = start; i <= end; i++) {
+            const p = pairs.find(x => x.pairIndex === i);
+            if (!p?.sealed || !extracted.has(p.floorKey)) {
+                complete = false;
+                break;
+            }
+        }
+        if (!complete) {
+            continue;
+        }
+        const covered = (data.chapters || []).some(c =>
+            !c.stale
+            && c.floor_range?.[0] === start
+            && c.floor_range?.[1] === end);
+        if (!covered) {
+            enqueue('chapter_summary', { startPair: start, endPair: end }, QUEUE_PRIORITY.chapter_summary);
+            enqueued += 1;
+        }
+    }
+    return enqueued;
+}
+
+/**
  * Rebuild pending extract list from chat vs extracted_keys, then enqueue.
+ * Also: orphan rollback + missing chapter compensation.
  */
 export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {}) {
     const { getFrozenPairs, getPairs } = await import('./ids.js');
+
+    await rollbackOrphanExtracts(getPairs);
+
     const data = getChatData();
-    const extracted = new Set(data.extracted_keys || []);
+    // re-read after possible rollbacks
+    const extracted = new Set(getChatData().extracted_keys || []);
     let candidates = getFrozenPairs();
 
     if (forceLastSealed) {
@@ -100,5 +191,11 @@ export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {})
     for (const item of pending) {
         enqueue('extract', item, QUEUE_PRIORITY.extract);
     }
+
+    const missingCh = enqueueMissingChapters(getPairs);
+    if (missingCh) {
+        appendLog('info', `补偿入队缺失章节摘要 ×${missingCh}`);
+    }
+
     return pending.length;
 }

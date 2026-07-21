@@ -1,17 +1,19 @@
-import { handleChapterSummaryJob } from './src/chapter.js';
+import { handleChapterSummaryJob, markChaptersStaleForPair } from './src/chapter.js';
 import { handleExtractJob } from './src/extract.js';
-import { handleMigrateChapterJob, handleMigrateExtractAllJob } from './src/eval/migrate.js';
+import {
+    handleMigrateChapterJob,
+    handleMigrateExtractChapterJob,
+    handleMigrateFinalizeJob,
+} from './src/eval/migrate.js';
 import { ensureMessageIds, getPairs } from './src/ids.js';
 import { trimChatForGenerate, updateInjection } from './src/inject.js';
 import { rollbackFloor } from './src/merge.js';
 import { handleProofreadJob } from './src/proofread.js';
-import { enqueue, rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
-import { QUEUE_PRIORITY } from './src/constants.js';
+import { rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
 import { appendLog, getChatData, getSettings, saveChatData } from './src/settings.js';
 import { handleStateGcJob } from './src/state-gc.js';
 import { injectPanel, registerMessageMenu, renderActiveTab } from './src/ui/panel.js';
 import { handleVolumeCompressJob } from './src/volume.js';
-import { markChaptersStaleForPair } from './src/chapter.js';
 
 const MODULE = 'layered-memory';
 
@@ -26,7 +28,8 @@ function wireHandlers() {
     registerHandler('proofread', handleProofreadJob);
     registerHandler('state_gc', handleStateGcJob);
     registerHandler('migrate_chapter', handleMigrateChapterJob);
-    registerHandler('migrate_extract_all', handleMigrateExtractAllJob);
+    registerHandler('migrate_extract_chapter', handleMigrateExtractChapterJob);
+    registerHandler('migrate_finalize', handleMigrateFinalizeJob);
 }
 
 async function onChatChanged() {
@@ -38,23 +41,22 @@ async function onChatChanged() {
 
 async function onMessageEvents(mesId) {
     ensureMessageIds();
-    // If a sealed pair was edited/swiped/deleted, rollback + stale
     const data = getChatData();
     const pairs = getPairs();
-    // Heuristic: find pair containing this mes index
     const chat = ctx().chat;
-    const mes = chat[mesId];
-    if (!mes) {
-        await rebuildAndEnqueuePending();
-        updateInjection();
-        return;
+    const mes = typeof mesId === 'number' || /^\d+$/.test(String(mesId))
+        ? chat[Number(mesId)]
+        : null;
+
+    if (mes) {
+        const pair = pairs.find(p => p.user === mes || p.ai === mes);
+        if (pair?.floorKey && (data.extracted_keys || []).includes(pair.floorKey)) {
+            await rollbackFloor(pair.floorKey);
+            await markChaptersStaleForPair(pair.pairIndex);
+            appendLog('info', `已回滚并标记 stale：楼#${pair.pairIndex}`);
+        }
     }
-    const pair = pairs.find(p => p.user === mes || p.ai === mes);
-    if (pair?.floorKey && (data.extracted_keys || []).includes(pair.floorKey)) {
-        await rollbackFloor(pair.floorKey);
-        await markChaptersStaleForPair(pair.pairIndex);
-        appendLog('info', `已回滚并标记 stale：楼#${pair.pairIndex}`);
-    }
+    // Delete / missing mes: orphan keys rolled back inside rebuildAndEnqueuePending
     await rebuildAndEnqueuePending();
     updateInjection();
 }
@@ -68,7 +70,6 @@ globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, 
             return;
         }
         ensureMessageIds();
-        // Enqueue pending extracts without awaiting
         void rebuildAndEnqueuePending();
         updateInjection();
         trimChatForGenerate(chat, type);
@@ -92,7 +93,6 @@ jQuery(async () => {
 
     eventSource.on(event_types.MESSAGE_RECEIVED, () => {
         ensureMessageIds();
-        // Delayed extract: when user sends, previous AI pair becomes frozen
         void rebuildAndEnqueuePending();
         updateInjection();
     });
@@ -126,7 +126,7 @@ jQuery(async () => {
         });
     }
 
-    console.log(`[${MODULE}] 已加载 v0.1.0`);
+    console.log(`[${MODULE}] 已加载 v0.1.1`);
 });
 
 export async function onActivate() {

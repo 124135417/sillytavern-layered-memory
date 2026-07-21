@@ -2,7 +2,7 @@ import { QUEUE_PRIORITY } from '../constants.js';
 import { handleChapterSummaryJob, buildKeywordIndex } from '../chapter.js';
 import { extractFromChapterSummary } from '../extract.js';
 import { addEvalCase } from './cases.js';
-import { appendLog, getChatData, saveChatData } from '../settings.js';
+import { appendLog, getChatData, getSettings, saveChatData, saveSettings } from '../settings.js';
 import { getPairs } from '../ids.js';
 import { enqueue } from '../queue.js';
 
@@ -13,7 +13,8 @@ export function requestMigrateAbort() {
 }
 
 /**
- * Long-running migration. Enqueued as low priority jobs per chapter.
+ * Long-running migration. Each chapter summary + each chapter extract is its own
+ * low-priority job so realtime extract can jump the queue between them.
  */
 export async function startMigration() {
     migrateAbort = false;
@@ -23,30 +24,39 @@ export async function startMigration() {
         return;
     }
 
-    const { getSettings } = await import('../settings.js');
-    const size = getSettings().chapterSize || 25;
+    const settings = getSettings();
+    settings.migrationReviewMode = true;
+    saveSettings();
+
+    const size = settings.chapterSize || 25;
     const jobs = [];
     for (let start = 0; start < pairs.length; start += size) {
-        const end = Math.min(start + size - 1, pairs[pairs.length - 1].pairIndex);
-        const endPair = Math.min(start + size - 1, pairs.length - 1);
-        // Use actual pairIndex from filtered list
         const slice = pairs.slice(start, start + size);
         if (!slice.length) {
             continue;
         }
+        // Only full chapters for summary; trailing partial still gets extract-from-whatever exists after
         jobs.push({
             startPair: slice[0].pairIndex,
             endPair: slice[slice.length - 1].pairIndex,
+            full: slice.length >= size,
         });
-        void end;
-        void endPair;
     }
 
     for (const job of jobs) {
-        enqueue('migrate_chapter', job, QUEUE_PRIORITY.migrate);
+        if (job.full) {
+            enqueue('migrate_chapter', {
+                startPair: job.startPair,
+                endPair: job.endPair,
+            }, QUEUE_PRIORITY.migrate);
+        }
+        enqueue('migrate_extract_chapter', {
+            startPair: job.startPair,
+            endPair: job.endPair,
+        }, QUEUE_PRIORITY.migrate);
     }
-    enqueue('migrate_extract_all', {}, QUEUE_PRIORITY.migrate);
-    appendLog('info', `迁移已入队：${jobs.length} 章摘要 + 状态表回填`);
+    enqueue('migrate_finalize', {}, QUEUE_PRIORITY.migrate);
+    appendLog('info', `迁移已入队：${jobs.filter(j => j.full).length} 章摘要 + ${jobs.length} 章提取（已开启迁移校对模式）`);
 }
 
 export async function handleMigrateChapterJob(payload) {
@@ -56,37 +66,54 @@ export async function handleMigrateChapterJob(payload) {
     await handleChapterSummaryJob(payload);
 }
 
-export async function handleMigrateExtractAllJob() {
+export async function handleMigrateExtractChapterJob(payload) {
     if (migrateAbort) {
         return;
     }
+    const { startPair, endPair } = payload;
     const data = getChatData();
-    const chapters = [...(data.chapters || [])].sort((a, b) => a.floor_range[0] - b.floor_range[0]);
-    for (const ch of chapters) {
-        if (migrateAbort) {
-            break;
-        }
-        // Snapshot before merge for potential eval
-        const before = structuredClone(data.state_table);
-        await extractFromChapterSummary({ chapter: ch, stateTableSnapshot: before });
-        // Floor labels already chapter-precision via extractFromChapterSummary
+    let ch = (data.chapters || []).find(c =>
+        c.floor_range?.[0] === startPair && c.floor_range?.[1] === endPair && !c.stale);
+    if (!ch) {
+        // Partial trailing chapter or summary not ready: synthesize a temp summary from range label
+        ch = (data.chapters || []).find(c =>
+            c.floor_range?.[0] === startPair && c.floor_range?.[1] === endPair);
+    }
+    if (!ch?.summary) {
+        appendLog('warn', `迁移提取跳过：无章摘要 [${startPair}-${endPair}]`);
+        return;
+    }
+    const before = structuredClone(data.state_table);
+    await extractFromChapterSummary({ chapter: ch, stateTableSnapshot: before });
+}
+
+export async function handleMigrateFinalizeJob() {
+    if (migrateAbort) {
+        appendLog('info', '迁移已中止');
+        return;
     }
     buildKeywordIndex(getChatData());
-    await saveChatData();
-    getChatData().review_queue.push({
-        id: crypto.randomUUID(),
-        kind: 'alert',
-        note: '存量迁移回填完成，请人工校对状态表。修改将自动记入错例库。',
-        createdAt: Date.now(),
-    });
+    const data = getChatData();
+    const already = (data.review_queue || []).some(x => x.kind === 'alert' && String(x.note || '').includes('存量迁移'));
+    if (!already) {
+        data.review_queue.push({
+            id: crypto.randomUUID(),
+            kind: 'alert',
+            note: '存量迁移回填完成。当前为「迁移校对模式」：改表会自动记入错例库。校对结束后请在设置中关闭该模式。',
+            createdAt: Date.now(),
+        });
+    }
     await saveChatData();
     appendLog('info', '迁移状态表回填完成');
 }
 
 /**
- * Hook: user edited state table during/after migration → auto eval case.
+ * Hook: user edited state table during migration review mode → auto eval case.
  */
 export function recordMigrationEdit({ beforeEntry, afterEntry, op }) {
+    if (!getSettings().migrationReviewMode) {
+        return;
+    }
     const data = getChatData();
     const chapters = data.chapters || [];
     const ch = chapters.find(c => {

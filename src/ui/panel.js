@@ -394,6 +394,7 @@ function renderSettingsTab() {
     const q = getQueueSnapshot();
     return `
         <label class="lm-field"><input type="checkbox" id="lm-enabled" ${s.enabled ? 'checked' : ''}/> 启用插件</label>
+        <label class="lm-field"><input type="checkbox" id="lm-mig-review" ${s.migrationReviewMode ? 'checked' : ''}/> 迁移校对模式（开启时手动改表才自动记错例）</label>
         <label class="lm-field">Connection Profile（优先）
             <select id="lm-profile"><option value="">（当前主连接 / generateRaw）</option>${profileOpts}</select>
         </label>
@@ -441,6 +442,7 @@ function bindSettingsTab(body) {
     body.querySelector('#lm-save')?.addEventListener('click', () => {
         const s = getSettings();
         s.enabled = body.querySelector('#lm-enabled').checked;
+        s.migrationReviewMode = body.querySelector('#lm-mig-review').checked;
         s.connectionProfile = body.querySelector('#lm-profile').value;
         s.fallbackEnabled = body.querySelector('#lm-fb-on').checked;
         s.fallbackBaseUrl = body.querySelector('#lm-fb-url').value.trim();

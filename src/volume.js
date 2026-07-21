@@ -74,14 +74,17 @@ export async function handleVolumeCompressJob(payload = {}) {
     }
 
     if (settings.volumeCompressConfirm && !payload.confirmed) {
-        data.review_queue.push({
-            id: crypto.randomUUID(),
-            kind: 'volume_compress_ask',
-            note: 'L2 已超预算，是否执行卷压缩？',
-            createdAt: Date.now(),
-        });
-        await saveChatData();
-        appendLog('info', '卷压缩等待用户确认');
+        const already = (data.review_queue || []).some(x => x.kind === 'volume_compress_ask');
+        if (!already) {
+            data.review_queue.push({
+                id: crypto.randomUUID(),
+                kind: 'volume_compress_ask',
+                note: 'L2 已超预算，是否执行卷压缩？',
+                createdAt: Date.now(),
+            });
+            await saveChatData();
+            appendLog('info', '卷压缩等待用户确认');
+        }
         return;
     }
 

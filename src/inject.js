@@ -1,11 +1,10 @@
-import { NO_TRIM_TYPES, PROMPT_KEYS } from './constants.js';
-import { getPairs } from './ids.js';
+import { NO_TRIM_TYPES, PROMPT_KEYS, QUEUE_PRIORITY } from './constants.js';
+import { getPairs, messageStableKey } from './ids.js';
 import { retrieveHits } from './retrieve.js';
 import { renderL1Block, renderL2Block, renderL4Block } from './render.js';
+import { enqueue } from './queue.js';
 import { getChatData, getSettings } from './settings.js';
 import { estimateTokens } from './tokens.js';
-import { enqueue } from './queue.js';
-import { QUEUE_PRIORITY } from './constants.js';
 
 function extensionPromptApi() {
     const ctx = SillyTavern.getContext();
@@ -42,7 +41,6 @@ export function updateInjection() {
     const l1 = renderL1Block(data, settings.budgetL1);
     const l2 = renderL2Block(data, { budget: settings.budgetL2 });
 
-    // Budget side-effects: enqueue, don't block
     if (estimateTokens(renderL2Block(data, { forBudget: true })) > (settings.budgetL2 || 5000)) {
         enqueue('volume_compress', { reason: 'budget' }, QUEUE_PRIORITY.volume_compress);
     }
@@ -59,25 +57,22 @@ export function updateInjection() {
     const IN_CHAT = extension_prompt_types.IN_CHAT;
     const SYSTEM = extension_prompt_roles.SYSTEM;
 
-    // Register L1 before L2 at same depth so order is preserved where ST groups by registration
     setExtensionPrompt(PROMPT_KEYS.L1, l1, IN_CHAT, settings.depthL1 ?? 100, false, SYSTEM);
     setExtensionPrompt(PROMPT_KEYS.L2, l2, IN_CHAT, settings.depthL2 ?? 100, false, SYSTEM);
     setExtensionPrompt(PROMPT_KEYS.L4, l4, IN_CHAT, settings.depthL4 ?? 4, false, SYSTEM);
 }
 
 /**
- * Trim chat for normal generate.
+ * Trim chat for normal generate / swipe / regenerate.
  * Keep from min(recentStart, gapStart) so chapter-gap pairs are never dropped.
+ * Also keep: greeting (before first user), and unpaired msgs inside the keep index window.
  */
 export function trimChatForGenerate(chat, type) {
     const settings = getSettings();
     if (!settings.enabled) {
         return;
     }
-    if (NO_TRIM_TYPES.has(type)) {
-        return;
-    }
-    if (type && !['', 'normal', 'group_chat', 'auto_continue'].includes(type)) {
+    if (type && NO_TRIM_TYPES.has(type)) {
         return;
     }
 
@@ -98,8 +93,16 @@ export function trimChatForGenerate(chat, type) {
         return;
     }
 
+    const pairedMes = new Set();
     const keepKeys = new Set();
+    let minKeepIdx = Infinity;
+    let maxKeepIdx = -1;
+
     for (const p of pairs) {
+        pairedMes.add(p.user);
+        if (p.ai) {
+            pairedMes.add(p.ai);
+        }
         if (p.pairIndex >= startPair) {
             keepKeys.add(p.userKey);
             if (p.aiKey) {
@@ -108,14 +111,42 @@ export function trimChatForGenerate(chat, type) {
         }
     }
 
+    // Index window of kept pairs (for unpaired messages inside the window)
+    for (let i = 0; i < chat.length; i++) {
+        const mes = chat[i];
+        const paired = pairs.find(p => p.user === mes || p.ai === mes);
+        if (paired && paired.pairIndex >= startPair) {
+            minKeepIdx = Math.min(minKeepIdx, i);
+            maxKeepIdx = Math.max(maxKeepIdx, i);
+        }
+    }
+
+    // First user message index — everything before is greeting / leading AI
+    let firstUserIdx = chat.findIndex(m => m.is_user);
+    if (firstUserIdx < 0) {
+        firstUserIdx = 0;
+    }
+
     for (let i = chat.length - 1; i >= 0; i--) {
         const mes = chat[i];
-        const key = mes.extra?.layered_memory_id
-            || `${mes.send_date ?? 'nodate'}::${mes.swipe_id ?? 0}::${mes.is_user ? 'u' : 'a'}`;
+        const key = mes.extra?.layered_memory_id || messageStableKey(mes);
         const paired = pairs.find(p => p.user === mes || p.ai === mes);
         const stable = paired ? (mes.is_user ? paired.userKey : paired.aiKey) : key;
-        if (!keepKeys.has(stable) && !keepKeys.has(key)) {
-            chat.splice(i, 1);
+
+        if (keepKeys.has(stable) || keepKeys.has(key)) {
+            continue;
         }
+
+        // Always keep character greeting / leading messages before first user
+        if (i < firstUserIdx) {
+            continue;
+        }
+
+        // Keep unpaired messages that sit inside the kept pair index window
+        if (!pairedMes.has(mes) && minKeepIdx !== Infinity && i >= minKeepIdx && i <= maxKeepIdx) {
+            continue;
+        }
+
+        chat.splice(i, 1);
     }
 }
