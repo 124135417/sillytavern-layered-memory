@@ -3,7 +3,7 @@ import { handleChapterSummaryJob, buildKeywordIndex } from '../chapter.js';
 import { extractFromChapterSummary } from '../extract.js';
 import { addEvalCase } from './cases.js';
 import { appendLog, getChatData, getSettings, saveChatData, saveSettings } from '../settings.js';
-import { getPairs } from '../ids.js';
+import { ensureActivationBaseline, getPairs } from '../ids.js';
 import { enqueue } from '../queue.js';
 
 let migrateAbort = false;
@@ -13,14 +13,21 @@ export function requestMigrateAbort() {
 }
 
 /**
- * Long-running migration. Each chapter summary + each chapter extract is its own
- * low-priority job so realtime extract can jump the queue between them.
+ * Migration only covers history at/before activation baseline.
+ * Each chapter summary + extract is its own low-priority job.
+ * Trailing partial floors get per-floor extract (ignoreBaseline) at finalize.
  */
 export async function startMigration() {
     migrateAbort = false;
-    const pairs = getPairs().filter(p => p.sealed);
+    const baseline = ensureActivationBaseline();
+    if (baseline < 0) {
+        appendLog('warn', '迁移：无基线历史（新聊天），无需迁移');
+        return;
+    }
+
+    const pairs = getPairs().filter(p => p.sealed && p.pairIndex <= baseline);
     if (!pairs.length) {
-        appendLog('warn', '迁移：无定格楼层');
+        appendLog('warn', '迁移：基线前无定格楼层');
         return;
     }
 
@@ -35,7 +42,6 @@ export async function startMigration() {
         if (!slice.length) {
             continue;
         }
-        // Only full chapters for summary; trailing partial still gets extract-from-whatever exists after
         jobs.push({
             startPair: slice[0].pairIndex,
             endPair: slice[slice.length - 1].pairIndex,
@@ -49,14 +55,14 @@ export async function startMigration() {
                 startPair: job.startPair,
                 endPair: job.endPair,
             }, QUEUE_PRIORITY.migrate);
+            enqueue('migrate_extract_chapter', {
+                startPair: job.startPair,
+                endPair: job.endPair,
+            }, QUEUE_PRIORITY.migrate);
         }
-        enqueue('migrate_extract_chapter', {
-            startPair: job.startPair,
-            endPair: job.endPair,
-        }, QUEUE_PRIORITY.migrate);
     }
-    enqueue('migrate_finalize', {}, QUEUE_PRIORITY.migrate);
-    appendLog('info', `迁移已入队：${jobs.filter(j => j.full).length} 章摘要 + ${jobs.length} 章提取（已开启迁移校对模式）`);
+    enqueue('migrate_finalize', { baseline }, QUEUE_PRIORITY.migrate);
+    appendLog('info', `迁移已入队：${jobs.filter(j => j.full).length} 完整章（基线≤${baseline}）；尾部残楼将在收尾时 per-floor 补提`);
 }
 
 export async function handleMigrateChapterJob(payload) {
@@ -75,7 +81,6 @@ export async function handleMigrateExtractChapterJob(payload) {
     let ch = (data.chapters || []).find(c =>
         c.floor_range?.[0] === startPair && c.floor_range?.[1] === endPair && !c.stale);
     if (!ch) {
-        // Partial trailing chapter or summary not ready: synthesize a temp summary from range label
         ch = (data.chapters || []).find(c =>
             c.floor_range?.[0] === startPair && c.floor_range?.[1] === endPair);
     }
@@ -85,13 +90,44 @@ export async function handleMigrateExtractChapterJob(payload) {
     }
     const before = structuredClone(data.state_table);
     await extractFromChapterSummary({ chapter: ch, stateTableSnapshot: before });
+
+    // Mark covered pair keys so live path never double-touches if baseline is reset
+    const pairs = getPairs().filter(p => p.sealed && p.pairIndex >= startPair && p.pairIndex <= endPair);
+    const d = getChatData();
+    d.extracted_keys = d.extracted_keys || [];
+    for (const p of pairs) {
+        const marker = `migrated:${p.floorKey}`;
+        if (!d.extracted_keys.includes(marker)) {
+            d.extracted_keys.push(marker);
+        }
+    }
+    await saveChatData();
 }
 
-export async function handleMigrateFinalizeJob() {
+export async function handleMigrateFinalizeJob(payload = {}) {
     if (migrateAbort) {
         appendLog('info', '迁移已中止');
         return;
     }
+    const baseline = payload.baseline ?? ensureActivationBaseline();
+    const settings = getSettings();
+    const size = settings.chapterSize || 25;
+
+    // Trailing residual pairs after last full chapter, still ≤ baseline → per-floor backfill
+    const lastFullEnd = Math.floor((baseline + 1) / size) * size - 1;
+    // e.g. baseline=699, size=25 → lastFullEnd = 674; residuals 675..699
+    const residualStart = lastFullEnd + 1;
+    const pairs = getPairs().filter(p =>
+        p.sealed && p.pairIndex >= residualStart && p.pairIndex <= baseline);
+
+    for (const p of pairs) {
+        enqueue('migrate_extract_floor', {
+            floorKey: p.floorKey,
+            pairIndex: p.pairIndex,
+            ignoreBaseline: true,
+        }, QUEUE_PRIORITY.migrate);
+    }
+
     buildKeywordIndex(getChatData());
     const data = getChatData();
     const already = (data.review_queue || []).some(x => x.kind === 'alert' && String(x.note || '').includes('存量迁移'));
@@ -99,12 +135,12 @@ export async function handleMigrateFinalizeJob() {
         data.review_queue.push({
             id: crypto.randomUUID(),
             kind: 'alert',
-            note: '存量迁移回填完成。当前为「迁移校对模式」：改表会自动记入错例库。校对结束后请在设置中关闭该模式。',
+            note: `存量迁移收尾：完整章已回填；尾部残楼 ${pairs.length} 对已入队 per-floor 补提。当前为「迁移校对模式」。`,
             createdAt: Date.now(),
         });
     }
     await saveChatData();
-    appendLog('info', '迁移状态表回填完成');
+    appendLog('info', `迁移收尾：残楼补提 ×${pairs.length}`);
 }
 
 /**

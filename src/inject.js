@@ -1,4 +1,4 @@
-import { NO_TRIM_TYPES, PROMPT_KEYS, QUEUE_PRIORITY } from './constants.js';
+import { TRIM_TYPES, PROMPT_KEYS, QUEUE_PRIORITY } from './constants.js';
 import { getPairs, messageStableKey } from './ids.js';
 import { retrieveHits } from './retrieve.js';
 import { renderL1Block, renderL2Block, renderL4Block } from './render.js';
@@ -63,16 +63,16 @@ export function updateInjection() {
 }
 
 /**
- * Trim chat for normal generate / swipe / regenerate.
- * Keep from min(recentStart, gapStart) so chapter-gap pairs are never dropped.
- * Also keep: greeting (before first user), and unpaired msgs inside the keep index window.
+ * Trim only for known-safe generate types (whitelist).
+ * Keep unpaired messages from minKeepIdx through end (trailing multi-AI).
  */
 export function trimChatForGenerate(chat, type) {
     const settings = getSettings();
     if (!settings.enabled) {
         return;
     }
-    if (type && NO_TRIM_TYPES.has(type)) {
+    const t = type == null ? '' : String(type);
+    if (!TRIM_TYPES.has(t)) {
         return;
     }
 
@@ -96,7 +96,6 @@ export function trimChatForGenerate(chat, type) {
     const pairedMes = new Set();
     const keepKeys = new Set();
     let minKeepIdx = Infinity;
-    let maxKeepIdx = -1;
 
     for (const p of pairs) {
         pairedMes.add(p.user);
@@ -111,17 +110,14 @@ export function trimChatForGenerate(chat, type) {
         }
     }
 
-    // Index window of kept pairs (for unpaired messages inside the window)
     for (let i = 0; i < chat.length; i++) {
         const mes = chat[i];
         const paired = pairs.find(p => p.user === mes || p.ai === mes);
         if (paired && paired.pairIndex >= startPair) {
             minKeepIdx = Math.min(minKeepIdx, i);
-            maxKeepIdx = Math.max(maxKeepIdx, i);
         }
     }
 
-    // First user message index — everything before is greeting / leading AI
     let firstUserIdx = chat.findIndex(m => m.is_user);
     if (firstUserIdx < 0) {
         firstUserIdx = 0;
@@ -137,13 +133,12 @@ export function trimChatForGenerate(chat, type) {
             continue;
         }
 
-        // Always keep character greeting / leading messages before first user
         if (i < firstUserIdx) {
             continue;
         }
 
-        // Keep unpaired messages that sit inside the kept pair index window
-        if (!pairedMes.has(mes) && minKeepIdx !== Infinity && i >= minKeepIdx && i <= maxKeepIdx) {
+        // No upper bound: keep trailing unpaired AI after the last paired message
+        if (!pairedMes.has(mes) && minKeepIdx !== Infinity && i >= minKeepIdx) {
             continue;
         }
 

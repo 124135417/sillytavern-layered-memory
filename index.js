@@ -29,6 +29,7 @@ function wireHandlers() {
     registerHandler('state_gc', handleStateGcJob);
     registerHandler('migrate_chapter', handleMigrateChapterJob);
     registerHandler('migrate_extract_chapter', handleMigrateExtractChapterJob);
+    registerHandler('migrate_extract_floor', handleExtractJob);
     registerHandler('migrate_finalize', handleMigrateFinalizeJob);
 }
 
@@ -126,7 +127,7 @@ jQuery(async () => {
         });
     }
 
-    console.log(`[${MODULE}] 已加载 v0.1.1`);
+    console.log(`[${MODULE}] 已加载 v0.1.2`);
 });
 
 export async function onActivate() {

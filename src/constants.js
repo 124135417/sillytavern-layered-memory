@@ -28,13 +28,16 @@ export const QUEUE_PRIORITY = {
 };
 
 /**
- * Types where chat trimming must NOT run.
- * swipe / regenerate 与普通 generate 同形，必须裁剪，否则长聊 swipe 会打满历史。
+ * Only these generate types may trim chat.
+ * Unknown / quiet variants default to NOT trimming (safer than a denylist).
  */
-export const NO_TRIM_TYPES = new Set([
-    'continue',
-    'impersonate',
-    'quiet',
+export const TRIM_TYPES = new Set([
+    '',
+    'normal',
+    'group_chat',
+    'auto_continue',
+    'swipe',
+    'regenerate',
 ]);
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -81,6 +84,13 @@ export const EMPTY_CHAT_DATA = () => ({
         pairs_since_proofread: 0,
         next_entry_seq: 1,
         next_chapter_seq: 1,
+        /**
+         * Activation baseline: max sealed pairIndex when plugin first touched this chat.
+         * null = not yet initialized.
+         * Live per-floor extract only processes pairIndex > baseline_pair.
+         * History at/before baseline is migration-only.
+         */
+        baseline_pair: null,
     },
     logs: [],
 });

@@ -1,5 +1,5 @@
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
-import { getPairTexts, getPairs } from './ids.js';
+import { getBaselinePair, getPairTexts, getPairs } from './ids.js';
 import { mergeExtractResult, renderStateTableCompact } from './merge.js';
 import { EXTRACT_JSON_SCHEMA, EXTRACT_SYSTEM } from './prompts.js';
 import { appendLog, getChatData, getSettings, saveChatData } from './settings.js';
@@ -52,13 +52,17 @@ export async function handleExtractJob(payload) {
         return;
     }
 
+    const baseline = getBaselinePair();
+    if (!payload.ignoreBaseline && pair.pairIndex <= baseline) {
+        return;
+    }
+
     const data = getChatData();
     if ((data.extracted_keys || []).includes(pair.floorKey)) {
         return;
     }
 
     let retryNote = '';
-    let lastDiscarded = 0;
 
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
@@ -73,7 +77,6 @@ export async function handleExtractJob(payload) {
                 floorLabel: pair.pairIndex,
                 source: 'auto',
             });
-            lastDiscarded = result.discarded;
 
             if (result.discarded > 0 && result.applied === 0 && attempt === 0) {
                 retryNote = `有 ${result.discarded} 条未通过校验（evidence/实体/长度）`;
@@ -91,8 +94,10 @@ export async function handleExtractJob(payload) {
 
             appendLog('info', `提取完成 楼#${pair.pairIndex}: +${result.applied} 丢${result.discarded} 冲突${result.conflicts}`);
 
-            maybeEnqueueChapter(pair.pairIndex);
-            maybeEnqueueProofread();
+            if (!payload.ignoreBaseline) {
+                maybeEnqueueChapter(pair.pairIndex);
+                maybeEnqueueProofread();
+            }
             return;
         } catch (err) {
             if (attempt === 0) {
@@ -104,15 +109,28 @@ export async function handleExtractJob(payload) {
     }
 }
 
+/** Live chapters align to baseline+1, every chapterSize pairs. */
 function maybeEnqueueChapter(pairIndex) {
     const settings = getSettings();
     const size = settings.chapterSize || 25;
     const data = getChatData();
-    const lastEnd = data.progress.last_chapter_end_pair ?? -1;
-    if ((pairIndex + 1) % size === 0 && pairIndex > lastEnd) {
-        const start = pairIndex - size + 1;
-        enqueue('chapter_summary', { startPair: start, endPair: pairIndex }, QUEUE_PRIORITY.chapter_summary);
+    const baseline = getBaselinePair();
+    if (pairIndex <= baseline) {
+        return;
     }
+    const liveOrdinal = pairIndex - baseline;
+    if (liveOrdinal % size !== 0) {
+        return;
+    }
+    const start = pairIndex - size + 1;
+    if (start <= baseline) {
+        return;
+    }
+    const lastEnd = data.progress.last_chapter_end_pair ?? -1;
+    if (pairIndex <= lastEnd) {
+        return;
+    }
+    enqueue('chapter_summary', { startPair: start, endPair: pairIndex }, QUEUE_PRIORITY.chapter_summary);
 }
 
 function maybeEnqueueProofread() {

@@ -29,6 +29,9 @@ function isDuplicateJob(type, payload) {
         if (type === 'migrate_extract_chapter') {
             return j.payload?.startPair === payload.startPair && j.payload?.endPair === payload.endPair;
         }
+        if (type === 'migrate_extract_floor') {
+            return j.payload?.floorKey && j.payload.floorKey === payload.floorKey;
+        }
         if (type === 'volume_compress' && (payload.reason === 'budget' || payload.reason === 'budget_check')) {
             return j.payload?.reason === 'budget' || j.payload?.reason === 'budget_check';
         }
@@ -90,8 +93,13 @@ async function pump() {
     }
 }
 
+function isPairFloorKey(key) {
+    return typeof key === 'string' && key.includes('+') && !key.startsWith('chapter:');
+}
+
 /**
  * Rollback extracted_keys that no longer map to a live sealed pair (e.g. deleted messages).
+ * Skips chapter:* keys written by migration extract.
  */
 async function rollbackOrphanExtracts(getPairs) {
     const { rollbackFloor } = await import('./merge.js');
@@ -99,7 +107,7 @@ async function rollbackOrphanExtracts(getPairs) {
     const live = new Set(
         getPairs().filter(p => p.sealed).map(p => p.floorKey),
     );
-    const orphans = (data.extracted_keys || []).filter(k => !live.has(k));
+    const orphans = (data.extracted_keys || []).filter(k => isPairFloorKey(k) && !live.has(k));
     for (const key of orphans) {
         await rollbackFloor(key);
         appendLog('info', `孤儿提取键已回滚: ${key}`);
@@ -108,26 +116,22 @@ async function rollbackOrphanExtracts(getPairs) {
 }
 
 /**
- * Enqueue chapter summaries for fully-extracted ranges that lack a non-stale chapter.
- * Compensates for jobs lost on refresh between extract-complete and chapter-summary.
+ * Live-path chapter compensation: only ranges entirely after activation baseline.
  */
-function enqueueMissingChapters(getPairs) {
+function enqueueMissingChapters(getPairs, baseline) {
     const settings = getSettings();
     const size = settings.chapterSize || 25;
     const data = getChatData();
     const pairs = getPairs();
     const extracted = new Set(data.extracted_keys || []);
-    const sealedIndexes = pairs.filter(p => p.sealed).map(p => p.pairIndex);
+    const sealedIndexes = pairs.filter(p => p.sealed && p.pairIndex > baseline).map(p => p.pairIndex);
     if (!sealedIndexes.length) {
         return 0;
     }
     const maxPair = Math.max(...sealedIndexes);
-    if (maxPair < size - 1) {
-        return 0;
-    }
-
     let enqueued = 0;
-    for (let start = 0; start + size - 1 <= maxPair; start += size) {
+    // Chapter grid aligned to live stream: first start = baseline + 1
+    for (let start = baseline + 1; start + size - 1 <= maxPair; start += size) {
         const end = start + size - 1;
         let complete = true;
         for (let i = start; i <= end; i++) {
@@ -154,21 +158,21 @@ function enqueueMissingChapters(getPairs) {
 
 /**
  * Rebuild pending extract list from chat vs extracted_keys, then enqueue.
- * Also: orphan rollback + missing chapter compensation.
+ * Respects activation baseline: only pairIndex > baseline for live extract.
  */
 export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {}) {
-    const { getFrozenPairs, getPairs } = await import('./ids.js');
+    const { getFrozenPairs, getPairs, ensureActivationBaseline } = await import('./ids.js');
 
+    const baseline = ensureActivationBaseline();
     await rollbackOrphanExtracts(getPairs);
 
     const data = getChatData();
-    // re-read after possible rollbacks
     const extracted = new Set(getChatData().extracted_keys || []);
-    let candidates = getFrozenPairs();
+    let candidates = getFrozenPairs().filter(p => p.pairIndex > baseline);
 
     if (forceLastSealed) {
         const pairs = getPairs();
-        const last = [...pairs].reverse().find(p => p.sealed);
+        const last = [...pairs].reverse().find(p => p.sealed && p.pairIndex > baseline);
         if (last && !candidates.some(c => c.floorKey === last.floorKey)) {
             candidates = [...candidates, last];
         }
@@ -192,7 +196,7 @@ export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {})
         enqueue('extract', item, QUEUE_PRIORITY.extract);
     }
 
-    const missingCh = enqueueMissingChapters(getPairs);
+    const missingCh = enqueueMissingChapters(getPairs, baseline);
     if (missingCh) {
         appendLog('info', `补偿入队缺失章节摘要 ×${missingCh}`);
     }

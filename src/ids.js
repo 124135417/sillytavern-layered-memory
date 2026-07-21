@@ -1,4 +1,4 @@
-import { getContext } from './settings.js';
+import { appendLog, getChatData, getContext, saveChatData } from './settings.js';
 
 /**
  * Ensure every message has a stable layered_memory_id in extra.
@@ -31,9 +31,6 @@ export function messageStableKey(mes) {
 
 /**
  * Walk chat as pairs: each pair = one user message + following non-user reply (if any).
- * Returns [{ pairIndex, user, ai, userKey, aiKey, sealed }]
- * sealed = AI exists (pair is "定格" for delayed extract once a newer user message exists,
- * or when explicitly treated as pending after chat switch).
  */
 export function getPairs() {
     ensureMessageIds();
@@ -50,7 +47,6 @@ export function getPairs() {
         let ai = null;
         let j = i + 1;
         while (j < chat.length && chat[j].is_user) {
-            // consecutive user messages: treat as incomplete pair without AI
             break;
         }
         if (j < chat.length && !chat[j].is_user) {
@@ -89,7 +85,6 @@ export function getPairTexts(pair) {
 
 /**
  * Pairs that are sealed and should be considered for extraction once "定格".
- * A sealed pair is frozen when there is a later user message OR we force pending rebuild.
  */
 export function getFrozenPairs() {
     const pairs = getPairs();
@@ -100,13 +95,45 @@ export function getFrozenPairs() {
             continue;
         }
         const hasLaterUser = pairs.slice(i + 1).some(x => x.user);
-        // Last sealed pair becomes frozen when a new user turn exists after it,
-        // OR when it is not the very last pair in chat (another pair started).
         if (hasLaterUser || i < pairs.length - 1) {
             frozen.push(p);
         }
     }
-    // Also: if the last pair is sealed and chat ended (no pending user), still not frozen
-    // until next user message — per delayed-extract design.
     return frozen;
+}
+
+/**
+ * Record activation baseline once per chat: max sealed pairIndex at first touch.
+ * Live per-floor extract only processes pairIndex > baseline_pair.
+ */
+export function ensureActivationBaseline() {
+    const data = getChatData();
+    if (data.progress.baseline_pair !== null && data.progress.baseline_pair !== undefined) {
+        return data.progress.baseline_pair;
+    }
+    const sealed = getPairs().filter(p => p.sealed);
+    const baseline = sealed.length ? Math.max(...sealed.map(p => p.pairIndex)) : -1;
+    data.progress.baseline_pair = baseline;
+    if (baseline >= 0) {
+        const note = `已记录激活基线：第 ${baseline} 对。此前历史不会自动提取，请用设置中的「存量迁移」。基线之后的新楼走实时延迟提取。`;
+        const q = data.review_queue || [];
+        if (!q.some(x => x.kind === 'alert' && String(x.note || '').includes('激活基线'))) {
+            q.push({
+                id: crypto.randomUUID(),
+                kind: 'alert',
+                note,
+                createdAt: Date.now(),
+            });
+            data.review_queue = q;
+        }
+        appendLog('info', note);
+    } else {
+        appendLog('info', '激活基线：-1（新聊天，全部楼层走实时提取）');
+    }
+    void saveChatData();
+    return baseline;
+}
+
+export function getBaselinePair() {
+    return ensureActivationBaseline();
 }

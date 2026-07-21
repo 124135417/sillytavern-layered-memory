@@ -60,6 +60,18 @@ SillyTavern 第三方 **UI Extension**（纯前端、零构建），用 GitHub U
 
 沿用规格 §2 / §4 JSON 形态：`entries`、`changelog`、`op: add|update|flag_conflict`、章节 `summary/keywords/floor_range`、卷摘要与降级标记、`pinned`、`source: auto|manual|proofread`。
 
+### 1.6 激活基线（baseline_pair）
+
+每个聊天在插件**首次触达**时记录 `progress.baseline_pair` = 当时最大定格 `pairIndex`（无定格则为 `-1`）。
+
+| 路径 | 范围 |
+|---|---|
+| 实时延迟提取 / 章节补偿 | 仅 `pairIndex > baseline_pair` |
+| 存量迁移 | 仅 `pairIndex ≤ baseline_pair` |
+| 迁移尾部残章（不足一章） | 收尾时以 `ignoreBaseline` 的 per-floor 补提 |
+
+禁止在旧长聊上启用插件后对全历史自动跑数百次提取。迁移与实时提取互不抢活：实时优先级虽高，但不入队基线前的楼。
+
 ---
 
 ## 2. 延迟提取与事件
