@@ -35,7 +35,7 @@ export function injectPanel() {
                 <b>分层长程记忆</b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
-            <div class="inline-drawer-content" style="display:none;">
+            <div class="inline-drawer-content">
                 <div class="lm-tabs">
                     <button type="button" data-tab="state" class="menu_button lm-tab active">状态表</button>
                     <button type="button" data-tab="chapters" class="menu_button lm-tab">章节</button>
@@ -48,24 +48,45 @@ export function injectPanel() {
     `;
     host.appendChild(wrap);
 
+    // ST 已对 .inline-drawer-toggle 绑定展开/收起；切勿再手动 toggle，否则会开一下又立刻关掉
     const drawer = wrap.querySelector('.inline-drawer-toggle');
     const content = wrap.querySelector('.inline-drawer-content');
-    drawer.addEventListener('click', async () => {
-        const open = content.style.display !== 'none';
-        content.style.display = open ? 'none' : 'block';
-        if (!open) {
-            await rebuildAndEnqueuePending({ forceLastSealed: true });
+    drawer.addEventListener('click', () => {
+        // 等 ST 的 slideToggle 完成后再判断是否处于展开态
+        setTimeout(async () => {
+            if (!isDrawerExpanded(content)) {
+                return;
+            }
+            try {
+                await rebuildAndEnqueuePending({ forceLastSealed: true });
+            } catch (err) {
+                console.warn('[layered-memory] 展开时补跑 pending 失败', err);
+            }
             renderActiveTab();
-        }
+        }, 50);
     });
 
     wrap.querySelectorAll('.lm-tab').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
             wrap.querySelectorAll('.lm-tab').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             renderActiveTab();
         });
     });
+}
+
+function isDrawerExpanded(content) {
+    if (!content) {
+        return false;
+    }
+    // ST 可能用 display / slideToggle / hidden class
+    if (content.classList.contains('hidden') || content.classList.contains('displayNone')) {
+        return false;
+    }
+    const style = window.getComputedStyle(content);
+    return style.display !== 'none' && style.visibility !== 'hidden' && content.offsetParent !== null;
 }
 
 function activeTab() {
