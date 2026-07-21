@@ -29,41 +29,42 @@ export function injectPanel() {
     const wrap = document.createElement('div');
     wrap.id = ROOT_ID;
     wrap.className = 'layered-memory-root';
+    // 不用 ST 的 inline-drawer* 类名，避免和全局委托点击抢控制权
     wrap.innerHTML = `
-        <div class="inline-drawer">
-            <div class="inline-drawer-toggle inline-drawer-header">
-                <b>分层长程记忆</b>
-                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        <button type="button" class="lm-panel-header menu_button" aria-expanded="false">
+            <span class="lm-panel-title">分层长程记忆</span>
+            <span class="lm-panel-chevron" aria-hidden="true">▾</span>
+        </button>
+        <div class="lm-panel-body" hidden>
+            <div class="lm-tabs">
+                <button type="button" data-tab="state" class="menu_button lm-tab active">状态表</button>
+                <button type="button" data-tab="chapters" class="menu_button lm-tab">章节</button>
+                <button type="button" data-tab="review" class="menu_button lm-tab">待审</button>
+                <button type="button" data-tab="settings" class="menu_button lm-tab">设置</button>
             </div>
-            <div class="inline-drawer-content">
-                <div class="lm-tabs">
-                    <button type="button" data-tab="state" class="menu_button lm-tab active">状态表</button>
-                    <button type="button" data-tab="chapters" class="menu_button lm-tab">章节</button>
-                    <button type="button" data-tab="review" class="menu_button lm-tab">待审</button>
-                    <button type="button" data-tab="settings" class="menu_button lm-tab">设置</button>
-                </div>
-                <div class="lm-body"></div>
-            </div>
+            <div class="lm-body"></div>
         </div>
     `;
     host.appendChild(wrap);
 
-    // ST 已对 .inline-drawer-toggle 绑定展开/收起；切勿再手动 toggle，否则会开一下又立刻关掉
-    const drawer = wrap.querySelector('.inline-drawer-toggle');
-    const content = wrap.querySelector('.inline-drawer-content');
-    drawer.addEventListener('click', () => {
-        // 等 ST 的 slideToggle 完成后再判断是否处于展开态
-        setTimeout(async () => {
-            if (!isDrawerExpanded(content)) {
-                return;
-            }
-            try {
-                await rebuildAndEnqueuePending({ forceLastSealed: true });
-            } catch (err) {
-                console.warn('[layered-memory] 展开时补跑 pending 失败', err);
-            }
-            renderActiveTab();
-        }, 50);
+    const header = wrap.querySelector('.lm-panel-header');
+    const body = wrap.querySelector('.lm-panel-body');
+
+    header.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const willOpen = body.hasAttribute('hidden');
+        setPanelOpen(wrap, willOpen);
+        if (willOpen) {
+            void (async () => {
+                try {
+                    await rebuildAndEnqueuePending({ forceLastSealed: true });
+                } catch (err) {
+                    console.warn('[layered-memory] 展开时补跑 pending 失败', err);
+                }
+                renderActiveTab();
+            })();
+        }
     });
 
     wrap.querySelectorAll('.lm-tab').forEach(btn => {
@@ -77,16 +78,28 @@ export function injectPanel() {
     });
 }
 
-function isDrawerExpanded(content) {
-    if (!content) {
-        return false;
+function setPanelOpen(wrap, open) {
+    const header = wrap.querySelector('.lm-panel-header');
+    const body = wrap.querySelector('.lm-panel-body');
+    const chevron = wrap.querySelector('.lm-panel-chevron');
+    if (!header || !body) {
+        return;
     }
-    // ST 可能用 display / slideToggle / hidden class
-    if (content.classList.contains('hidden') || content.classList.contains('displayNone')) {
-        return false;
+    if (open) {
+        body.removeAttribute('hidden');
+        wrap.classList.add('lm-open');
+        header.setAttribute('aria-expanded', 'true');
+        if (chevron) {
+            chevron.textContent = '▴';
+        }
+    } else {
+        body.setAttribute('hidden', '');
+        wrap.classList.remove('lm-open');
+        header.setAttribute('aria-expanded', 'false');
+        if (chevron) {
+            chevron.textContent = '▾';
+        }
     }
-    const style = window.getComputedStyle(content);
-    return style.display !== 'none' && style.visibility !== 'hidden' && content.offsetParent !== null;
 }
 
 function activeTab() {

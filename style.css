@@ -1,6 +1,35 @@
 .layered-memory-root {
     margin: 0.5rem 0;
     padding: 0.25rem 0;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #666) 35%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #666) 35%, transparent);
+}
+
+.layered-memory-root .lm-panel-header {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin: 0.25rem 0;
+    cursor: pointer;
+}
+
+.layered-memory-root .lm-panel-title {
+    font-weight: 600;
+}
+
+.layered-memory-root .lm-panel-chevron {
+    opacity: 0.75;
+    font-size: 0.85em;
+}
+
+.layered-memory-root .lm-panel-body {
+    padding: 0.25rem 0 0.5rem;
+}
+
+.layered-memory-root .lm-panel-body[hidden] {
+    display: none !important;
 }
 
 .layered-memory-root .lm-tabs {
