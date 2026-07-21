@@ -50,9 +50,12 @@ export function injectPanel() {
     const header = wrap.querySelector('.lm-panel-header');
     const body = wrap.querySelector('.lm-panel-body');
 
-    header.addEventListener('click', (ev) => {
+    // ST 通过 document 级 jQuery 委托（冒泡阶段）关闭抽屉，冒泡阶段的 stopPropagation
+    // 拦不住它。改在捕获阶段用 stopImmediatePropagation 定点拦截：捕获早于任何冒泡委托，
+    // 事件不会再向下派发到 ST 的 handler。
+    const onHeaderClick = (ev) => {
         ev.preventDefault();
-        ev.stopPropagation();
+        ev.stopImmediatePropagation();
         const willOpen = body.hasAttribute('hidden');
         setPanelOpen(wrap, willOpen);
         if (willOpen) {
@@ -65,16 +68,17 @@ export function injectPanel() {
                 renderActiveTab();
             })();
         }
-    });
+    };
+    header.addEventListener('click', onHeaderClick, true);
 
     wrap.querySelectorAll('.lm-tab').forEach(btn => {
         btn.addEventListener('click', (ev) => {
             ev.preventDefault();
-            ev.stopPropagation();
+            ev.stopImmediatePropagation();
             wrap.querySelectorAll('.lm-tab').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             renderActiveTab();
-        });
+        }, true);
     });
 }
 
