@@ -395,7 +395,16 @@ function renderSettingsTab() {
     return `
         <label class="lm-field"><input type="checkbox" id="lm-enabled" ${s.enabled ? 'checked' : ''}/> 启用插件</label>
         <label class="lm-field"><input type="checkbox" id="lm-mig-review" ${s.migrationReviewMode ? 'checked' : ''}/> 迁移校对模式（开启时手动改表才自动记错例）</label>
-        <p class="lm-muted">激活基线：第 ${getChatData().progress?.baseline_pair ?? '（尚未初始化）'} 对 — 此前历史仅能通过「存量迁移」处理，不会自动提取。</p>
+        <p class="lm-muted">${(() => {
+            const b = getChatData().progress?.baseline_pair;
+            if (b === null || b === undefined) {
+                return '激活基线：尚未初始化。';
+            }
+            if (b < 0) {
+                return '激活基线：新聊天（无历史）— 全部楼层走实时提取。';
+            }
+            return `激活基线：第 ${b} 对 — 此前历史仅能通过「存量迁移」处理，不会自动提取。`;
+        })()}</p>
         <label class="lm-field">Connection Profile（优先）
             <select id="lm-profile"><option value="">（当前主连接 / generateRaw）</option>${profileOpts}</select>
         </label>

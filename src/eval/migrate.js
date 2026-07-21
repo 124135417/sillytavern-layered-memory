@@ -49,6 +49,7 @@ export async function startMigration() {
         });
     }
 
+    let lastFullEnd = -1;
     for (const job of jobs) {
         if (job.full) {
             enqueue('migrate_chapter', {
@@ -59,9 +60,11 @@ export async function startMigration() {
                 startPair: job.startPair,
                 endPair: job.endPair,
             }, QUEUE_PRIORITY.migrate);
+            lastFullEnd = Math.max(lastFullEnd, job.endPair);
         }
     }
-    enqueue('migrate_finalize', { baseline }, QUEUE_PRIORITY.migrate);
+    // Residual = sealed pairs after the last full chapter's real endPair (no arithmetic grid).
+    enqueue('migrate_finalize', { baseline, lastFullEnd }, QUEUE_PRIORITY.migrate);
     appendLog('info', `迁移已入队：${jobs.filter(j => j.full).length} 完整章（基线≤${baseline}）；尾部残楼将在收尾时 per-floor 补提`);
 }
 
@@ -110,12 +113,12 @@ export async function handleMigrateFinalizeJob(payload = {}) {
         return;
     }
     const baseline = payload.baseline ?? ensureActivationBaseline();
-    const settings = getSettings();
-    const size = settings.chapterSize || 25;
 
-    // Trailing residual pairs after last full chapter, still ≤ baseline → per-floor backfill
-    const lastFullEnd = Math.floor((baseline + 1) / size) * size - 1;
-    // e.g. baseline=699, size=25 → lastFullEnd = 674; residuals 675..699
+    // Trailing residual = sealed pairs after the last full chapter's real endPair, still ≤ baseline.
+    // lastFullEnd comes from the actual enqueued chapters (uses real pairIndex, not an arithmetic
+    // grid), so unpaired/deleted floors in history never mis-align residual vs chapter coverage.
+    // lastFullEnd = -1 (no full chapter) → every sealed pair ≤ baseline is residual.
+    const lastFullEnd = payload.lastFullEnd ?? -1;
     const residualStart = lastFullEnd + 1;
     const pairs = getPairs().filter(p =>
         p.sealed && p.pairIndex >= residualStart && p.pairIndex <= baseline);

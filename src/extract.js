@@ -58,7 +58,9 @@ export async function handleExtractJob(payload) {
     }
 
     const data = getChatData();
-    if ((data.extracted_keys || []).includes(pair.floorKey)) {
+    const keys = data.extracted_keys || [];
+    // Skip if already extracted live, or covered by migration (migrated:<floorKey>).
+    if (keys.includes(pair.floorKey) || keys.includes(`migrated:${pair.floorKey}`)) {
         return;
     }
 

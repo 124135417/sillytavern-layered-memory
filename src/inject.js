@@ -93,6 +93,19 @@ export function trimChatForGenerate(chat, type) {
         return;
     }
 
+    // Pre-baseline history that no chapter represents must NOT be trimmed — otherwise those
+    // floors vanish with no summary standing in for them (silent amnesia when the plugin is
+    // enabled on an old chat without migration, or over residual floors after migration).
+    // Leave them to ST's native token truncation, i.e. behave as before install.
+    const baseline = data.progress?.baseline_pair ?? -1;
+    const chapterRanges = (data.chapters || [])
+        .filter(c => Array.isArray(c.floor_range))
+        .map(c => c.floor_range);
+    const isRepresented = (pairIndex) =>
+        chapterRanges.some(([a, b]) => pairIndex >= a && pairIndex <= b);
+    const keepUnrepresented = (pairIndex) =>
+        pairIndex <= baseline && !isRepresented(pairIndex);
+
     const pairedMes = new Set();
     const keepKeys = new Set();
     let minKeepIdx = Infinity;
@@ -139,6 +152,11 @@ export function trimChatForGenerate(chat, type) {
 
         // No upper bound: keep trailing unpaired AI after the last paired message
         if (!pairedMes.has(mes) && minKeepIdx !== Infinity && i >= minKeepIdx) {
+            continue;
+        }
+
+        // Pre-baseline floors with no chapter representation: leave to ST native truncation
+        if (paired && keepUnrepresented(paired.pairIndex)) {
             continue;
         }
 

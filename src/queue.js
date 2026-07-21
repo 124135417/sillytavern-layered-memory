@@ -94,12 +94,17 @@ async function pump() {
 }
 
 function isPairFloorKey(key) {
-    return typeof key === 'string' && key.includes('+') && !key.startsWith('chapter:');
+    // Live per-floor keys look like "<userKey>+<aiKey>".
+    // Exclude synthetic markers: chapter:* (migration extract) and migrated:* (coverage markers).
+    return typeof key === 'string'
+        && key.includes('+')
+        && !key.startsWith('chapter:')
+        && !key.startsWith('migrated:');
 }
 
 /**
  * Rollback extracted_keys that no longer map to a live sealed pair (e.g. deleted messages).
- * Skips chapter:* keys written by migration extract.
+ * Skips chapter:* and migrated:* keys written by migration.
  */
 async function rollbackOrphanExtracts(getPairs) {
     const { rollbackFloor } = await import('./merge.js');
@@ -108,11 +113,15 @@ async function rollbackOrphanExtracts(getPairs) {
         getPairs().filter(p => p.sealed).map(p => p.floorKey),
     );
     const orphans = (data.extracted_keys || []).filter(k => isPairFloorKey(k) && !live.has(k));
+    let rolled = 0;
     for (const key of orphans) {
-        await rollbackFloor(key);
-        appendLog('info', `孤儿提取键已回滚: ${key}`);
+        const n = await rollbackFloor(key);
+        if (n > 0) {
+            rolled += 1;
+            appendLog('info', `孤儿提取键已回滚: ${key}`);
+        }
     }
-    return orphans.length;
+    return rolled;
 }
 
 /**
