@@ -1,0 +1,9 @@
+{
+  "name": "sillytavern-layered-memory",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/core-smoke.mjs && node tests/queue-smoke.mjs"
+  }
+}

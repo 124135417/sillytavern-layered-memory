@@ -3,7 +3,7 @@ import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { getPairTexts, getPairs } from './ids.js';
 import { CHAPTER_SYSTEM } from './prompts.js';
 import { enqueue } from './queue.js';
-import { appendLog, getChatData, getSettings, saveChatData } from './settings.js';
+import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
 import { estimateTokens } from './tokens.js';
 
 function buildKeywordIndex(data) {
@@ -116,7 +116,9 @@ export async function handleChapterSummaryJob(payload) {
     }
 
     const userPrompt = await buildChapterBody(startPair, endPair, data);
+    assertChatData(data);
     const result = await summarizeChunk(userPrompt);
+    assertChatData(data);
 
     // Stale (or any) chapter with same range → in-place replace (keep id / volume_id / demoted / pinned)
     const sameRange = (data.chapters || []).find(c =>
@@ -128,7 +130,7 @@ export async function handleChapterSummaryJob(payload) {
         sameRange.frozen = true;
         advanceChapterEnd(data, endPair);
         buildKeywordIndex(data);
-        await saveChatData();
+        await saveChatData(data);
         appendLog('info', `章节摘要原地更新 ${sameRange.id} [${startPair}-${endPair}]`);
         enqueue('volume_compress', { reason: 'budget_check' }, QUEUE_PRIORITY.volume_compress);
         return;
@@ -149,7 +151,7 @@ export async function handleChapterSummaryJob(payload) {
     });
     advanceChapterEnd(data, endPair);
     buildKeywordIndex(data);
-    await saveChatData();
+    await saveChatData(data);
     appendLog('info', `章节摘要完成 ${id} [${startPair}-${endPair}]`);
 
     enqueue('volume_compress', { reason: 'budget_check' }, QUEUE_PRIORITY.volume_compress);

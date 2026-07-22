@@ -1,6 +1,6 @@
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { STATE_GC_SYSTEM } from './prompts.js';
-import { appendLog, getChatData, saveChatData } from './settings.js';
+import { appendLog, assertChatData, getChatData, saveChatData } from './settings.js';
 
 export async function handleStateGcJob() {
     const data = getChatData();
@@ -25,6 +25,7 @@ export async function handleStateGcJob() {
         userPrompt: JSON.stringify(blob, null, 2),
         temperature: 0,
     });
+    assertChatData(data);
 
     const raw = parseJsonFromModel(text);
     if (!raw) {
@@ -66,6 +67,6 @@ export async function handleStateGcJob() {
 
     data.state_table.entries = entries.filter(e => !dropIds.has(e.id));
     data.state_table.version += 1;
-    await saveChatData();
+    await saveChatData(data);
     appendLog('info', `状态表整理：${before} → ${data.state_table.entries.length}`);
 }

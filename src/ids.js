@@ -1,4 +1,10 @@
-import { appendLog, getChatData, getContext, saveChatData } from './settings.js';
+import {
+    appendLog,
+    getChatData,
+    getContext,
+    saveChatData,
+    saveChatMessages,
+} from './settings.js';
 
 /**
  * Ensure every message has a stable layered_memory_id in extra.
@@ -14,6 +20,14 @@ export function ensureMessageIds() {
             mes.extra.layered_memory_id = crypto.randomUUID();
             changed = true;
         }
+    }
+    if (changed) {
+        void saveChatMessages().catch(err => {
+            // Do not append to metadata here: the rejection may arrive after a
+            // chat switch, in which case logging through getChatData() would
+            // attach the error to the newly opened chat.
+            console.error(`[layered-memory] 消息稳定 ID 保存失败: ${err?.message ?? err}`);
+        });
     }
     return changed;
 }

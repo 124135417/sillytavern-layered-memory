@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+    <title>分层长程记忆 UI Harness</title>
+    <link rel="stylesheet" href="../style.css"/>
+    <style>
+        :root {
+            --SmartThemeBlurTintColor: #15171f;
+            --SmartThemeBodyColor: #ecebf1;
+            --SmartThemeBorderColor: #5b5d6a;
+            --SmartThemeQuoteColor: #b0a7ff;
+            --mainFontFamily: "Avenir Next", "PingFang SC", sans-serif;
+        }
+        body { min-height: 100vh; margin: 0; color: var(--SmartThemeBodyColor); background: #10121a; font-family: var(--mainFontFamily); }
+        #top-bar { display: flex; gap: 8px; align-items: center; height: 44px; padding: 0 14px; background: #1b1d27; }
+        #top-bar button { width: 32px; height: 32px; color: inherit; background: #292c38; border: 1px solid #464957; border-radius: 7px; }
+        #extensionsMenu { display: none; }
+        #extensions_settings { width: 320px; margin: 32px; }
+    </style>
+</head>
+<body>
+    <div id="top-bar"><button id="extensions-settings-button" type="button">E</button></div>
+    <div id="extensionsMenu"></div>
+    <div id="extensions_settings"></div>
+    <script type="module">
+        const now = Date.now();
+        const chat = [];
+        for (let i = 0; i < 128; i += 1) {
+            chat.push({ is_user: true, mes: `用户消息 ${i}`, send_date: `${i}-u`, extra: { layered_memory_id: `${i}-u` } });
+            chat.push({ is_user: false, mes: `AI 回复 ${i}`, send_date: `${i}-a`, extra: { layered_memory_id: `${i}-a` } });
+        }
+        const entries = [
+            { id: 'e_1', slot: 'body', subject: '林晚', object: '', value: '左臂受伤，暂时无法用力', cause: '到达北港前需要重新包扎', updated_floor: 126, evidence: '林晚护着受伤的左臂，指尖微微发抖。', pinned: true },
+            { id: 'e_2', slot: 'promise', subject: '周衡', object: '林晚', value: '答应护送林晚到北港', cause: '争执后仍在履行', updated_floor: 124, evidence: '我会把你送到北港。', pinned: false },
+            { id: 'e_3', slot: 'relationship', subject: '林晚', object: '周衡', value: '恢复合作，但尚未完全和解', cause: '合作继续，信任仍需修复', updated_floor: 123, evidence: '这不代表我已经原谅你。', pinned: false },
+            { id: 'e_4', slot: 'possession', subject: '林晚', object: '', value: '保管刻有鸦纹的铜钥匙', cause: '', updated_floor: 118, evidence: '她收起那枚刻着鸦纹的铜钥匙。', pinned: false },
+        ];
+        const extracted = chat.filter(x => !x.is_user).map((_, i) => `${i}-u+${i}-a`);
+        const memoryData = {
+            version: 1,
+            state_table: { version: 18, entries, changelog: [] },
+            chapters: [{ id: 'ch_005', summary: '北港线索指向旧灯塔；周衡隐瞒的过往被揭开，两人的合作关系出现裂痕。', keywords: ['北港', '旧灯塔', '周衡'], floor_range: [101, 125], pinned: false, demoted: false, stale: false, frozen: true, volume_id: null }],
+            volumes: [], keyword_index: {},
+            review_queue: [{ id: 'r1', kind: 'flag_conflict', entry_id: 'e_3', note: '新楼层暗示两人已经和解，但旧事实仍为“尚未完全和解”。', createdAt: now }],
+            pending_floors: [], extracted_keys: extracted,
+            job_queue: {
+                scope_id: 'harness-chat', paused: false,
+                queued: [{ id: 'q1', type: 'extract', payload: { pairIndex: 127, floorKey: '127-u+127-a' }, priority: 100, status: 'queued', createdAt: now, attempt: 0, maxAttempts: 3 }],
+                running: null,
+                failed: [{ id: 'f1', type: 'chapter_summary', payload: { startPair: 101, endPair: 125 }, priority: 80, status: 'failed', createdAt: now - 10000, attempt: 2, maxAttempts: 3, lastError: '连接超时', failedAt: now }],
+            },
+            progress: { last_chapter_end_pair: 125, pairs_since_proofread: 2, next_entry_seq: 5, next_chapter_seq: 6, baseline_pair: -1 },
+            logs: [{ t: now - 50000, level: 'info', message: '提取完成 楼#126: +1 丢0 冲突0' }],
+        };
+        const context = {
+            chat,
+            name2: '北港旧灯塔 · 长档测试',
+            characterId: 0,
+            characters: [{ name: '北港旧灯塔' }],
+            extensionSettings: { layered_memory: { enabled: true, connectionProfile: 'writer-small', fallbackEnabled: false, fallbackBaseUrl: '', fallbackApiKey: '', fallbackModel: '', budgetL1: 2000, budgetL2: 5000, budgetL4: 1500, recentPairs: 3, chapterSize: 25, proofreadEvery: 75, depthL1: 100, depthL2: 100, depthL4: 4, volumeCompressConfirm: false, l4Enabled: false, mentionStatMode: 'summary_and_table', chapterInputTokenCap: 20000, migrationReviewMode: false, eval_cases: [] } },
+            chatMetadata: { layered_memory: memoryData },
+            getConnectionProfiles: () => [{ id: 'writer-small', name: '记忆副模型' }],
+            generateRaw: async () => '{"ok":true}',
+            saveSettingsDebounced: () => {},
+            saveMetadata: async () => {},
+            saveChat: async () => {},
+            setExtensionPrompt: () => {},
+        };
+        window.SillyTavern = { getContext: () => context, libs: {} };
+        window.toastr = { info: console.log, error: console.error, success: console.log };
+        window.alert = console.log;
+        window.confirm = () => true;
+        window.prompt = () => null;
+        const { injectPanel, openMemoryCenter } = await import('../src/ui/panel.js');
+        injectPanel();
+        openMemoryCenter(true);
+    </script>
+</body>
+</html>

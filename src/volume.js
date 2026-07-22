@@ -1,6 +1,6 @@
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { VOLUME_SYSTEM } from './prompts.js';
-import { appendLog, getChatData, getSettings, saveChatData } from './settings.js';
+import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
 import { renderL2Block } from './render.js';
 import { estimateTokens } from './tokens.js';
 
@@ -63,7 +63,8 @@ export async function handleVolumeCompressJob(payload = {}) {
     // If forcing stale volume regen
     if (payload.force && payload.staleVolumes?.length) {
         for (const vid of payload.staleVolumes) {
-            await recompressVolume(vid);
+            await recompressVolume(vid, data);
+            assertChatData(data);
         }
         return;
     }
@@ -82,7 +83,7 @@ export async function handleVolumeCompressJob(payload = {}) {
                 note: 'L2 已超预算，是否执行卷压缩？',
                 createdAt: Date.now(),
             });
-            await saveChatData();
+            await saveChatData(data);
             appendLog('info', '卷压缩等待用户确认');
         }
         return;
@@ -114,6 +115,7 @@ export async function handleVolumeCompressJob(payload = {}) {
             userPrompt: userPrompt + missingNote,
             temperature: 0.2,
         });
+        assertChatData(data);
         const raw = parseJsonFromModel(text) || { summary: text };
         summary = String(raw.summary || '');
         missing = mustKeep.filter(n => !summary.includes(n));
@@ -128,7 +130,7 @@ export async function handleVolumeCompressJob(payload = {}) {
                 note: `卷压缩验收失败，缺失：${missing.join('、')}。已允许暂时超预算。`,
                 createdAt: Date.now(),
             });
-            await saveChatData();
+            await saveChatData(data);
             return;
         }
     }
@@ -146,12 +148,11 @@ export async function handleVolumeCompressJob(payload = {}) {
         c.demoted = true;
         c.volume_id = volId;
     }
-    await saveChatData();
+    await saveChatData(data);
     appendLog('info', `卷压缩完成 ${volId}`);
 }
 
-async function recompressVolume(volId) {
-    const data = getChatData();
+async function recompressVolume(volId, data = getChatData()) {
     const vol = (data.volumes || []).find(v => v.id === volId);
     if (!vol) {
         return;
@@ -167,6 +168,7 @@ async function recompressVolume(volId) {
         userPrompt: `必须保留清单：${mustKeep.join('、') || '（无）'}\n\n${input}`,
         temperature: 0.2,
     });
+    assertChatData(data);
     const raw = parseJsonFromModel(text) || { summary: text };
     const summary = String(raw.summary || '');
     const missing = mustKeep.filter(n => !summary.includes(n));
@@ -176,6 +178,5 @@ async function recompressVolume(volId) {
     }
     vol.summary = summary;
     vol.stale = false;
-    await saveChatData();
+    await saveChatData(data);
 }
-

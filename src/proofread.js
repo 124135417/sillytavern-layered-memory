@@ -1,7 +1,7 @@
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { PROOFREAD_SYSTEM } from './prompts.js';
 import { renderStateTableCompact } from './merge.js';
-import { appendLog, getChatData, saveChatData } from './settings.js';
+import { appendLog, assertChatData, getChatData, saveChatData } from './settings.js';
 
 export async function handleProofreadJob() {
     const data = getChatData();
@@ -28,6 +28,7 @@ export async function handleProofreadJob() {
         userPrompt,
         temperature: 0,
     });
+    assertChatData(data);
 
     const raw = parseJsonFromModel(text) || { suggestions: [] };
     const suggestions = Array.isArray(raw.suggestions) ? raw.suggestions : [];
@@ -45,6 +46,6 @@ export async function handleProofreadJob() {
             createdAt: Date.now(),
         });
     }
-    await saveChatData();
+    await saveChatData(data);
     appendLog('info', `校对完成，建议 ${suggestions.length} 条进待审`);
 }

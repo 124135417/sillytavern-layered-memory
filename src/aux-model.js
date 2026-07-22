@@ -1,5 +1,109 @@
 import { getContext, getSettings, appendLog } from './settings.js';
 
+const CONNECTION_TEST_TIMEOUT_MS = 15_000;
+const CONNECTION_TEST_SYSTEM_PROMPT = 'You are a connection health check. Follow the user instruction exactly.';
+const CONNECTION_TEST_USER_PROMPT = 'Reply with exactly OK.';
+
+/**
+ * Test the effective auxiliary-model route without exposing provider details.
+ *
+ * The returned object is safe to render or log in the UI:
+ * { ok, route, elapsedMs, category, message }
+ *
+ * route: connection_profile | current_connection | fallback | unavailable
+ * category: success | unavailable | auth | rate_limit | timeout | network |
+ *           not_found | bad_request | server_error | empty_response | request_failed
+ */
+export async function testAuxModelConnection({ timeoutMs = CONNECTION_TEST_TIMEOUT_MS } = {}) {
+    const startedAt = Date.now();
+    const settings = getSettings();
+    const ctx = getContext();
+    const boundedTimeoutMs = normalizeTimeout(timeoutMs);
+    const preferredRoute = settings.connectionProfile ? 'connection_profile' : 'current_connection';
+    let lastFailure = null;
+
+    if (typeof ctx.generateRaw === 'function') {
+        try {
+            const args = {
+                systemPrompt: CONNECTION_TEST_SYSTEM_PROMPT,
+                prompt: CONNECTION_TEST_USER_PROMPT,
+                temperature: 0,
+            };
+            if (settings.connectionProfile) {
+                args.connectionProfile = settings.connectionProfile;
+            }
+            const result = await withTimeout(ctx.generateRaw(args), boundedTimeoutMs);
+            if (hasUsableTestResponse(result)) {
+                return connectionTestResult(true, preferredRoute, startedAt, 'success', '连接成功');
+            }
+            lastFailure = { route: preferredRoute, error: createConnectionTestError('empty_response') };
+        } catch (error) {
+            lastFailure = { route: preferredRoute, error };
+        }
+    }
+
+    if (settings.connectionProfile) {
+        const cms = getConnectionManagerService(ctx);
+        if (cms && typeof cms.sendRequest === 'function') {
+            try {
+                const messages = [
+                    { role: 'system', content: CONNECTION_TEST_SYSTEM_PROMPT },
+                    { role: 'user', content: CONNECTION_TEST_USER_PROMPT },
+                ];
+                const result = await withTimeout(
+                    cms.sendRequest(settings.connectionProfile, messages, null),
+                    boundedTimeoutMs,
+                );
+                if (hasUsableTestResponse(extractTextFromCms(result))) {
+                    return connectionTestResult(true, 'connection_profile', startedAt, 'success', '连接成功');
+                }
+                lastFailure = {
+                    route: 'connection_profile',
+                    error: createConnectionTestError('empty_response'),
+                };
+            } catch (error) {
+                lastFailure = { route: 'connection_profile', error };
+            }
+        }
+    }
+
+    if (settings.fallbackEnabled && settings.fallbackBaseUrl && settings.fallbackApiKey) {
+        try {
+            const text = await fallbackTestFetch({
+                baseUrl: settings.fallbackBaseUrl,
+                apiKey: settings.fallbackApiKey,
+                model: settings.fallbackModel || 'gpt-4o-mini',
+                timeoutMs: boundedTimeoutMs,
+            });
+            if (hasUsableTestResponse(text)) {
+                return connectionTestResult(true, 'fallback', startedAt, 'success', '连接成功');
+            }
+            lastFailure = { route: 'fallback', error: createConnectionTestError('empty_response') };
+        } catch (error) {
+            lastFailure = { route: 'fallback', error };
+        }
+    }
+
+    if (!lastFailure) {
+        return connectionTestResult(
+            false,
+            'unavailable',
+            startedAt,
+            'unavailable',
+            '未找到可用的副模型连接，请选择 Connection Profile 或配置 Fallback API',
+        );
+    }
+
+    const failure = classifyConnectionTestError(lastFailure.error);
+    return connectionTestResult(
+        false,
+        lastFailure.route,
+        startedAt,
+        failure.category,
+        failure.message,
+    );
+}
+
 /**
  * Call auxiliary model with clean context.
  * Priority: generateRaw (+ optional connectionProfile) → fallback fetch.
@@ -27,7 +131,7 @@ export async function callAuxModel({ purpose, systemPrompt, userPrompt, jsonSche
                 return { text: String(result), via: 'generateRaw' };
             }
         } catch (err) {
-            appendLog('warn', `generateRaw 失败 (${purpose}): ${err?.message ?? err}`);
+            appendLog('warn', `generateRaw 失败 (${purpose}): ${safeAuxError(err)}`);
         }
     }
 
@@ -48,7 +152,7 @@ export async function callAuxModel({ purpose, systemPrompt, userPrompt, jsonSche
             }
         }
     } catch (err) {
-        appendLog('warn', `ConnectionManager 失败 (${purpose}): ${err?.message ?? err}`);
+        appendLog('warn', `ConnectionManager 失败 (${purpose}): ${safeAuxError(err)}`);
     }
 
     if (settings.fallbackEnabled && settings.fallbackBaseUrl && settings.fallbackApiKey) {
@@ -86,6 +190,14 @@ function extractTextFromCms(result) {
     return '';
 }
 
+function safeAuxError(error) {
+    return String(error?.message ?? error ?? '未知错误')
+        .replace(/Bearer\s+\S+/gi, 'Bearer [已隐藏]')
+        .replace(/(api[_-]?key\s*[=:]\s*)[^\s,;]+/gi, '$1[已隐藏]')
+        .replace(/\bsk-[A-Za-z0-9_-]+\b/g, 'sk-[已隐藏]')
+        .slice(0, 300);
+}
+
 async function fallbackFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, temperature, jsonSchema }) {
     const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
     const body = {
@@ -116,6 +228,127 @@ async function fallbackFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt,
     }
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
+}
+
+async function fallbackTestFetch({ baseUrl, apiKey, model, timeoutMs }) {
+    const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeoutId = controller
+        ? setTimeout(() => controller.abort(), timeoutMs)
+        : null;
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+                model,
+                temperature: 0,
+                messages: [
+                    { role: 'system', content: CONNECTION_TEST_SYSTEM_PROMPT },
+                    { role: 'user', content: CONNECTION_TEST_USER_PROMPT },
+                ],
+            }),
+            ...(controller ? { signal: controller.signal } : {}),
+        });
+        if (!res.ok) {
+            const error = createConnectionTestError('http_error');
+            error.status = res.status;
+            throw error;
+        }
+        const data = await res.json();
+        return data?.choices?.[0]?.message?.content ?? '';
+    } finally {
+        if (timeoutId != null) {
+            clearTimeout(timeoutId);
+        }
+    }
+}
+
+function getConnectionManagerService(ctx) {
+    return ctx.ConnectionManagerRequestService
+        || globalThis.ConnectionManagerRequestService
+        || globalThis.SillyTavern?.libs?.ConnectionManagerRequestService
+        || null;
+}
+
+function hasUsableTestResponse(value) {
+    return value != null && String(value).trim() !== '';
+}
+
+function normalizeTimeout(timeoutMs) {
+    const parsed = Number(timeoutMs);
+    if (!Number.isFinite(parsed)) {
+        return CONNECTION_TEST_TIMEOUT_MS;
+    }
+    return Math.min(Math.max(Math.round(parsed), 1_000), 60_000);
+}
+
+function withTimeout(promise, timeoutMs) {
+    let timeoutId;
+    const timeout = new Promise((_, reject) => {
+        timeoutId = setTimeout(
+            () => reject(createConnectionTestError('timeout')),
+            timeoutMs,
+        );
+    });
+    return Promise.race([Promise.resolve(promise), timeout])
+        .finally(() => clearTimeout(timeoutId));
+}
+
+function createConnectionTestError(code) {
+    const error = new Error(code);
+    error.connectionTestCode = code;
+    return error;
+}
+
+function classifyConnectionTestError(error) {
+    const status = Number(error?.status);
+    const code = String(error?.connectionTestCode || error?.code || '').toLowerCase();
+    const name = String(error?.name || '').toLowerCase();
+    // This text is only inspected for classification and is never returned.
+    const diagnostic = String(error?.message || '').toLowerCase();
+
+    if (code === 'empty_response') {
+        return { category: 'empty_response', message: '连接已响应，但没有返回可用内容' };
+    }
+    if (code === 'timeout' || name === 'aborterror' || /timeout|timed out/.test(diagnostic)) {
+        return { category: 'timeout', message: '连接超时，请检查服务状态或稍后重试' };
+    }
+    if (status === 401 || status === 403 || /unauthorized|forbidden|invalid api.?key|authentication/.test(diagnostic)) {
+        return { category: 'auth', message: '认证失败，请检查 API Key 或连接权限' };
+    }
+    if (status === 429 || /rate.?limit|too many requests/.test(diagnostic)) {
+        return { category: 'rate_limit', message: '请求过于频繁或额度不足，请稍后重试' };
+    }
+    if (status === 404) {
+        return { category: 'not_found', message: '接口或模型不存在，请检查 URL 和模型名' };
+    }
+    if (status === 400 || status === 422) {
+        return { category: 'bad_request', message: '服务拒绝了测试请求，请检查模型名和接口兼容性' };
+    }
+    if (status >= 500 && status < 600) {
+        return { category: 'server_error', message: '模型服务暂时异常，请稍后重试' };
+    }
+    if (
+        name === 'typeerror'
+        || /failed to fetch|network|cors|connection refused|econnrefused|enotfound/.test(diagnostic)
+    ) {
+        return { category: 'network', message: '无法访问模型服务，请检查网络、URL 或 CORS 设置' };
+    }
+    return { category: 'request_failed', message: '连接测试失败，请检查连接配置后重试' };
+}
+
+function connectionTestResult(ok, route, startedAt, category, message) {
+    return {
+        ok,
+        route,
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        category,
+        message,
+    };
 }
 
 export function parseJsonFromModel(text) {

@@ -2,7 +2,7 @@ import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { getBaselinePair, getPairTexts, getPairs } from './ids.js';
 import { mergeExtractResult, renderStateTableCompact } from './merge.js';
 import { EXTRACT_JSON_SCHEMA, EXTRACT_SYSTEM } from './prompts.js';
-import { appendLog, getChatData, getSettings, saveChatData } from './settings.js';
+import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
 import { normalizeExtractOutput } from './validate.js';
 import { QUEUE_PRIORITY } from './constants.js';
 import { enqueue } from './queue.js';
@@ -38,6 +38,7 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
 }
 
 export async function handleExtractJob(payload) {
+    const originData = getChatData();
     const settings = getSettings();
     if (!settings.enabled) {
         return;
@@ -69,6 +70,7 @@ export async function handleExtractJob(payload) {
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
             const { raw, sourceText } = await runExtractOnce(pair, { retryNote });
+            assertChatData(originData);
             const normalized = normalizeExtractOutput(raw, 'per_floor');
             const result = await mergeExtractResult(normalized, {
                 pipeline: 'per_floor',
@@ -79,6 +81,7 @@ export async function handleExtractJob(payload) {
                 floorLabel: pair.pairIndex,
                 source: 'auto',
             });
+            assertChatData(originData);
 
             if (result.discarded > 0 && result.applied === 0 && attempt === 0) {
                 retryNote = `有 ${result.discarded} 条未通过校验（evidence/实体/长度）`;
@@ -92,7 +95,7 @@ export async function handleExtractJob(payload) {
             }
             d.pending_floors = (d.pending_floors || []).filter(x => x.floorKey !== pair.floorKey);
             d.progress.pairs_since_proofread = (d.progress.pairs_since_proofread || 0) + 1;
-            await saveChatData();
+            await saveChatData(originData);
 
             appendLog('info', `提取完成 楼#${pair.pairIndex}: +${result.applied} 丢${result.discarded} 冲突${result.conflicts}`);
 
@@ -102,11 +105,16 @@ export async function handleExtractJob(payload) {
             }
             return;
         } catch (err) {
+            if (err?.code === 'CHAT_SCOPE_CHANGED') {
+                throw err;
+            }
+            assertChatData(originData);
             if (attempt === 0) {
                 retryNote = err?.message ?? String(err);
                 continue;
             }
             appendLog('error', `提取失败 楼#${pair.pairIndex}: ${err?.message ?? err}`);
+            throw err;
         }
     }
 }
@@ -146,6 +154,7 @@ function maybeEnqueueProofread() {
 }
 
 export async function extractFromChapterSummary({ chapter, stateTableSnapshot }) {
+    const originData = getChatData();
     const summary = chapter.summary || '';
     const tableRender = renderStateTableCompact(stateTableSnapshot || getChatData().state_table);
     const userPrompt = [
@@ -163,6 +172,7 @@ export async function extractFromChapterSummary({ chapter, stateTableSnapshot })
         jsonSchema: EXTRACT_JSON_SCHEMA,
         temperature: 0,
     });
+    assertChatData(originData);
     const raw = parseJsonFromModel(text);
     if (!raw) {
         throw new Error('迁移提取 JSON 解析失败');
@@ -172,7 +182,7 @@ export async function extractFromChapterSummary({ chapter, stateTableSnapshot })
     return mergeExtractResult(normalized, {
         pipeline: 'chapter',
         sourceText: summary,
-        stateTable: getChatData().state_table,
+        stateTable: originData.state_table,
         floorKey: `chapter:${chapter.id}`,
         floorLabel,
         source: 'auto',

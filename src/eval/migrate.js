@@ -2,7 +2,14 @@ import { QUEUE_PRIORITY } from '../constants.js';
 import { handleChapterSummaryJob, buildKeywordIndex } from '../chapter.js';
 import { extractFromChapterSummary } from '../extract.js';
 import { addEvalCase } from './cases.js';
-import { appendLog, getChatData, getSettings, saveChatData, saveSettings } from '../settings.js';
+import {
+    appendLog,
+    assertChatData,
+    getChatData,
+    getSettings,
+    saveChatData,
+    saveSettings,
+} from '../settings.js';
 import { ensureActivationBaseline, getPairs } from '../ids.js';
 import { enqueue } from '../queue.js';
 
@@ -93,10 +100,11 @@ export async function handleMigrateExtractChapterJob(payload) {
     }
     const before = structuredClone(data.state_table);
     await extractFromChapterSummary({ chapter: ch, stateTableSnapshot: before });
+    assertChatData(data);
 
     // Mark covered pair keys so live path never double-touches if baseline is reset
     const pairs = getPairs().filter(p => p.sealed && p.pairIndex >= startPair && p.pairIndex <= endPair);
-    const d = getChatData();
+    const d = data;
     d.extracted_keys = d.extracted_keys || [];
     for (const p of pairs) {
         const marker = `migrated:${p.floorKey}`;
@@ -104,10 +112,11 @@ export async function handleMigrateExtractChapterJob(payload) {
             d.extracted_keys.push(marker);
         }
     }
-    await saveChatData();
+    await saveChatData(data);
 }
 
 export async function handleMigrateFinalizeJob(payload = {}) {
+    const originData = getChatData();
     if (migrateAbort) {
         appendLog('info', '迁移已中止');
         return;
@@ -131,8 +140,9 @@ export async function handleMigrateFinalizeJob(payload = {}) {
         }, QUEUE_PRIORITY.migrate);
     }
 
-    buildKeywordIndex(getChatData());
-    const data = getChatData();
+    assertChatData(originData);
+    buildKeywordIndex(originData);
+    const data = originData;
     const already = (data.review_queue || []).some(x => x.kind === 'alert' && String(x.note || '').includes('存量迁移'));
     if (!already) {
         data.review_queue.push({
@@ -142,7 +152,7 @@ export async function handleMigrateFinalizeJob(payload = {}) {
             createdAt: Date.now(),
         });
     }
-    await saveChatData();
+    await saveChatData(data);
     appendLog('info', `迁移收尾：残楼补提 ×${pairs.length}`);
 }
 

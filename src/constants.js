@@ -35,9 +35,6 @@ export const TRIM_TYPES = new Set([
     '',
     'normal',
     'group_chat',
-    'auto_continue',
-    'swipe',
-    'regenerate',
 ]);
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -79,6 +76,14 @@ export const EMPTY_CHAT_DATA = () => ({
     review_queue: [],
     pending_floors: [],
     extracted_keys: [],
+    job_queue: {
+        scope_id: null,
+        paused: false,
+        queued: [],
+        running: null,
+        failed: [],
+        updatedAt: null,
+    },
     progress: {
         last_chapter_end_pair: -1,
         pairs_since_proofread: 0,

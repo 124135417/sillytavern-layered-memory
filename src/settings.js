@@ -25,7 +25,7 @@ export function saveSettings() {
     saveSettingsDebounced();
 }
 
-export function getChatData() {
+function getActiveChatData() {
     const { chatMetadata } = getContext();
     if (!chatMetadata[MODULE_NAME]) {
         chatMetadata[MODULE_NAME] = EMPTY_CHAT_DATA();
@@ -64,9 +64,37 @@ export function getChatData() {
     return data;
 }
 
-export async function saveChatData() {
+export function getChatData() {
+    return getActiveChatData();
+}
+
+export function assertChatData(data) {
+    if (getActiveChatData() !== data) {
+        const error = new Error('聊天已切换，已取消旧聊天任务的保存');
+        error.code = 'CHAT_SCOPE_CHANGED';
+        throw error;
+    }
+}
+
+export async function saveChatData(expectedData = null) {
+    if (expectedData) assertChatData(expectedData);
     const { saveMetadata } = getContext();
     await saveMetadata();
+    // Prevent callers from continuing their completion path against a newly
+    // opened chat if the switch happened while the save request was pending.
+    if (expectedData) assertChatData(expectedData);
+}
+
+/** Persist message-level fields such as extra.layered_memory_id. */
+export async function saveChatMessages() {
+    const context = getContext();
+    const save = context.saveChat || context.saveChatConditional;
+    if (typeof save !== 'function') {
+        throw new Error('当前 SillyTavern 版本未暴露聊天保存接口');
+    }
+    // Invoke while the originating chat is still current. ensureMessageIds()
+    // only reports true once, so this does not create a save loop/storm.
+    await save.call(context);
 }
 
 export function appendLog(level, message, extra = null) {
