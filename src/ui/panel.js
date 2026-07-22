@@ -251,6 +251,7 @@ export function renderActiveTab() {
     }
     renderShellStatus();
     const tab = activeTab();
+    body.classList.toggle('lm-state-body', tab === 'state');
     if (tab === 'state') {
         body.innerHTML = renderStateTab();
         bindStateTab(body);
@@ -426,13 +427,23 @@ function renderTaskRail() {
     const data = getChatData();
     const recent = [...(data.logs || [])].reverse().filter(x => /完成|更新|回滚/.test(x.message || '')).slice(0, 4);
     const inFlight = q.inFlight;
+    const activeCount = Number(Boolean(inFlight)) + queued.length + failed.length;
+    const summary = failed.length
+        ? `${activeCount} 个任务 · ${failed.length} 个失败`
+        : activeCount
+            ? `${activeCount} 个任务处理中`
+            : '当前空闲';
+    const summaryState = failed.length ? 'error' : activeCount ? 'working' : 'idle';
     return `
-        <aside class="lm-task-rail" aria-label="后台任务">
+        <aside class="lm-task-rail" aria-label="后台任务" data-summary-state="${summaryState}">
             <header>
-                <div><span class="lm-kicker">BACKGROUND</span><h3>后台任务</h3></div>
-                <button type="button" class="lm-text-button" id="lm-queue-toggle" aria-pressed="${q.paused ? 'true' : 'false'}">${q.paused ? '继续处理' : '暂停新任务'}</button>
+                <div class="lm-task-heading"><span class="lm-kicker">BACKGROUND</span><h3>后台任务</h3><span class="lm-task-summary">${escapeHtml(summary)}</span></div>
+                <div class="lm-task-controls">
+                    <button type="button" class="lm-text-button" id="lm-queue-toggle" aria-pressed="${q.paused ? 'true' : 'false'}">${q.paused ? '继续处理' : '暂停新任务'}</button>
+                    <button type="button" class="lm-task-disclosure" aria-expanded="false" aria-controls="lm-task-list"><span>展开</span><span aria-hidden="true">⌄</span></button>
+                </div>
             </header>
-            <div class="lm-task-list">
+            <div class="lm-task-list" id="lm-task-list">
                 ${inFlight ? renderTask(inFlight, 'running') : (!queued.length && !failed.length ? '<div class="lm-task lm-task-idle"><span class="fa-solid fa-check" aria-hidden="true"></span><div><b>当前空闲</b><small>没有正在运行的任务</small></div></div>' : '')}
                 ${queued.slice(0, 4).map(job => renderTask(job, 'queued')).join('')}
                 ${queued.length > 4 ? `<p class="lm-task-overflow">另有 ${queued.length - 4} 个任务等待</p>` : ''}
@@ -476,6 +487,13 @@ function renderTask(job, state) {
 }
 
 function bindQueueControls(body) {
+    const rail = body?.querySelector('.lm-task-rail');
+    const disclosure = rail?.querySelector('.lm-task-disclosure');
+    disclosure?.addEventListener('click', () => {
+        const expanded = rail.classList.toggle('lm-mobile-expanded');
+        disclosure.setAttribute('aria-expanded', String(expanded));
+        disclosure.querySelector('span').textContent = expanded ? '收起' : '展开';
+    });
     const toggle = body?.querySelector('#lm-queue-toggle');
     toggle?.addEventListener('click', () => {
         toggle.disabled = true;
@@ -653,14 +671,14 @@ function openEntryEditor(entry = null) {
     dialog.className = 'lm-dialog lm-entry-dialog';
     dialog.innerHTML = `
         <form method="dialog" class="lm-dialog-frame lm-entry-form">
-            <header><div><span class="lm-kicker">${entry ? 'EDIT MEMORY' : 'NEW MEMORY'}</span><h3>${entry ? '编辑记忆' : '添加一条记忆'}</h3></div><button type="submit" value="cancel" class="lm-icon-button" aria-label="关闭">×</button></header>
+            <header><div><span class="lm-kicker">${entry ? 'EDIT MEMORY' : 'NEW MEMORY'}</span><h3>${entry ? '编辑记忆' : '添加一条记忆'}</h3></div><button type="submit" value="cancel" formnovalidate class="lm-icon-button" aria-label="关闭">×</button></header>
             <div class="lm-entry-fields">
                 <label>类型<select name="slot">${SLOTS.map(slot => `<option value="${slot}" ${entry?.slot === slot ? 'selected' : ''}>${escapeHtml(SLOT_LABELS[slot])}</option>`).join('')}</select></label>
                 <div class="lm-field-grid"><label>主体<input name="subject" required maxlength="80" value="${escapeHtml(entry?.subject || '')}" placeholder="谁或什么"/></label><label>关联对象（可选）<input name="object" maxlength="80" value="${escapeHtml(entry?.object || '')}" placeholder="与谁相关"/></label></div>
                 <label>当前事实<textarea name="value" required maxlength="80" rows="3" placeholder="现在仍然成立的事实">${escapeHtml(entry?.value || '')}</textarea><small>最多 80 个字符；只写当前仍然有效的状态。</small></label>
                 <label>持续影响（可选）<input name="cause" maxlength="120" value="${escapeHtml(entry?.cause || '')}" placeholder="它会怎样影响后续剧情"/></label>
             </div>
-            <footer><button type="submit" value="cancel" class="lm-text-button">取消</button><button type="submit" value="save" class="lm-button lm-button-primary">保存记忆</button></footer>
+            <footer><button type="submit" value="cancel" formnovalidate class="lm-text-button">取消</button><button type="submit" value="save" class="lm-button lm-button-primary">保存记忆</button></footer>
         </form>`;
     document.body.appendChild(dialog);
     const promise = new Promise(resolve => {
