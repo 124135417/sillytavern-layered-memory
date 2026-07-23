@@ -10,6 +10,8 @@ const [panel, auxiliaryModel, renderedMemory] = await Promise.all([
 const requiredCopy = [
     '用哪个模型整理记忆？',
     '希望保留多少最近剧情？',
+    'AI 正文提取规则',
+    '用最近一条回复测试',
     '节省上下文',
     '平衡（推荐）',
     '尽量完整',

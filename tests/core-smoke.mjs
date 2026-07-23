@@ -16,6 +16,7 @@ const settings = {
     historyBudgetMode: 'custom',
     historyTokenBudget: 1800,
     minRecentPairs: 2,
+    bodyExtractionRegex: '',
     recentPairs: 2,
     chapterSize: 3,
     proofreadEvery: 75,
@@ -31,6 +32,7 @@ const settings = {
 const chatData = {
     version: 1,
     state_table: { version: 1, entries: [], changelog: [] },
+    turn_summaries: [],
     chapters: [], volumes: [], keyword_index: {}, review_queue: [],
     pending_floors: [], extracted_keys: [],
     job_queue: { scope_id: 'smoke', paused: false, queued: [], running: null, failed: [] },
@@ -59,6 +61,7 @@ const { mergeExtractResult, rollbackFloor } = await import('../src/merge.js');
 const { renderL1Block, renderL2Block } = await import('../src/render.js');
 const { trimChatForGenerate } = await import('../src/inject.js');
 const { testAuxModelConnection } = await import('../src/aux-model.js');
+const { extractAiBody } = await import('../src/body.js');
 
 function setPairs(count) {
     context.chat = [];
@@ -76,6 +79,7 @@ assert.equal(ensureMessageIds(), false, '重复扫描不应再次改写 ID');
 assert.equal(getPairs().length, 6, '六对消息应正确配对');
 
 const raw = {
+    turn_summary: '<user>请求周衡护送林晚，周衡答应将她送到北港。',
     promise: [{ subject: '周衡', object: '林晚', value: '护送她到北港', evidence: '周衡答应护送林晚到北港' }],
 };
 const normalized = normalizeExtractOutput(raw);
@@ -89,8 +93,17 @@ const merged = await mergeExtractResult(normalized, {
 });
 assert.deepEqual(merged, { applied: 1, discarded: 0, conflicts: 0 });
 assert.match(renderL1Block(chatData), /护送她到北港/);
+assert.equal(chatData.turn_summaries.length, 1, '逐轮整理应同时保存剧情记录');
 assert.equal((await rollbackFloor('floor-1')), 1, '按楼回滚应移除变更');
 assert.equal(chatData.state_table.entries.length, 0);
+assert.equal(chatData.turn_summaries.length, 0, '按楼回滚必须同时移除剧情记录');
+
+const bodyMatch = extractAiBody('<thinking>忽略</thinking><content>真正正文</content><table>忽略</table>', '<content>([\\s\\S]*?)</content>');
+assert.equal(bodyMatch.text, '真正正文');
+assert.equal(bodyMatch.mode, 'regex');
+const bodyFallback = extractAiBody('没有按标签输出的正文', '<content>([\\s\\S]*?)</content>');
+assert.equal(bodyFallback.text, '没有按标签输出的正文');
+assert.equal(bodyFallback.mode, 'fallback', '正文规则失配必须自动回退整条回复');
 
 const invalid = validateEntry({ subject: '林晚', value: '错误事实', evidence: '不存在的证据' }, {
     pipeline: 'per_floor', sourceText: '本楼没有这句话', stateTable: chatData.state_table,
@@ -99,6 +112,12 @@ assert.equal(invalid.ok, false, '伪造 evidence 必须被拒绝');
 
 setPairs(12);
 ensureMessageIds();
+chatData.turn_summaries = Array.from({ length: 6 }, (_, pairIndex) => ({
+    floorKey: getPairs()[pairIndex].floorKey,
+    pairIndex,
+    summary: `第${pairIndex}轮逐轮记录`,
+    sourceMode: 'regex',
+}));
 chatData.chapters = [
     { id: 'ch_1', summary: '前三轮摘要', floor_range: [0, 2], stale: false, demoted: false },
     { id: 'ch_2', summary: '后三轮摘要', floor_range: [3, 5], stale: false, demoted: false },
@@ -113,6 +132,16 @@ const cloneForRequest = () => original.map((message, index) => ({
         ? `<meow_FM>第${Math.floor(index / 2)}轮摘要</meow_FM>`
         : `${message.mes}${'剧情细节'.repeat(180)}`,
 }));
+chatData.chapters = [];
+const earlyRequest = cloneForRequest();
+const earlyResult = await trimChatForGenerate(earlyRequest, 'normal', 8000);
+assert.equal(earlyResult.removedThrough, 5, '第一个章节形成前应允许连续逐轮记录接替旧原文');
+assert.match(renderL2Block(chatData, { throughPair: 5 }), /第0轮逐轮记录[\s\S]*第5轮逐轮记录/);
+
+chatData.chapters = [
+    { id: 'ch_1', summary: '前三轮摘要', floor_range: [0, 2], stale: false, demoted: false },
+    { id: 'ch_2', summary: '后三轮摘要', floor_range: [3, 5], stale: false, demoted: false },
+];
 const regenerate = cloneForRequest();
 const regenerateResult = await trimChatForGenerate(regenerate, 'regenerate', 8000);
 assert.equal(regenerate.length, original.length, 'regenerate 不得裁剪聊天');
@@ -125,10 +154,13 @@ assert.equal(normalResult.removedThrough, 5, '裁剪边界必须对齐完整章�
 assert.equal(original.length, 24, '请求裁剪不得修改聊天存档');
 assert.match(renderL2Block(chatData, { throughPair: 5 }), /前三轮摘要[\s\S]*后三轮摘要/,
     '应只渲染实际删除范围对应的摘要');
+assert.doesNotMatch(renderL2Block(chatData, { throughPair: 5 }), /逐轮记录/,
+    '完整章节存在时不得重复注入对应逐轮记录');
 assert.doesNotMatch(renderL2Block(chatData, { throughPair: 2 }), /后三轮摘要/,
     '仍留在请求中的章节不得重复注入');
 
 chatData.chapters = [{ id: 'ch_gap', summary: '有空洞的摘要', floor_range: [3, 5], stale: false }];
+chatData.turn_summaries = [];
 const gapRequest = cloneForRequest();
 const gapResult = await trimChatForGenerate(gapRequest, 'normal', 8000);
 assert.equal(gapRequest.length, original.length, '摘要不是从最早历史连续覆盖时不得裁剪');

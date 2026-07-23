@@ -24,6 +24,7 @@ import { updateInjection } from '../inject.js';
 import { renderL1Block, renderL2Block, renderL4Block } from '../render.js';
 import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
+import { extractAiBody } from '../body.js';
 
 const ROOT_ID = 'layered-memory-panel';
 const DRAWER_ID = 'layered-memory-drawer';
@@ -997,6 +998,14 @@ function renderSettingsTab() {
                     </label>
                 </div>
                 <div class="lm-settings-fields">
+                    <label>AI 正文提取规则
+                        <small>插件只整理规则中第一个括号捕获的正文。留空会读取整条回复；规则偶尔失效时也会自动读取整条回复，不会漏掉这一轮。</small>
+                        <textarea id="lm-body-regex" rows="2" spellcheck="false" placeholder="例如：&lt;content&gt;([\\s\\S]*?)&lt;/content&gt;">${escapeHtml(s.bodyExtractionRegex)}</textarea>
+                    </label>
+                    <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-test-body">用最近一条回复测试</button><output id="lm-body-result" class="lm-connection-result" aria-live="polite"></output></div>
+                    <p class="lm-security-note"><span class="fa-solid fa-circle-info" aria-hidden="true"></span>如果要让插件完全接管摘要，请关闭预设中“每轮生成摘要”的指令和只发送旧摘要的配套正则。插件不会自动修改你的预设。</p>
+                </div>
+                <div class="lm-settings-fields">
                     <label class="lm-switch-row"><span><b>需要时找回相关的旧记忆</b><small>当前对话提到旧人物、物品或地点时，尝试找回相关剧情。只靠关键词判断，默认关闭。</small></span><input type="checkbox" id="lm-l4" ${s.l4Enabled ? 'checked' : ''}/></label>
                     <label class="lm-switch-row"><span><b>精简很久以前的摘要前先询问我</b><small>需要进一步压缩旧剧情时，先放到“待你确认”页面。</small></span><input type="checkbox" id="lm-vc" ${s.volumeCompressConfirm ? 'checked' : ''}/></label>
                 </div>
@@ -1046,7 +1055,7 @@ function renderSettingsTab() {
 }
 
 function bindSettingsTab(body) {
-    body.querySelectorAll('input, select').forEach(control => {
+    body.querySelectorAll('input, select, textarea').forEach(control => {
         control.addEventListener('input', () => { settingsDirty = true; });
         control.addEventListener('change', () => { settingsDirty = true; });
     });
@@ -1079,6 +1088,7 @@ function bindSettingsTab(body) {
         }
         s.fallbackModel = body.querySelector('#lm-fb-model').value.trim();
         s.historyBudgetMode = body.querySelector('#lm-history-mode').value;
+        s.bodyExtractionRegex = body.querySelector('#lm-body-regex').value.trim();
         s.historyTokenBudget = readNumber('#lm-history-budget', 12000, 500);
         s.budgetL1 = readNumber('#lm-b1', 2000, 200);
         s.budgetL2 = readNumber('#lm-b2', 5000, 500);
@@ -1131,6 +1141,33 @@ function bindSettingsTab(body) {
             button.textContent = '保存并检查模型连接';
             renderShellStatus();
         }
+    });
+    body.querySelector('#lm-test-body')?.addEventListener('click', () => {
+        const output = body.querySelector('#lm-body-result');
+        const pair = [...getPairs()].reverse().find(item => item.ai);
+        if (!pair) {
+            output.dataset.state = 'error';
+            output.textContent = '当前聊天还没有可测试的 AI 回复。';
+            return;
+        }
+        const { aiText } = getPairTexts(pair);
+        const pattern = body.querySelector('#lm-body-regex').value.trim();
+        const result = extractAiBody(aiText, pattern);
+        if (!pattern) {
+            output.dataset.state = 'success';
+            output.textContent = `当前会读取整条回复，约 ${[...result.text].length} 字。`;
+            return;
+        }
+        if (result.mode === 'regex') {
+            const preview = result.text.replace(/\s+/g, ' ').trim().slice(0, 100);
+            output.dataset.state = 'success';
+            output.textContent = `识别成功，约 ${[...result.text].length} 字：${preview}${result.text.length > 100 ? '…' : ''}`;
+            return;
+        }
+        output.dataset.state = 'error';
+        output.textContent = result.error.startsWith('invalid_regex:')
+            ? '规则格式有误；实际整理时会自动读取整条回复。'
+            : '最近一条回复没有匹配；实际整理时会自动读取整条回复。';
     });
     body.querySelector('#lm-migrate')?.addEventListener('click', () => {
         if (confirm('开始补记以前的聊天？插件会在后台慢慢整理旧内容，不会刷新当前页面。')) {

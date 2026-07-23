@@ -127,7 +127,7 @@ jQuery(async () => {
         });
     }
 
-    console.log(`[${MODULE}] 已加载 v0.3.0`);
+    console.log(`[${MODULE}] 已加载 v0.4.0`);
 });
 
 export async function onActivate() {

@@ -49,17 +49,23 @@ function getVolumeFloorRange(volume, chaptersById) {
  * wholly contained in the request prefix that was actually removed are used.
  */
 export function renderL2Block(data, { forBudget = false, budget = 5000, throughPair } = {}) {
-    const parts = [];
+    const items = [];
     const chaptersById = new Map((data.chapters || []).map(c => [c.id, c]));
     const bounded = Number.isInteger(throughPair);
     const coveredChapterIds = new Set();
+    const coveredRanges = [];
     const volumes = (data.volumes || [])
         .filter(v => bounded ? !v.stale : (!v.stale || forBudget))
         .map(v => ({ ...v, floor_range: getVolumeFloorRange(v, chaptersById) }))
         .filter(v => !bounded || (v.floor_range && v.floor_range[1] <= throughPair))
         .sort((a, b) => (a.floor_range?.[0] ?? 0) - (b.floor_range?.[0] ?? 0));
     for (const v of volumes) {
-        parts.push(`### 很久以前的剧情摘要\n${v.summary}`);
+        items.push({
+            start: v.floor_range?.[0] ?? 0,
+            end: v.floor_range?.[1] ?? 0,
+            text: `### 很久以前的剧情摘要\n${v.summary}`,
+        });
+        if (v.floor_range) coveredRanges.push(v.floor_range);
         for (const id of v.chapter_ids || []) {
             coveredChapterIds.add(id);
         }
@@ -71,9 +77,26 @@ export function renderL2Block(data, { forBudget = false, budget = 5000, throughP
             : !c.demoted)
         .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
     for (const c of chapters) {
-        parts.push(`### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要\n${c.summary}`);
+        items.push({
+            start: c.floor_range[0],
+            end: c.floor_range[1],
+            text: `### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要\n${c.summary}`,
+        });
+        coveredRanges.push(c.floor_range);
     }
-    const text = parts.join('\n\n').trim();
+    const turnSummaries = (data.turn_summaries || [])
+        .filter(item => Number.isInteger(item.pairIndex) && item.summary)
+        .filter(item => !bounded || item.pairIndex <= throughPair)
+        .filter(item => !coveredRanges.some(([start, end]) => item.pairIndex >= start && item.pairIndex <= end));
+    for (const item of turnSummaries) {
+        items.push({
+            start: item.pairIndex,
+            end: item.pairIndex,
+            text: `### 第 ${item.pairIndex} 轮对话的剧情记录\n${item.summary}`,
+        });
+    }
+    items.sort((a, b) => a.start - b.start || a.end - b.end);
+    const text = items.map(item => item.text).join('\n\n').trim();
     if (!text) {
         return '';
     }

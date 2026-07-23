@@ -6,11 +6,13 @@ import { appendLog, assertChatData, getChatData, getSettings, saveChatData } fro
 import { normalizeExtractOutput } from './validate.js';
 import { QUEUE_PRIORITY } from './constants.js';
 import { enqueue } from './queue.js';
+import { extractAiBody } from './body.js';
 
 async function runExtractOnce(pair, { retryNote = '' } = {}) {
     const data = getChatData();
     const { userText, aiText } = getPairTexts(pair);
-    const sourceText = `${userText}\n${aiText}`;
+    const body = extractAiBody(aiText, getSettings().bodyExtractionRegex);
+    const sourceText = `${userText}\n${body.text}`;
     const tableRender = renderStateTableCompact(data.state_table);
     const userPrompt = [
         retryNote ? `上次校验失败原因：${retryNote}\n请修正后重新输出。\n` : '',
@@ -19,7 +21,7 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
         '\n\n## 本楼用户输入\n',
         userText,
         '\n\n## 本楼 AI 回复\n',
-        aiText,
+        body.text,
     ].join('');
 
     const { text } = await callAuxModel({
@@ -34,7 +36,7 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
     if (!raw) {
         throw new Error('提取结果不是合法 JSON');
     }
-    return { raw, sourceText, userText, aiText };
+    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode };
 }
 
 export async function handleExtractJob(payload) {
@@ -69,9 +71,12 @@ export async function handleExtractJob(payload) {
 
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
-            const { raw, sourceText } = await runExtractOnce(pair, { retryNote });
+            const { raw, sourceText, bodyMode } = await runExtractOnce(pair, { retryNote });
             assertChatData(originData);
             const normalized = normalizeExtractOutput(raw, 'per_floor');
+            if (!normalized.turnSummary) {
+                throw new Error('逐轮剧情记录为空或过长');
+            }
             const result = await mergeExtractResult(normalized, {
                 pipeline: 'per_floor',
                 sourceText,
@@ -80,6 +85,7 @@ export async function handleExtractJob(payload) {
                 pairIndex: pair.pairIndex,
                 floorLabel: pair.pairIndex,
                 source: 'auto',
+                bodyMode,
             });
             assertChatData(originData);
 

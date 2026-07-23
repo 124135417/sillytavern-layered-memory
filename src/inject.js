@@ -100,29 +100,35 @@ function resolveHistoryBudget(settings, contextSize) {
     return Number.isFinite(total) && total > 0 ? Math.max(500, Math.floor(total * percent)) : null;
 }
 
-function getSafeChapterBoundaries(data, maxPair) {
-    const chapters = (data.chapters || [])
-        .filter(c => !c.stale && c.summary && Array.isArray(c.floor_range))
-        .slice()
-        .sort((a, b) => a.floor_range[0] - b.floor_range[0] || a.floor_range[1] - b.floor_range[1]);
-    const boundaries = [];
-    let coveredThrough = -1;
-    for (const chapter of chapters) {
-        const [start, end] = chapter.floor_range;
-        if (!Number.isInteger(start) || !Number.isInteger(end) || end < start) {
-            continue;
-        }
-        if (start > coveredThrough + 1) {
-            break;
-        }
-        if (end > coveredThrough) {
-            coveredThrough = end;
-            if (coveredThrough <= maxPair) {
-                boundaries.push(coveredThrough);
-            }
+function getSafeArchiveBoundaries(data, maxPair) {
+    const intervals = [];
+    for (const chapter of data.chapters || []) {
+        const [start, end] = chapter.floor_range || [];
+        if (!chapter.stale && chapter.summary && Number.isInteger(start) && Number.isInteger(end) && end >= start) {
+            intervals.push([start, end]);
         }
     }
-    return boundaries;
+    for (const item of data.turn_summaries || []) {
+        if (item.summary && Number.isInteger(item.pairIndex)) {
+            intervals.push([item.pairIndex, item.pairIndex]);
+        }
+    }
+
+    const endpoints = [...new Set(intervals.map(([, end]) => end))]
+        .filter(end => end <= maxPair)
+        .sort((a, b) => a - b);
+    return endpoints.filter(boundary => {
+        const usable = intervals
+            .filter(([, end]) => end <= boundary)
+            .sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+        let coveredThrough = -1;
+        for (const [start, end] of usable) {
+            if (start > coveredThrough + 1) break;
+            if (end > coveredThrough) coveredThrough = end;
+            if (coveredThrough >= boundary) return true;
+        }
+        return false;
+    });
 }
 
 function baseHandoff(type, contextSize, before, budget, minRecentPairs) {
@@ -175,6 +181,10 @@ export async function trimChatForGenerate(chat, type, contextSize) {
         data.context_handoff = result;
         return result;
     }
+    const pairIndexByFloorKey = new Map(pairs.map(pair => [pair.floorKey, pair.pairIndex]));
+    data.turn_summaries = (data.turn_summaries || [])
+        .filter(item => item.floorKey && pairIndexByFloorKey.has(item.floorKey))
+        .map(item => ({ ...item, pairIndex: pairIndexByFloorKey.get(item.floorKey) }));
     if (!Number.isFinite(budget)) {
         result.status = 'blocked';
         result.reason = 'invalid_budget';
@@ -203,7 +213,7 @@ export async function trimChatForGenerate(chat, type, contextSize) {
         }
     }
 
-    const boundaries = getSafeChapterBoundaries(data, maxRemovablePair);
+    const boundaries = getSafeArchiveBoundaries(data, maxRemovablePair);
     if (!boundaries.length) {
         result.status = 'blocked';
         result.reason = 'summary_gap';

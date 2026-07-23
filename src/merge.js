@@ -41,6 +41,23 @@ export async function mergeExtractResult(normalized, ctx) {
     const floorLabel = ctx.floorLabel ?? ctx.pairIndex ?? '?';
     const floorKey = ctx.floorKey ?? null;
 
+    if (ctx.pipeline === 'per_floor' && normalized.turnSummary && floorKey) {
+        data.turn_summaries = data.turn_summaries || [];
+        const existing = data.turn_summaries.find(item => item.floorKey === floorKey);
+        const next = {
+            floorKey,
+            pairIndex: Number(ctx.pairIndex ?? ctx.floorLabel),
+            summary: normalized.turnSummary,
+            sourceMode: ctx.bodyMode || 'full',
+            updatedAt: Date.now(),
+        };
+        if (existing) {
+            Object.assign(existing, next);
+        } else {
+            data.turn_summaries.push(next);
+        }
+    }
+
     for (const item of normalized.adds) {
         const dup = findDuplicate(table.entries, item.slot, item.subject, item.object || '');
         if (dup) {
@@ -160,7 +177,10 @@ export async function rollbackFloor(floorKey) {
     const data = getChatData();
     const table = data.state_table;
     const logs = (table.changelog || []).filter(c => c.floorKey === floorKey);
-    if (!logs.length) {
+    const beforeSummaryCount = (data.turn_summaries || []).length;
+    data.turn_summaries = (data.turn_summaries || []).filter(item => item.floorKey !== floorKey);
+    const removedSummary = beforeSummaryCount !== data.turn_summaries.length;
+    if (!logs.length && !removedSummary) {
         return 0;
     }
     // Apply reverse in reverse order
@@ -177,9 +197,9 @@ export async function rollbackFloor(floorKey) {
     }
     table.changelog = (table.changelog || []).filter(c => c.floorKey !== floorKey);
     data.extracted_keys = (data.extracted_keys || []).filter(k => k !== floorKey);
-    table.version += 1;
+    if (logs.length) table.version += 1;
     await saveChatData();
-    return logs.length;
+    return Math.max(logs.length, removedSummary ? 1 : 0);
 }
 
 export function renderStateTableCompact(table) {

@@ -52,6 +52,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     historyBudgetMode: 'balanced', // compact | balanced | detailed | custom
     historyTokenBudget: 12000,
     minRecentPairs: 6,
+    /** Empty means the complete AI reply. Capture group 1 is the narrative body. */
+    bodyExtractionRegex: '',
     /** @deprecated Kept for settings migration from <= 0.2.0. */
     recentPairs: 3,
     chapterSize: 25,
@@ -75,6 +77,7 @@ export const EMPTY_CHAT_DATA = () => ({
         entries: [],
         changelog: [],
     },
+    turn_summaries: [],
     chapters: [],
     volumes: [],
     keyword_index: {},

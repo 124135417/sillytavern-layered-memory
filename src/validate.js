@@ -73,6 +73,7 @@ export function isNoChange(val) {
  */
 export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
     const out = {
+        turnSummary: '',
         adds: [],
         updates: [],
         conflicts: [],
@@ -80,6 +81,11 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
     };
     if (!raw || typeof raw !== 'object') {
         return out;
+    }
+
+    const turnSummary = String(raw.turn_summary || '').trim();
+    if (pipeline === 'per_floor' && turnSummary && [...turnSummary].length <= 500) {
+        out.turnSummary = turnSummary;
     }
 
     for (const slot of SLOTS) {

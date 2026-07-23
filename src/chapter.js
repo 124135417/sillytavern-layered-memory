@@ -5,6 +5,7 @@ import { CHAPTER_SYSTEM } from './prompts.js';
 import { enqueue } from './queue.js';
 import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
 import { estimateTokens } from './tokens.js';
+import { extractAiBody } from './body.js';
 
 function buildKeywordIndex(data) {
     const index = {};
@@ -78,7 +79,8 @@ async function buildChapterBody(startPair, endPair, data) {
     const pairs = getPairs().filter(p => p.pairIndex >= startPair && p.pairIndex <= endPair && p.sealed);
     const texts = pairs.map(p => {
         const { userText, aiText } = getPairTexts(p);
-        return `【第${p.pairIndex}对】\n用户：${userText}\nAI：${aiText}`;
+        const body = extractAiBody(aiText, settings.bodyExtractionRegex);
+        return `【第${p.pairIndex}对】\n用户：${userText}\nAI：${body.text}`;
     });
     let body = texts.join('\n\n');
     const cap = settings.chapterInputTokenCap || 20000;
