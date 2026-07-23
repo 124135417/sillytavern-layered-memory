@@ -62,8 +62,12 @@ export async function handleExtractJob(payload) {
 
     const data = getChatData();
     const keys = data.extracted_keys || [];
+    const alreadyExtracted = keys.includes(pair.floorKey) || keys.includes(`migrated:${pair.floorKey}`);
+    const alreadySummarized = (data.turn_summaries || []).some(item => item.floorKey === pair.floorKey && item.summary);
     // Skip if already extracted live, or covered by migration (migrated:<floorKey>).
-    if (keys.includes(pair.floorKey) || keys.includes(`migrated:${pair.floorKey}`)) {
+    if ((alreadySummarized && alreadyExtracted)
+        || (alreadySummarized && payload.summaryOnly)
+        || (alreadyExtracted && !payload.summaryOnly)) {
         return;
     }
 
@@ -77,6 +81,11 @@ export async function handleExtractJob(payload) {
             if (!normalized.turnSummary) {
                 throw new Error('逐轮剧情记录为空或过长');
             }
+            if (payload.summaryOnly) {
+                normalized.adds = [];
+                normalized.updates = [];
+                normalized.conflicts = [];
+            }
             const result = await mergeExtractResult(normalized, {
                 pipeline: 'per_floor',
                 sourceText,
@@ -88,6 +97,11 @@ export async function handleExtractJob(payload) {
                 bodyMode,
             });
             assertChatData(originData);
+
+            if (payload.summaryOnly) {
+                appendLog('info', `逐轮剧情补记完成 楼#${pair.pairIndex}`);
+                return;
+            }
 
             if (result.discarded > 0 && result.applied === 0 && attempt === 0) {
                 retryNote = `有 ${result.discarded} 条未通过校验（evidence/实体/长度）`;

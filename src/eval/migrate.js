@@ -27,13 +27,9 @@ export function requestMigrateAbort() {
 export async function startMigration() {
     migrateAbort = false;
     const baseline = ensureActivationBaseline();
-    if (baseline < 0) {
-        appendLog('warn', '迁移：无基线历史（新聊天），无需迁移');
-        return;
-    }
-
-    const pairs = getPairs().filter(p => p.sealed && p.pairIndex <= baseline);
-    if (!pairs.length) {
+    const allPairs = getPairs().filter(p => p.sealed);
+    const pairs = allPairs.filter(p => baseline >= 0 && p.pairIndex <= baseline);
+    if (!allPairs.length) {
         appendLog('warn', '迁移：基线前无定格楼层');
         return;
     }
@@ -72,7 +68,7 @@ export async function startMigration() {
     }
     // Residual = sealed pairs after the last full chapter's real endPair (no arithmetic grid).
     enqueue('migrate_finalize', { baseline, lastFullEnd }, QUEUE_PRIORITY.migrate);
-    appendLog('info', `迁移已入队：${jobs.filter(j => j.full).length} 完整章（基线≤${baseline}）；尾部残楼将在收尾时 per-floor 补提`);
+    appendLog('info', `迁移已入队：${jobs.filter(j => j.full).length} 完整章；缺少的逐轮剧情记录将在收尾时补齐`);
 }
 
 export async function handleMigrateChapterJob(payload) {
@@ -121,38 +117,39 @@ export async function handleMigrateFinalizeJob(payload = {}) {
         appendLog('info', '迁移已中止');
         return;
     }
-    const baseline = payload.baseline ?? ensureActivationBaseline();
-
-    // Trailing residual = sealed pairs after the last full chapter's real endPair, still ≤ baseline.
-    // lastFullEnd comes from the actual enqueued chapters (uses real pairIndex, not an arithmetic
-    // grid), so unpaired/deleted floors in history never mis-align residual vs chapter coverage.
-    // lastFullEnd = -1 (no full chapter) → every sealed pair ≤ baseline is residual.
-    const lastFullEnd = payload.lastFullEnd ?? -1;
-    const residualStart = lastFullEnd + 1;
-    const pairs = getPairs().filter(p =>
-        p.sealed && p.pairIndex >= residualStart && p.pairIndex <= baseline);
+    const data = getChatData();
+    const extracted = new Set(data.extracted_keys || []);
+    const summarized = new Set((data.turn_summaries || []).filter(item => item.summary).map(item => item.floorKey));
+    const activeChapters = (data.chapters || []).filter(chapter => !chapter.stale && chapter.summary);
+    const pairs = getPairs().filter(pair => {
+        if (!pair.sealed || summarized.has(pair.floorKey)) return false;
+        return !activeChapters.some(chapter =>
+            pair.pairIndex >= chapter.floor_range?.[0] && pair.pairIndex <= chapter.floor_range?.[1]);
+    });
 
     for (const p of pairs) {
+        const alreadyExtracted = extracted.has(p.floorKey) || extracted.has(`migrated:${p.floorKey}`);
         enqueue('migrate_extract_floor', {
             floorKey: p.floorKey,
             pairIndex: p.pairIndex,
             ignoreBaseline: true,
+            summaryOnly: alreadyExtracted,
         }, QUEUE_PRIORITY.migrate);
     }
 
     assertChatData(originData);
     buildKeywordIndex(originData);
-    const data = originData;
-    const already = (data.review_queue || []).some(x => x.kind === 'alert' && String(x.note || '').includes('旧聊天'));
+    const finalData = originData;
+    const already = (finalData.review_queue || []).some(x => x.kind === 'alert' && String(x.note || '').includes('旧聊天'));
     if (!already) {
-        data.review_queue.push({
+        finalData.review_queue.push({
             id: crypto.randomUUID(),
             kind: 'alert',
             note: `旧聊天的大段剧情已经补记完成，剩余 ${pairs.length} 轮零散对话正在等待整理。完成后建议检查“当前记忆”。`,
             createdAt: Date.now(),
         });
     }
-    await saveChatData(data);
+    await saveChatData(finalData);
     appendLog('info', `迁移收尾：残楼补提 ×${pairs.length}`);
 }
 
