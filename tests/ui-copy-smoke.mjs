@@ -8,7 +8,12 @@ const [panel, auxiliaryModel, renderedMemory] = await Promise.all([
 ]);
 
 const requiredCopy = [
-    '用哪个模型整理记忆？',
+    '记忆模型从哪里连接？',
+    '自己填写 API、密钥和模型',
+    '使用 SillyTavern 已保存的连接',
+    '跟随当前聊天模型',
+    '临时改用另一个模型（可选）',
+    '获取模型列表',
     '希望保留多少最近剧情？',
     'AI 正文提取规则',
     '用最近一条回复测试',
@@ -52,9 +57,11 @@ for (const copy of retiredCopy) {
 assert.ok(!renderedMemory.includes('卷摘要'), 'model preview should not expose the old volume-summary term');
 assert.ok(!renderedMemory.includes('第${c.floor_range[0]}–${c.floor_range[1]}对'),
     'model preview should describe ranges as conversation rounds');
-assert.ok(auxiliaryModel.includes('没有找到可用的记忆模型'),
-    'connection errors should identify the user-facing memory model');
+assert.ok(auxiliaryModel.includes('A failure never silently switches models'),
+    'the selected memory-model source must be exclusive');
+assert.ok(auxiliaryModel.includes('listDirectModels'),
+    'direct API users should be able to fetch a provider model list');
 assert.ok(!auxiliaryModel.includes('请配置 Connection Profile'),
     'connection errors should not require SillyTavern connection-manager jargon');
 
-console.log('UI copy smoke: 32/32 passed');
+console.log('UI copy smoke: 39/39 passed');

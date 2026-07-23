@@ -19,156 +19,114 @@ export async function testAuxModelConnection({ timeoutMs = CONNECTION_TEST_TIMEO
     const settings = getSettings();
     const ctx = getContext();
     const boundedTimeoutMs = normalizeTimeout(timeoutMs);
-    const preferredRoute = settings.connectionProfile ? 'connection_profile' : 'current_connection';
-    let lastFailure = null;
-
-    if (typeof ctx.generateRaw === 'function') {
-        try {
-            const args = {
+    const source = normalizeModelSource(settings.memoryModelSource);
+    const route = source === 'direct' ? 'direct_api'
+        : source === 'profile' ? 'connection_profile'
+            : 'current_connection';
+    try {
+        let result;
+        if (source === 'direct') {
+            assertDirectSettings(settings);
+            result = await directTestFetch({
+                baseUrl: settings.directBaseUrl,
+                apiKey: settings.directApiKey,
+                model: settings.directModel,
+                timeoutMs: boundedTimeoutMs,
+            });
+        } else if (source === 'profile') {
+            result = await withTimeout(callConnectionProfile({
+                ctx,
+                profileId: settings.connectionProfile,
+                modelOverride: settings.profileModelOverride,
+                systemPrompt: CONNECTION_TEST_SYSTEM_PROMPT,
+                userPrompt: CONNECTION_TEST_USER_PROMPT,
+                temperature: 0,
+            }), boundedTimeoutMs);
+        } else {
+            if (typeof ctx.generateRaw !== 'function') {
+                throw createConnectionTestError('unavailable');
+            }
+            result = await withTimeout(ctx.generateRaw({
                 systemPrompt: CONNECTION_TEST_SYSTEM_PROMPT,
                 prompt: CONNECTION_TEST_USER_PROMPT,
                 temperature: 0,
-            };
-            if (settings.connectionProfile) {
-                args.connectionProfile = settings.connectionProfile;
-            }
-            const result = await withTimeout(ctx.generateRaw(args), boundedTimeoutMs);
-            if (hasUsableTestResponse(result)) {
-                return connectionTestResult(true, preferredRoute, startedAt, 'success', '连接成功');
-            }
-            lastFailure = { route: preferredRoute, error: createConnectionTestError('empty_response') };
-        } catch (error) {
-            lastFailure = { route: preferredRoute, error };
+            }), boundedTimeoutMs);
         }
-    }
-
-    if (settings.connectionProfile) {
-        const cms = getConnectionManagerService(ctx);
-        if (cms && typeof cms.sendRequest === 'function') {
-            try {
-                const messages = [
-                    { role: 'system', content: CONNECTION_TEST_SYSTEM_PROMPT },
-                    { role: 'user', content: CONNECTION_TEST_USER_PROMPT },
-                ];
-                const result = await withTimeout(
-                    cms.sendRequest(settings.connectionProfile, messages, null),
-                    boundedTimeoutMs,
-                );
-                if (hasUsableTestResponse(extractTextFromCms(result))) {
-                    return connectionTestResult(true, 'connection_profile', startedAt, 'success', '连接成功');
-                }
-                lastFailure = {
-                    route: 'connection_profile',
-                    error: createConnectionTestError('empty_response'),
-                };
-            } catch (error) {
-                lastFailure = { route: 'connection_profile', error };
-            }
+        if (!hasUsableTestResponse(result)) {
+            throw createConnectionTestError('empty_response');
         }
+        return connectionTestResult(true, route, startedAt, 'success', '连接成功', selectedModelLabel(settings));
+    } catch (error) {
+        const failure = classifyConnectionTestError(error);
+        return connectionTestResult(false, route, startedAt, failure.category, failure.message, selectedModelLabel(settings));
     }
-
-    if (settings.fallbackEnabled && settings.fallbackBaseUrl && settings.fallbackApiKey) {
-        try {
-            const text = await fallbackTestFetch({
-                baseUrl: settings.fallbackBaseUrl,
-                apiKey: settings.fallbackApiKey,
-                model: settings.fallbackModel || 'gpt-4o-mini',
-                timeoutMs: boundedTimeoutMs,
-            });
-            if (hasUsableTestResponse(text)) {
-                return connectionTestResult(true, 'fallback', startedAt, 'success', '连接成功');
-            }
-            lastFailure = { route: 'fallback', error: createConnectionTestError('empty_response') };
-        } catch (error) {
-            lastFailure = { route: 'fallback', error };
-        }
-    }
-
-    if (!lastFailure) {
-        return connectionTestResult(
-            false,
-            'unavailable',
-            startedAt,
-            'unavailable',
-            '没有找到可用的记忆模型。请选择酒馆中的模型连接，或在高级设置中填写备用模型。',
-        );
-    }
-
-    const failure = classifyConnectionTestError(lastFailure.error);
-    return connectionTestResult(
-        false,
-        lastFailure.route,
-        startedAt,
-        failure.category,
-        failure.message,
-    );
 }
 
 /**
  * Call auxiliary model with clean context.
- * Priority: generateRaw (+ optional connectionProfile) → fallback fetch.
+ * The selected source is exclusive. A failure never silently switches models.
  */
 export async function callAuxModel({ purpose, systemPrompt, userPrompt, jsonSchema = null, temperature = 0 }) {
     const settings = getSettings();
     const ctx = getContext();
-
-    // Prefer ST generateRaw (uses Connection Manager when connectionProfile supported)
-    if (typeof ctx.generateRaw === 'function') {
-        try {
-            const args = {
-                systemPrompt,
-                prompt: userPrompt,
-                temperature,
-            };
-            if (jsonSchema) {
-                args.jsonSchema = jsonSchema;
-            }
-            if (settings.connectionProfile) {
-                args.connectionProfile = settings.connectionProfile;
-            }
-            const result = await ctx.generateRaw(args);
-            if (result != null && String(result).trim() !== '' && String(result).trim() !== '{}') {
-                return { text: String(result), via: 'generateRaw' };
-            }
-        } catch (err) {
-            appendLog('warn', `generateRaw 失败 (${purpose}): ${safeAuxError(err)}`);
-        }
-    }
-
-    // ConnectionManagerRequestService if exposed
+    const source = normalizeModelSource(settings.memoryModelSource);
     try {
-        const cms = ctx.ConnectionManagerRequestService
-            || globalThis.ConnectionManagerRequestService
-            || SillyTavern?.libs?.ConnectionManagerRequestService;
-        if (cms && settings.connectionProfile && typeof cms.sendRequest === 'function') {
-            const messages = [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt },
-            ];
-            const result = await cms.sendRequest(settings.connectionProfile, messages, null);
-            const text = extractTextFromCms(result);
-            if (text) {
-                return { text, via: 'ConnectionManager' };
-            }
+        if (source === 'direct') {
+            assertDirectSettings(settings);
+            const text = await directFetch({
+                baseUrl: settings.directBaseUrl,
+                apiKey: settings.directApiKey,
+                model: settings.directModel,
+                systemPrompt,
+                userPrompt,
+                temperature,
+                jsonSchema,
+            });
+            if (!hasUsableTestResponse(text)) throw createConnectionTestError('empty_response');
+            return { text, via: 'direct_api', model: settings.directModel };
         }
+        if (source === 'profile') {
+            const text = await callConnectionProfile({
+                ctx,
+                profileId: settings.connectionProfile,
+                modelOverride: settings.profileModelOverride,
+                systemPrompt,
+                userPrompt,
+                temperature,
+                jsonSchema,
+            });
+            if (!hasUsableTestResponse(text)) throw createConnectionTestError('empty_response');
+            return { text, via: 'connection_profile', model: settings.profileModelOverride || '' };
+        }
+        if (typeof ctx.generateRaw !== 'function') throw createConnectionTestError('unavailable');
+        const result = await ctx.generateRaw({ systemPrompt, prompt: userPrompt, temperature, ...(jsonSchema ? { jsonSchema } : {}) });
+        if (!hasUsableTestResponse(result) || String(result).trim() === '{}') throw createConnectionTestError('empty_response');
+        return { text: String(result), via: 'current_connection' };
     } catch (err) {
-        appendLog('warn', `ConnectionManager 失败 (${purpose}): ${safeAuxError(err)}`);
+        appendLog('warn', `记忆模型失败 (${purpose}, ${source}): ${safeAuxError(err)}`);
+        throw err;
     }
+}
 
-    if (settings.fallbackEnabled && settings.fallbackBaseUrl && settings.fallbackApiKey) {
-        const text = await fallbackFetch({
-            baseUrl: settings.fallbackBaseUrl,
-            apiKey: settings.fallbackApiKey,
-            model: settings.fallbackModel || 'gpt-4o-mini',
-            systemPrompt,
-            userPrompt,
-            temperature,
-            jsonSchema,
-        });
-        return { text, via: 'fallback_fetch' };
-    }
-
-    throw new Error('记忆模型暂时不可用。请在插件设置中选择模型连接，或配置备用模型。');
+async function callConnectionProfile({ ctx, profileId, modelOverride, systemPrompt, userPrompt, temperature, jsonSchema = null }) {
+    if (!profileId) throw createConnectionTestError('profile_missing');
+    const cms = getConnectionManagerService(ctx);
+    if (!cms || typeof cms.sendRequest !== 'function') throw createConnectionTestError('unavailable');
+    const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+    ];
+    const custom = {
+        stream: false,
+        extractData: true,
+        includePreset: false,
+        includeInstruct: false,
+        temperature,
+    };
+    if (jsonSchema) custom.response_format = { type: 'json_schema', json_schema: jsonSchema };
+    const overridePayload = modelOverride ? { model: modelOverride } : {};
+    const result = await cms.sendRequest(profileId, messages, null, custom, overridePayload);
+    return extractTextFromCms(result);
 }
 
 function extractTextFromCms(result) {
@@ -198,7 +156,7 @@ function safeAuxError(error) {
         .slice(0, 300);
 }
 
-async function fallbackFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, temperature, jsonSchema }) {
+async function directFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, temperature, jsonSchema }) {
     const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
     const body = {
         model,
@@ -224,13 +182,15 @@ async function fallbackFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt,
     });
     if (!res.ok) {
         const t = await res.text();
-        throw new Error(`fallback HTTP ${res.status}: ${t.slice(0, 200)}`);
+        const error = new Error(`模型服务 HTTP ${res.status}: ${t.slice(0, 200)}`);
+        error.status = res.status;
+        throw error;
     }
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
 }
 
-async function fallbackTestFetch({ baseUrl, apiKey, model, timeoutMs }) {
+async function directTestFetch({ baseUrl, apiKey, model, timeoutMs }) {
     const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timeoutId = controller
@@ -311,6 +271,15 @@ function classifyConnectionTestError(error) {
     // This text is only inspected for classification and is never returned.
     const diagnostic = String(error?.message || '').toLowerCase();
 
+    if (code === 'profile_missing') {
+        return { category: 'unavailable', message: '还没有选择酒馆中已保存的连接。' };
+    }
+    if (code === 'direct_incomplete') {
+        return { category: 'unavailable', message: '请把模型服务地址、访问密钥和模型名称填写完整。' };
+    }
+    if (code === 'unavailable') {
+        return { category: 'unavailable', message: '当前酒馆版本没有提供这条模型连接能力。' };
+    }
     if (code === 'empty_response') {
         return { category: 'empty_response', message: '模型已经连接，但没有返回内容。请检查模型名称后再试一次。' };
     }
@@ -341,14 +310,37 @@ function classifyConnectionTestError(error) {
     return { category: 'request_failed', message: '这次没有连接成功。请检查模型连接设置后再试一次。' };
 }
 
-function connectionTestResult(ok, route, startedAt, category, message) {
+function connectionTestResult(ok, route, startedAt, category, message, model = '') {
     return {
         ok,
         route,
+        model,
         elapsedMs: Math.max(0, Date.now() - startedAt),
         category,
         message,
     };
+}
+
+function normalizeModelSource(value) {
+    return ['direct', 'profile', 'current'].includes(value) ? value : 'current';
+}
+
+function assertDirectSettings(settings) {
+    if (!settings.directBaseUrl || !settings.directApiKey || !settings.directModel) {
+        throw createConnectionTestError('direct_incomplete');
+    }
+}
+
+function selectedModelLabel(settings) {
+    const source = normalizeModelSource(settings.memoryModelSource);
+    if (source === 'direct') return settings.directModel || '尚未填写模型';
+    if (source === 'profile') return settings.profileModelOverride || profileModelForId(settings.connectionProfile) || '由连接配置决定';
+    return '当前聊天模型';
+}
+
+function profileModelForId(profileId) {
+    const profile = listConnectionProfiles().find(item => String(item?.id ?? item?.name ?? item) === String(profileId || ''));
+    return String(profile?.model || profile?.modelId || profile?.model_id || '');
 }
 
 export function parseJsonFromModel(text) {
@@ -394,4 +386,27 @@ export function listConnectionProfiles() {
         // ignore
     }
     return [];
+}
+
+/** List models from an OpenAI-compatible direct API without persisting secrets. */
+export async function listDirectModels({ baseUrl, apiKey, timeoutMs = CONNECTION_TEST_TIMEOUT_MS }) {
+    if (!baseUrl || !apiKey) throw createConnectionTestError('direct_incomplete');
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), normalizeTimeout(timeoutMs)) : null;
+    try {
+        const res = await fetch(baseUrl.replace(/\/$/, '') + '/models', {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            ...(controller ? { signal: controller.signal } : {}),
+        });
+        if (!res.ok) {
+            const error = new Error(`模型列表 HTTP ${res.status}`);
+            error.status = res.status;
+            throw error;
+        }
+        const data = await res.json();
+        return [...new Set((data?.data || []).map(item => String(item?.id || '').trim()).filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b));
+    } finally {
+        if (timeoutId != null) clearTimeout(timeoutId);
+    }
 }

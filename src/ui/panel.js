@@ -1,5 +1,5 @@
 import { SLOT_LABELS, SLOTS } from '../constants.js';
-import { listConnectionProfiles, testAuxModelConnection } from '../aux-model.js';
+import { listConnectionProfiles, listDirectModels, testAuxModelConnection } from '../aux-model.js';
 import {
     addEvalCase,
     exportEvalCasesJson,
@@ -348,13 +348,13 @@ function renderShellStatus() {
     const syncLabel = syncedThrough >= liveStart
         ? (syncedThrough === maxSealed ? `已整理到第 ${syncedThrough} 轮` : `已整理到第 ${syncedThrough} 轮 · 后面有遗漏`)
         : (maxSealed >= liveStart ? `第 ${liveStart} 轮起有内容尚未整理` : baseline >= 0 ? `从第 ${liveStart} 轮开始记录` : '新聊天');
-    const configuredConnection = settings.connectionProfile
-        ? '已选择记忆模型'
-        : settings.fallbackEnabled && settings.fallbackBaseUrl && settings.fallbackApiKey
-            ? '备用模型已设置'
-            : '使用酒馆当前模型';
+    const configuredConnection = settings.memoryModelSource === 'direct'
+        ? `自填 API · ${settings.directModel || '未选模型'}`
+        : settings.memoryModelSource === 'profile'
+            ? `酒馆连接 · ${settings.profileModelOverride || '配置内模型'}`
+            : '跟随当前聊天模型';
     const connectionLabel = lastConnectionTest
-        ? `${lastConnectionTest.ok ? '可用' : '不可用'} · ${lastConnectionTest.message}`
+        ? `${lastConnectionTest.ok ? '可用' : '不可用'} · ${lastConnectionTest.model || lastConnectionTest.message}`
         : `${configuredConnection} · 尚未检查`;
     const metrics = panel.querySelector('.lm-header-metrics');
     if (metrics) {
@@ -949,8 +949,11 @@ function renderSettingsTab() {
     const profileOpts = profiles.map(p => {
         const id = p.id || p.name || p;
         const name = p.name || p.id || p;
-        return `<option value="${escapeHtml(String(id))}" ${s.connectionProfile === id ? 'selected' : ''}>${escapeHtml(String(name))}</option>`;
+        const model = p.model || p.modelId || p.model_id || '';
+        const label = model ? `${name} — ${model}` : name;
+        return `<option value="${escapeHtml(String(id))}" ${String(s.connectionProfile) === String(id) ? 'selected' : ''}>${escapeHtml(String(label))}</option>`;
     }).join('');
+    const modelSource = ['direct', 'profile', 'current'].includes(s.memoryModelSource) ? s.memoryModelSource : 'current';
 
     const q = getQueueSnapshot();
     const baseline = getChatData().progress?.baseline_pair;
@@ -964,10 +967,30 @@ function renderSettingsTab() {
                 <header><div><span class="fa-solid fa-toggle-on" aria-hidden="true"></span><div><h4>常用设置</h4><p>选择用哪个模型整理记忆，并决定插件是否工作。</p></div></div></header>
                 <div class="lm-settings-fields">
                     <label class="lm-switch-row"><span><b>启用记忆插件</b><small>关闭后不再向模型发送记忆，也不会开始新的整理工作。</small></span><input type="checkbox" id="lm-enabled" ${s.enabled ? 'checked' : ''}/></label>
-                    <label>用哪个模型整理记忆？
-                        <small>这不会改变你正在聊天的主模型，只用于在后台提取和整理记忆。</small>
-                        <select id="lm-profile"><option value="">使用酒馆当前的模型连接</option>${profileOpts}</select>
+                    <label>记忆模型从哪里连接？
+                        <small>三种方式互不兜底。你选哪一种，插件就只用哪一种，不会失败后偷偷换模型。</small>
+                        <select id="lm-model-source">
+                            <option value="direct" ${modelSource === 'direct' ? 'selected' : ''}>自己填写 API、密钥和模型</option>
+                            <option value="profile" ${modelSource === 'profile' ? 'selected' : ''}>使用 SillyTavern 已保存的连接</option>
+                            <option value="current" ${modelSource === 'current' ? 'selected' : ''}>跟随当前聊天模型</option>
+                        </select>
                     </label>
+                    <div class="lm-model-source-panel" data-model-source="direct" ${modelSource === 'direct' ? '' : 'hidden'}>
+                        <div class="lm-field-grid">
+                            <label>模型服务地址<small>填写 OpenAI 兼容接口的基础地址，例如 https://api.deepseek.com。</small><input id="lm-direct-url" type="url" inputmode="url" placeholder="https://api.deepseek.com" value="${escapeHtml(s.directBaseUrl)}"/></label>
+                            <label>模型名称<small>可以手动填写，也可以先获取服务商提供的模型列表。</small><input id="lm-direct-model" list="lm-direct-model-list" placeholder="deepseek-v4-flash" value="${escapeHtml(s.directModel)}"/><datalist id="lm-direct-model-list"></datalist></label>
+                        </div>
+                        <label>访问密钥<small>只保存在你的 SillyTavern 设置中，检查结果和日志不会显示密钥。</small><input id="lm-direct-key" placeholder="${s.directApiKey ? '已经保存；留空不会更改' : '请输入服务商提供的密钥'}" type="password" value="" autocomplete="new-password"/></label>
+                        ${s.directApiKey ? '<label class="lm-compact-check"><input type="checkbox" id="lm-direct-clear-key"/> 删除已经保存的访问密钥</label>' : ''}
+                        <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-list-models">获取模型列表</button><output id="lm-model-list-result" class="lm-connection-result" aria-live="polite"></output></div>
+                    </div>
+                    <div class="lm-model-source-panel" data-model-source="profile" ${modelSource === 'profile' ? '' : 'hidden'}>
+                        <label>选择已保存的连接<small>列表同时显示连接名称和它当前保存的模型。</small><select id="lm-profile"><option value="">请选择一个已保存的连接</option>${profileOpts}</select></label>
+                        <label>临时改用另一个模型（可选）<small>留空时使用该连接中保存的模型；填写后只替换模型名称，不改变地址和密钥。</small><input id="lm-profile-model" placeholder="留空则使用连接配置中的模型" value="${escapeHtml(s.profileModelOverride)}"/></label>
+                    </div>
+                    <div class="lm-model-source-panel" data-model-source="current" ${modelSource === 'current' ? '' : 'hidden'}>
+                        <p class="lm-security-note"><span class="fa-solid fa-circle-info" aria-hidden="true"></span>插件会跟着当前聊天正在使用的模型走。你在酒馆里切换聊天模型后，记忆模型也会一起改变；这里不能单独指定模型。</p>
+                    </div>
                     <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-test-connection">保存并检查模型连接</button><output id="lm-connection-result" class="lm-connection-result" aria-live="polite"></output></div>
                 </div>
             </section>
@@ -1017,17 +1040,7 @@ function renderSettingsTab() {
             </section>
 
             <details class="lm-settings-section lm-settings-disclosure">
-                <summary><div><span class="fa-solid fa-sliders" aria-hidden="true"></span><div><h4>高级设置</h4><p>备用模型、记忆容量和发送位置。不了解这些选项时，请保持默认。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
-                <div class="lm-settings-fields">
-                    <label class="lm-switch-row"><span><b>启用备用模型连接</b><small>只有酒馆中的记忆模型不可用时才尝试这里的连接。</small></span><input type="checkbox" id="lm-fb-on" ${s.fallbackEnabled ? 'checked' : ''}/></label>
-                    <div class="lm-field-grid">
-                        <label>模型服务地址<input id="lm-fb-url" type="url" inputmode="url" placeholder="https://api.example.com/v1" value="${escapeHtml(s.fallbackBaseUrl)}"/></label>
-                        <label>模型名称<input id="lm-fb-model" placeholder="gpt-4o-mini" value="${escapeHtml(s.fallbackModel)}"/></label>
-                    </div>
-                    <label>访问密钥<input id="lm-fb-key" placeholder="${s.fallbackApiKey ? '已经保存；输入新密钥可以替换' : '请输入服务商提供的密钥'}" type="password" value="" autocomplete="new-password"/></label>
-                    ${s.fallbackApiKey ? '<label class="lm-compact-check"><input type="checkbox" id="lm-fb-clear-key"/> 删除已经保存的访问密钥</label>' : ''}
-                    <p class="lm-security-note"><span class="fa-solid fa-shield-halved" aria-hidden="true"></span>访问密钥会保存在酒馆的设置文件中。插件不会在检查结果中显示它；部分服务商可能不允许浏览器直接连接。</p>
-                </div>
+                <summary><div><span class="fa-solid fa-sliders" aria-hidden="true"></span><div><h4>高级设置</h4><p>记忆容量和发送位置。不了解这些选项时，请保持默认。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
                 <div class="lm-settings-fields lm-field-grid lm-field-grid-three">
                     <label>自定义聊天历史容量<small>仅在上方选择“自定义”时使用；这里只计算正则处理后的聊天。</small><input type="number" id="lm-history-budget" min="500" value="${s.historyTokenBudget}"/></label>
                     <label>当前事实容量<small>长期有效的人物状态、关系和约定。推荐 2000。</small><input type="number" id="lm-b1" min="200" value="${s.budgetL1}"/></label>
@@ -1059,7 +1072,15 @@ function bindSettingsTab(body) {
         control.addEventListener('input', () => { settingsDirty = true; });
         control.addEventListener('change', () => { settingsDirty = true; });
     });
-    ['#lm-profile', '#lm-fb-on', '#lm-fb-url', '#lm-fb-key', '#lm-fb-model', '#lm-fb-clear-key'].forEach(selector => {
+    const syncModelSourcePanels = () => {
+        const source = body.querySelector('#lm-model-source')?.value || 'current';
+        body.querySelectorAll('[data-model-source]').forEach(section => {
+            section.hidden = section.dataset.modelSource !== source;
+        });
+    };
+    body.querySelector('#lm-model-source')?.addEventListener('change', syncModelSourcePanels);
+    syncModelSourcePanels();
+    ['#lm-model-source', '#lm-profile', '#lm-profile-model', '#lm-direct-url', '#lm-direct-key', '#lm-direct-model', '#lm-direct-clear-key'].forEach(selector => {
         body.querySelector(selector)?.addEventListener('input', () => {
             lastConnectionTest = null;
             renderShellStatus();
@@ -1077,16 +1098,22 @@ function bindSettingsTab(body) {
         };
         s.enabled = body.querySelector('#lm-enabled').checked;
         s.migrationReviewMode = body.querySelector('#lm-mig-review').checked;
+        s.memoryModelSource = body.querySelector('#lm-model-source').value;
         s.connectionProfile = body.querySelector('#lm-profile').value;
-        s.fallbackEnabled = body.querySelector('#lm-fb-on').checked;
-        s.fallbackBaseUrl = body.querySelector('#lm-fb-url').value.trim();
-        const nextKey = body.querySelector('#lm-fb-key').value;
-        if (body.querySelector('#lm-fb-clear-key')?.checked) {
-            s.fallbackApiKey = '';
+        s.profileModelOverride = body.querySelector('#lm-profile-model').value.trim();
+        s.directBaseUrl = body.querySelector('#lm-direct-url').value.trim();
+        const nextKey = body.querySelector('#lm-direct-key').value;
+        if (body.querySelector('#lm-direct-clear-key')?.checked) {
+            s.directApiKey = '';
         } else if (nextKey) {
-            s.fallbackApiKey = nextKey;
+            s.directApiKey = nextKey;
         }
-        s.fallbackModel = body.querySelector('#lm-fb-model').value.trim();
+        s.directModel = body.querySelector('#lm-direct-model').value.trim();
+        // Keep legacy mirrors until old installations have had time to migrate.
+        s.fallbackEnabled = s.memoryModelSource === 'direct';
+        s.fallbackBaseUrl = s.directBaseUrl;
+        s.fallbackApiKey = s.directApiKey;
+        s.fallbackModel = s.directModel;
         s.historyBudgetMode = body.querySelector('#lm-history-mode').value;
         s.bodyExtractionRegex = body.querySelector('#lm-body-regex').value.trim();
         s.historyTokenBudget = readNumber('#lm-history-budget', 12000, 500);
@@ -1131,7 +1158,7 @@ function bindSettingsTab(body) {
             lastConnectionTest = result;
             output.dataset.state = result.ok ? 'success' : 'error';
             output.textContent = result.ok
-                ? `${result.message} · 用时 ${Math.max(0.1, result.elapsedMs / 1000).toFixed(1)} 秒`
+                ? `${result.message} · ${result.model} · 用时 ${Math.max(0.1, result.elapsedMs / 1000).toFixed(1)} 秒`
                 : result.message;
         } catch {
             output.dataset.state = 'error';
@@ -1140,6 +1167,31 @@ function bindSettingsTab(body) {
             button.disabled = false;
             button.textContent = '保存并检查模型连接';
             renderShellStatus();
+        }
+    });
+    body.querySelector('#lm-list-models')?.addEventListener('click', async () => {
+        persistForm();
+        const button = body.querySelector('#lm-list-models');
+        const output = body.querySelector('#lm-model-list-result');
+        const modelInput = body.querySelector('#lm-direct-model');
+        const datalist = body.querySelector('#lm-direct-model-list');
+        button.disabled = true;
+        button.textContent = '正在获取…';
+        output.dataset.state = 'working';
+        output.textContent = '正在读取服务商提供的模型';
+        try {
+            const settings = getSettings();
+            const models = await listDirectModels({ baseUrl: settings.directBaseUrl, apiKey: settings.directApiKey });
+            datalist.innerHTML = models.map(model => `<option value="${escapeHtml(model)}"></option>`).join('');
+            output.dataset.state = models.length ? 'success' : 'error';
+            output.textContent = models.length ? `找到 ${models.length} 个模型；请在上方输入框中选择` : '服务商没有返回可选模型；你仍然可以手动填写。';
+            if (models.length && !modelInput.value) modelInput.value = models[0];
+        } catch (error) {
+            output.dataset.state = 'error';
+            output.textContent = '没有取到模型列表。请检查地址和密钥，也可以直接手动填写模型名称。';
+        } finally {
+            button.disabled = false;
+            button.textContent = '获取模型列表';
         }
     });
     body.querySelector('#lm-test-body')?.addEventListener('click', () => {

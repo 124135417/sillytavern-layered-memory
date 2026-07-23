@@ -39,8 +39,16 @@ export const TRIM_TYPES = new Set([
 
 export const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
+    /** Explicit auxiliary-model source: direct | profile | current. */
+    memoryModelSource: 'current',
+    /** Optional model override for the selected Connection Manager profile. */
+    profileModelOverride: '',
+    directBaseUrl: '',
+    directApiKey: '',
+    directModel: '',
     /** ST Connection Manager profile id/name; empty = current main connection via generateRaw */
     connectionProfile: '',
+    /** @deprecated Legacy direct-connection fields, kept for <= 0.4.0 migration. */
     fallbackEnabled: false,
     fallbackBaseUrl: '',
     fallbackApiKey: '',

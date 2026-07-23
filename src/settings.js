@@ -10,6 +10,29 @@ export function getSettings() {
         extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
     }
     const settings = extensionSettings[MODULE_NAME];
+    // <= 0.4.0 exposed an implicit priority chain. Migrate it once to an
+    // explicit route so the plugin never silently uses a different model.
+    if (!Object.hasOwn(settings, 'memoryModelSource')) {
+        settings.memoryModelSource = settings.fallbackEnabled
+            && settings.fallbackBaseUrl
+            && settings.fallbackApiKey
+            ? 'direct'
+            : settings.connectionProfile
+                ? 'profile'
+                : 'current';
+    }
+    if (!['direct', 'profile', 'current'].includes(settings.memoryModelSource)) {
+        settings.memoryModelSource = 'current';
+    }
+    if (!Object.hasOwn(settings, 'directBaseUrl')) {
+        settings.directBaseUrl = settings.fallbackBaseUrl || '';
+    }
+    if (!Object.hasOwn(settings, 'directApiKey')) {
+        settings.directApiKey = settings.fallbackApiKey || '';
+    }
+    if (!Object.hasOwn(settings, 'directModel')) {
+        settings.directModel = settings.fallbackModel || '';
+    }
     if (!Object.hasOwn(settings, 'minRecentPairs')) {
         const legacyRecent = Number(settings.recentPairs);
         settings.minRecentPairs = Math.max(6, Number.isFinite(legacyRecent) ? legacyRecent : 0);

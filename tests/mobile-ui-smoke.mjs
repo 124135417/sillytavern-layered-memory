@@ -47,5 +47,11 @@ assert.match(css, /\.lm-memory-backdrop \{[\s\S]*z-index: 2147483000/u,
     'the modal backdrop must sit above hostile host controls');
 assert.match(css, /\.layered-memory-root \{[\s\S]*z-index: 2147483001/u,
     'the memory center must sit above its modal backdrop');
+assert.match(css, /--lm-type-caption: 0\.875rem/u,
+    'the smallest visible text token must remain readable');
+assert.match(css, /\.lm-metric b \{[^}]*font-size: var\(--lm-type-body\)/u,
+    'header metric numbers must use the full body size');
+assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/u,
+    'visible text must not use fixed pixel sizes below 14px');
 
-console.log('mobile UI smoke: 20/20 passed');
+console.log('mobile UI smoke: 23/23 passed');
