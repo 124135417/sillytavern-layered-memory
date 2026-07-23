@@ -117,6 +117,10 @@ function sameWork(a, type, payload) {
     if (type === 'migrate_extract_floor') {
         return a.payload?.floorKey && a.payload.floorKey === payload.floorKey;
     }
+    if (type === 'history_rebuild_segment' || type === 'history_rebuild_chapter') {
+        return a.payload?.startPair === payload.startPair && a.payload?.endPair === payload.endPair;
+    }
+    if (type === 'history_rebuild_commit') return true;
     if (type === 'volume_compress' && (payload.reason === 'budget' || payload.reason === 'budget_check')) {
         return a.payload?.reason === 'budget' || a.payload?.reason === 'budget_check';
     }
@@ -343,6 +347,10 @@ async function pump() {
                 const { settleHistoryBackfillStop } = await import('./eval/migrate.js');
                 await settleHistoryBackfillStop(chatData);
             }
+            if (job.type.startsWith('history_rebuild_')) {
+                const { settleHistoryRebuildStop } = await import('./rebuild.js');
+                await settleHistoryRebuildStop(chatData);
+            }
 
             if (!error) {
                 await persistScope(scopeId, chatData);
@@ -371,6 +379,10 @@ async function pump() {
                 if (job.type.startsWith('migrate_')) {
                     const { markHistoryBackfillError } = await import('./eval/migrate.js');
                     await markHistoryBackfillError(job.lastError, chatData);
+                }
+                if (job.type.startsWith('history_rebuild_')) {
+                    const { markHistoryRebuildError } = await import('./rebuild.js');
+                    await markHistoryRebuildError(job.lastError, chatData);
                 }
             }
             await persistScope(scopeId, chatData);

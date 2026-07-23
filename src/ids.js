@@ -152,16 +152,16 @@ export function ensureActivationBaseline() {
     const baseline = sealed.length ? Math.max(...sealed.map(p => p.pairIndex)) : -1;
     data.progress.baseline_pair = baseline;
     if (baseline >= 0) {
-        const note = `插件将从第 ${baseline + 1} 轮对话开始自动记录。更早的聊天不会自动补记；如果需要，请前往“设置 → 补记以前的聊天”。`;
-        const q = data.review_queue || [];
-        if (!q.some(x => x.kind === 'alert' && String(x.note || '').includes('开始自动记录'))) {
-            q.push({
+        const note = `插件将从第 ${baseline + 1} 轮对话开始自动记录。更早的聊天不会自动整理；如果需要，请前往“设置 → 安全重建以前的聊天”。`;
+        const notices = data.notices || [];
+        if (!notices.some(x => String(x.note || '').includes('开始自动记录'))) {
+            notices.push({
                 id: crypto.randomUUID(),
-                kind: 'alert',
+                kind: 'notice',
                 note,
                 createdAt: Date.now(),
             });
-            data.review_queue = q;
+            data.notices = notices;
         }
         appendLog('info', note);
     } else {

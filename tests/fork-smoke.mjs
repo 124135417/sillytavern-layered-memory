@@ -54,6 +54,8 @@ const parent = {
         { id: 'r1', floorKey: 'u1+a1', kind: 'flag_conflict' },
         { id: 'r2', floorKey: 'u2+a2', kind: 'flag_conflict' },
     ],
+    history_rebuild: { status: 'running', total: 3, completed: 2, turn_summaries: [{ pairIndex: 0 }] },
+    rebuild_backup: { createdAt: 123 },
     pending_floors: [],
     extracted_keys: ['u0+a0', 'u1+a1', 'u2+a2'],
     job_queue: blankQueue(),
@@ -103,6 +105,8 @@ assert.deepEqual(replayed.volumes.map(item => item.id), ['vol_1']);
 assert.deepEqual(replayed.review_queue.map(item => item.id), ['r1']);
 assert.deepEqual(replayed.extracted_keys, ['u0+a0', 'u1+a1']);
 assert.equal(replayed.job_queue.queued.length, 0);
+assert.equal(replayed.history_rebuild, null, 'a fork must not inherit the parent branch rebuild workspace');
+assert.equal(replayed.rebuild_backup, null, 'a fork must not expose the parent branch backup');
 assert.notEqual(replayed.job_queue.scope_id, 'parent-scope');
 assert.equal(replayed.branch_origin.method, 'checkpoint_replay');
 assert.equal(replayed.branch_checkpoints.every(point => point.stateTable.changelog.length === 0), true,
@@ -132,13 +136,14 @@ const legacy = buildLegacyRebuildData([pair(0), pair(1)], 'Parent Chat');
 assert.equal(legacy.state_table.entries.length, 0, 'unverifiable legacy state must never enter a new branch');
 assert.equal(legacy.branch_origin.method, 'safe_rebuild');
 assert.equal(legacy.progress.baseline_pair, -1);
-assert.equal(legacy.review_queue.some(item => item.kind === 'alert'), true);
+assert.equal(legacy.review_queue.length, 0, 'status messages must not inflate actionable review count');
+assert.equal(legacy.notices.some(item => item.kind === 'notice'), true);
 
 const fresh = buildFreshBranchData([pair(0), pair(1)], 'Parent Without Memory');
 assert.equal(fresh.branch_origin.method, 'fresh_start');
 assert.equal(fresh.branch_origin.status, 'ready');
 assert.equal(fresh.progress.baseline_pair, 1, 'a parent without plugin data must start from now, not auto-backfill');
-assert.match(fresh.review_queue[0].note, /开始补记旧聊天/u);
+assert.match(fresh.notices[0].note, /安全重建旧结果/u);
 
 const alternateSwipe = replayBranchData(parent, [pair(0), pair(1, '另一个 swipe')], 'Parent Chat');
 assert.equal(alternateSwipe.state_table.entries.some(entry => entry.id === 'e_0002'), false,
@@ -189,7 +194,8 @@ globalThis.fetch = async () => ({ ok: false, status: 404 });
 assert.equal((await beginBranchRecovery()).status, 'failed');
 assert.equal(failedMetadata.layered_memory.branch_origin.status, 'failed');
 assert.equal(failedMetadata.layered_memory.state_table.entries.length, 0);
-assert.match(failedMetadata.layered_memory.review_queue[0].note, /为避免串线/u);
+assert.equal(failedMetadata.layered_memory.review_queue.length, 0);
+assert.match(failedMetadata.layered_memory.notices[0].note, /为避免串线/u);
 globalThis.fetch = async () => ({ ok: true, json: async () => [{ chat_metadata: { layered_memory: structuredClone(parent) } }] });
 assert.equal((await ensureCurrentBranchRecovery()).status, 'ready', 'the next generation should retry a failed branch recovery');
 

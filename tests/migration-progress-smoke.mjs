@@ -59,6 +59,7 @@ await handleMigrateCompleteJob();
 snapshot = getHistoryBackfillSnapshot();
 assert.equal(snapshot.status, 'complete');
 assert.equal(snapshot.completed, 4);
-assert.match(data.review_queue.at(-1).note, /4 \/ 4/u);
+assert.equal(data.review_queue.length, 0, 'completion notices must not count as actionable review items');
+assert.match(data.notices.at(-1).note, /4 \/ 4/u);
 
 console.log('migration progress smoke: start, persistent progress, stop, resume-safe completion passed');

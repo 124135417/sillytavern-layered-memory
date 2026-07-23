@@ -31,12 +31,16 @@ assert.match(css, /\.lm-task-rail:not\(\.lm-mobile-expanded\) \.lm-task-list \{ 
     'mobile tasks should default to a compact status bar');
 assert.match(css, /@media \(max-height: 520px\) and \(max-width: 899px\)/u,
     'short landscape viewports need a dedicated layout');
+assert.match(css, /@media \(max-width: 360px\) and \(max-height: 650px\)/u,
+    'very small portrait phones need a compact footer and tab layout');
 assert.match(css, /\.lm-header-metrics \{ display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/u,
     'phone metrics should fit in one compact row');
 assert.match(css, /\.lm-icon-button \{ width: 44px !important; height: 44px !important;/u,
     'coarse pointers must override the host-enforced icon button size');
 assert.match(css, /\.lm-button-primary \{ color: var\(--lm-on-accent\)/u,
     'primary actions must use the audited high-contrast foreground');
+assert.doesNotMatch(css, /color: inherit;\s*font: inherit/u,
+    'host button normalization must not override component contrast and type sizes');
 assert.match(css, /\.lm-dialog input,[\s\S]*\.lm-dialog textarea \{/u,
     'body-level dialogs must own their form foreground and background styles');
 assert.match(css, /height: calc\(100dvh - 58px\)/u,

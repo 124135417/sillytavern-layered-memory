@@ -185,8 +185,11 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
     data.extracted_keys = (parentData.extracted_keys || []).filter(key => trustedKeys.has(underlyingFloorKey(key)));
     data.pending_floors = [];
     data.context_handoff = null;
+    data.history_rebuild = null;
+    data.rebuild_backup = null;
     data.review_queue = (parentData.review_queue || [])
         .filter(item => !item.floorKey || trustedKeys.has(item.floorKey)).map(clone);
+    data.notices = [];
     data.job_queue = EMPTY_CHAT_DATA().job_queue;
     data.job_queue.scope_id = crypto.randomUUID();
     data.progress = { ...EMPTY_CHAT_DATA().progress, ...(data.progress || {}) };
@@ -222,9 +225,9 @@ export function buildLegacyRebuildData(livePairs, parentChat = '') {
         status: 'ready',
         recoveredAt: Date.now(),
     };
-    data.review_queue.push({
+    data.notices.push({
         id: crypto.randomUUID(),
-        kind: 'alert',
+        kind: 'notice',
         note: '这个分支来自旧版记录，无法证明旧记忆没有混入另一条剧情线。插件已停止继承旧表，并会从这个分支自己的聊天内容重新整理。',
         createdAt: Date.now(),
     });
@@ -253,10 +256,10 @@ export function buildFreshBranchData(livePairs, parentChat = '') {
         status: 'ready',
         recoveredAt: Date.now(),
     };
-    data.review_queue.push({
+    data.notices.push({
         id: crypto.randomUUID(),
-        kind: 'alert',
-        note: '父聊天还没有可继承的插件记忆。这个分支会从下一轮开始正常记录；如果需要整理此前剧情，请在设置中点击“开始补记旧聊天”。',
+        kind: 'notice',
+        note: '父聊天还没有可继承的插件记忆。这个分支会从下一轮开始正常记录；如果需要整理此前剧情，请在设置中点击“安全重建旧结果”。',
         createdAt: Date.now(),
     });
     data.branch_checkpoints.push({
@@ -385,7 +388,7 @@ async function recoverCurrentBranch() {
         const blank = EMPTY_CHAT_DATA();
         blank.job_queue.scope_id = crypto.randomUUID();
         blank.branch_origin = { parentChat, status: 'failed', error: String(error?.message || error), recoveredAt: Date.now() };
-        blank.review_queue.push({ id: crypto.randomUUID(), kind: 'alert', note: `分支记忆恢复失败：${error?.message || error}。为避免串线，本分支暂不注入旧记忆。`, createdAt: Date.now() });
+        blank.notices.push({ id: crypto.randomUUID(), kind: 'notice', note: `分支记忆恢复失败：${error?.message || error}。为避免串线，本分支暂不注入旧记忆。`, createdAt: Date.now() });
         metadata[MODULE_NAME] = blank;
         await saveChatData(blank);
         return { status: 'failed', error };

@@ -26,6 +26,9 @@ export const QUEUE_PRIORITY = {
     state_gc: 40,
     migrate: 10,
     migrate_complete: 9,
+    history_rebuild_segment: 10,
+    history_rebuild_chapter: 9,
+    history_rebuild_commit: 8,
 };
 
 /**
@@ -80,7 +83,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const EMPTY_CHAT_DATA = () => ({
-    version: 2,
+    version: 3,
     state_table: {
         version: 1,
         entries: [],
@@ -107,6 +110,10 @@ export const EMPTY_CHAT_DATA = () => ({
     volumes: [],
     keyword_index: {},
     review_queue: [],
+    notices: [],
+    quarantined_entries: [],
+    history_rebuild: null,
+    rebuild_backup: null,
     pending_floors: [],
     extracted_keys: [],
     job_queue: {

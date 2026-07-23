@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, EMPTY_CHAT_DATA, MODULE_NAME } from './constants.js';
+import { quarantineInvalidEntries } from './quality.js';
 
 export function getContext() {
     return SillyTavern.getContext();
@@ -93,6 +94,20 @@ function getActiveChatData() {
             data.progress.next_chapter_seq = maxSeq + 1;
         }
     }
+    data.notices = Array.isArray(data.notices) ? data.notices : [];
+    data.review_queue = Array.isArray(data.review_queue) ? data.review_queue : [];
+    const alerts = data.review_queue.filter(item => item?.kind === 'alert');
+    if (alerts.length) {
+        const known = new Set(data.notices.map(item => item.id));
+        for (const item of alerts) {
+            if (!known.has(item.id)) data.notices.push({ ...item, kind: 'notice' });
+        }
+        data.review_queue = data.review_queue.filter(item => item?.kind !== 'alert');
+    }
+    if (data.history_backfill?.status === 'complete' || data.history_rebuild?.status === 'complete') {
+        data.notices = data.notices.filter(item => !/父聊天还没有可继承|从下一轮开始正常记录|开始自动记录/.test(String(item.note || '')));
+    }
+    quarantineInvalidEntries(data);
     return data;
 }
 

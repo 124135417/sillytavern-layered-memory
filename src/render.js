@@ -1,8 +1,9 @@
 import { SLOT_LABELS, SLOTS } from './constants.js';
 import { estimateTokens, truncateToBudget } from './tokens.js';
+import { usableMemoryEntries } from './quality.js';
 
 export function renderL1Block(data, budget = 2000) {
-    const entries = data.state_table?.entries || [];
+    const entries = usableMemoryEntries(data);
     if (!entries.length) {
         return '';
     }

@@ -56,6 +56,37 @@ function buildMustKeepList(chaptersToCompress, laterChapters, stateTable, mode) 
     return [...new Set(must)].slice(0, 30);
 }
 
+export function validateVolumeResult(raw, chapters, mustKeep = []) {
+    const summary = String(raw?.summary || '').trim();
+    const expectedIds = chapters.map(chapter => chapter.id);
+    const coveredIds = Array.isArray(raw?.covered_chapter_ids) ? raw.covered_chapter_ids.map(String) : [];
+    const missingNames = mustKeep.filter(name => !summary.includes(name));
+    const coverageOk = coveredIds.length === expectedIds.length
+        && coveredIds.every((id, index) => id === expectedIds[index]);
+    const errors = [];
+    if (!summary) errors.push('长期摘要为空');
+    if (!coverageOk) errors.push(`章节覆盖必须依次包含 ${expectedIds.join('、')}`);
+    if (missingNames.length) errors.push(`缺少必须保留的名称：${missingNames.join('、')}`);
+    return { ok: errors.length === 0, errors, summary, coveredIds, missingNames };
+}
+
+async function createValidatedVolume(chapters, mustKeep, userPrompt, data) {
+    let retryNote = '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        const { text } = await callAuxModel({
+            purpose: 'volume_compress',
+            systemPrompt: VOLUME_SYSTEM,
+            userPrompt: `${userPrompt}${retryNote ? `\n\n上次输出没有通过校验：${retryNote}。请完整修正。` : ''}`,
+            temperature: 0.2,
+        });
+        assertChatData(data);
+        const checked = validateVolumeResult(parseJsonFromModel(text), chapters, mustKeep);
+        if (checked.ok) return checked.summary;
+        retryNote = checked.errors.join('；');
+    }
+    return null;
+}
+
 export async function handleVolumeCompressJob(payload = {}) {
     const settings = getSettings();
     const data = getChatData();
@@ -105,34 +136,18 @@ export async function handleVolumeCompressJob(payload = {}) {
     const input = toCompress.map(c => `### ${c.id} [${c.floor_range[0]}-${c.floor_range[1]}]\n${c.summary}`).join('\n\n');
     const userPrompt = `必须保留清单（下列名称必须出现在卷摘要中）：\n${mustKeep.join('、') || '（无）'}\n\n章节摘要：\n${input}`;
 
-    let summary = '';
-    let missing = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
-        const missingNote = attempt === 0 ? '' : `\n上次缺失：${missing.join('、')}。请全部写入。`;
-        const { text } = await callAuxModel({
-            purpose: 'volume_compress',
-            systemPrompt: VOLUME_SYSTEM,
-            userPrompt: userPrompt + missingNote,
-            temperature: 0.2,
+    const summary = await createValidatedVolume(toCompress, mustKeep, userPrompt, data);
+    if (!summary) {
+        appendLog('error', '卷压缩覆盖验收失败，已中止');
+        data.notices = data.notices || [];
+        data.notices.push({
+            id: crypto.randomUUID(),
+            kind: 'notice',
+            note: '精简旧剧情时没有覆盖全部章节或漏掉了重要名称。原摘要已保留，请稍后重试。',
+            createdAt: Date.now(),
         });
-        assertChatData(data);
-        const raw = parseJsonFromModel(text) || { summary: text };
-        summary = String(raw.summary || '');
-        missing = mustKeep.filter(n => !summary.includes(n));
-        if (!missing.length) {
-            break;
-        }
-        if (attempt === 1) {
-            appendLog('error', '卷压缩验收失败，已中止', { missing });
-            data.review_queue.push({
-                id: crypto.randomUUID(),
-                kind: 'alert',
-                note: `精简旧剧情时漏掉了这些重要名称：${missing.join('、')}。原摘要已保留，请稍后重新处理。`,
-                createdAt: Date.now(),
-            });
-            await saveChatData(data);
-            return;
-        }
+        await saveChatData(data);
+        return;
     }
 
     const volId = `vol_${String((data.volumes?.length || 0) + 1).padStart(3, '0')}`;
@@ -162,18 +177,14 @@ async function recompressVolume(volId, data = getChatData()) {
     const later = (data.chapters || []).filter(c => !vol.chapter_ids.includes(c.id) && !c.demoted);
     const mustKeep = buildMustKeepList(chapters, later, data.state_table, getSettings().mentionStatMode);
     const input = chapters.map(c => `### ${c.id}\n${c.summary}`).join('\n\n');
-    const { text } = await callAuxModel({
-        purpose: 'volume_compress',
-        systemPrompt: VOLUME_SYSTEM,
-        userPrompt: `必须保留清单：${mustKeep.join('、') || '（无）'}\n\n${input}`,
-        temperature: 0.2,
-    });
-    assertChatData(data);
-    const raw = parseJsonFromModel(text) || { summary: text };
-    const summary = String(raw.summary || '');
-    const missing = mustKeep.filter(n => !summary.includes(n));
-    if (missing.length) {
-        appendLog('error', 'stale 卷重压验收失败', { missing });
+    const summary = await createValidatedVolume(
+        chapters,
+        mustKeep,
+        `必须保留清单：${mustKeep.join('、') || '（无）'}\n\n${input}`,
+        data,
+    );
+    if (!summary) {
+        appendLog('error', 'stale 卷重压覆盖验收失败');
         return;
     }
     vol.summary = summary;

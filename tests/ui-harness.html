@@ -51,7 +51,7 @@
     <script type="module">
         const now = Date.now();
         const chat = [];
-        for (let i = 0; i < 128; i += 1) {
+        for (let i = 0; i < 132; i += 1) {
             chat.push({ is_user: true, mes: `用户消息 ${i}`, send_date: `${i}-u`, extra: { layered_memory_id: `${i}-u` } });
             chat.push({ is_user: false, mes: `AI 回复 ${i}`, send_date: `${i}-a`, extra: { layered_memory_id: `${i}-a` } });
         }
@@ -60,26 +60,34 @@
             { id: 'e_2', slot: 'promise', subject: '周衡', object: '林晚', value: '答应护送林晚到北港', cause: '争执后仍在履行', updated_floor: 124, evidence: '我会把你送到北港。', pinned: false },
             { id: 'e_3', slot: 'relationship', subject: '林晚', object: '周衡', value: '恢复合作，但尚未完全和解', cause: '合作继续，信任仍需修复', updated_floor: 123, evidence: '这不代表我已经原谅你。', pinned: false },
             { id: 'e_4', slot: 'possession', subject: '林晚', object: '', value: '保管刻有鸦纹的铜钥匙', cause: '', updated_floor: 118, evidence: '她收起那枚刻着鸦纹的铜钥匙。', pinned: false },
+            { id: 'e_5', slot: 'identity', subject: '<user>', object: '', value: '是诡秘之神', cause: '', updated_floor: 92, evidence: '你就是诡秘之神。', pinned: false, source: 'auto' },
         ];
         const extracted = chat.filter(x => !x.is_user).map((_, i) => `${i}-u+${i}-a`);
         const memoryData = {
-            version: 1,
+            version: 3,
             state_table: { version: 18, entries, changelog: [] },
-            chapters: [{ id: 'ch_005', summary: '北港线索指向旧灯塔；周衡隐瞒的过往被揭开，两人的合作关系出现裂痕。', keywords: ['北港', '旧灯塔', '周衡'], floor_range: [101, 125], pinned: false, demoted: false, stale: false, frozen: true, volume_id: null }],
+            chapters: [{ id: 'ch_005', summary: '伯滔说明自己不喜欢熟鱼、偏好贝类和刺身，林许据此调整居酒屋的用餐安排。两人在交谈中继续确认彼此的边界，伯滔明确要求林许不要采取极端手段；林许接受要求，并承诺之后先沟通再行动。随着身份和动机逐步坦白，双方从互相试探转向有限信任，同时约定完成北港旧灯塔的调查后再讨论下一步安排。', keywords: ['伯滔', '林许', '居酒屋', '饮食偏好'], key_events: [{ floor_range: [100, 108], text: '伯滔说明饮食偏好，林许调整居酒屋安排。' }, { floor_range: [109, 117], text: '双方讨论行动边界，伯滔要求林许不要走极端。' }, { floor_range: [118, 124], text: '关系继续推进，并确认调查后的后续安排。' }], coverage: Array.from({ length: 25 }, (_, i) => ({ floor: 100 + i, event_index: i < 9 ? 0 : i < 18 ? 1 : 2 })), floor_range: [100, 124], pinned: false, demoted: false, stale: false, frozen: true, volume_id: null }],
             volumes: [], keyword_index: {},
             review_queue: [{ id: 'r1', kind: 'flag_conflict', entry_id: 'e_3', note: '新楼层暗示两人已经和解，但旧事实仍为“尚未完全和解”。', createdAt: now }],
+            notices: [{ id: 'n1', kind: 'notice', note: '旧聊天安全重建完成：已核对 132 / 132 轮。', createdAt: now }],
+            quarantined_entries: [{ id: 'bad1', slot: 'world', subject: '', value: 'undefined', quarantineReason: '缺少明确主体；缺少事实内容' }],
+            history_rebuild: { status: 'complete', total: 132, completed: 132, phase: '安全重建完成', startedAt: now - 100000, finishedAt: now },
+            rebuild_backup: { createdAt: now - 100000 },
             pending_floors: [], extracted_keys: extracted,
             job_queue: {
                 scope_id: 'harness-chat', paused: false,
-                queued: [{ id: 'q1', type: 'extract', payload: { pairIndex: 127, floorKey: '127-u+127-a' }, priority: 100, status: 'queued', createdAt: now, attempt: 0, maxAttempts: 3 }],
+                queued: [],
                 running: null,
-                failed: [{ id: 'f1', type: 'chapter_summary', payload: { startPair: 101, endPair: 125 }, priority: 80, status: 'failed', createdAt: now - 10000, attempt: 2, maxAttempts: 3, lastError: '连接超时', failedAt: now }],
+                failed: [],
             },
-            progress: { last_chapter_end_pair: 125, pairs_since_proofread: 2, next_entry_seq: 5, next_chapter_seq: 6, baseline_pair: -1 },
+            history_backfill: { status: 'complete', total: 132, completed: 132, startedAt: now - 100000, finishedAt: now },
+            progress: { last_chapter_end_pair: 124, pairs_since_proofread: 2, next_entry_seq: 6, next_chapter_seq: 6, baseline_pair: 131 },
+            context_handoff: null,
             logs: [{ t: now - 50000, level: 'info', message: '提取完成 楼#126: +1 丢0 冲突0' }],
         };
         const context = {
             chat,
+            name1: '伯滔',
             name2: '北港旧灯塔 · 长档测试',
             characterId: 0,
             characters: [{ name: '北港旧灯塔' }],

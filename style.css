@@ -104,8 +104,7 @@ body.lm-memory-center-open {
 .lm-dialog input,
 .lm-dialog select,
 .lm-dialog textarea {
-    color: inherit;
-    font: inherit;
+    font-family: inherit;
 }
 
 .layered-memory-root small,
@@ -366,6 +365,8 @@ body.lm-memory-center-open {
     background: var(--lm-surface);
     border: 1px solid var(--lm-border);
     border-radius: var(--lm-radius-sm);
+    font-size: var(--lm-type-body);
+    font-weight: 550;
 }
 
 .layered-memory-root input::placeholder,
@@ -506,6 +507,22 @@ body.lm-memory-center-open {
 .lm-page-heading p { margin-top: 5px; color: var(--lm-muted); font-size: var(--lm-type-small); }
 .lm-page-count { color: var(--lm-muted); font-size: var(--lm-type-small); }
 
+.lm-quality-alert {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    color: var(--lm-text);
+    background: color-mix(in srgb, var(--lm-warning) 10%, var(--lm-surface));
+    border: 1px solid color-mix(in srgb, var(--lm-warning) 58%, var(--lm-border));
+    border-radius: var(--lm-radius-md);
+}
+.lm-quality-alert strong { font-size: var(--lm-type-body); }
+.lm-quality-alert p { margin: 4px 0 0; color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.55; }
+.lm-notice-strip { display: grid; gap: 7px; margin-bottom: 14px; }
+.lm-notice-strip article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 12px; background: var(--lm-surface-raised); border: 1px solid var(--lm-border); border-radius: var(--lm-radius-sm); }
+.lm-notice-strip span { color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.5; }
+
 .lm-volume-strip { padding: 18px clamp(18px, 3vw, 34px) 0; }
 .lm-volume-strip > h4 { margin: 0 0 8px; font-size: var(--lm-type-small); }
 .lm-volume-strip > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
@@ -520,6 +537,11 @@ body.lm-memory-center-open {
 .lm-chapter-card h4 { margin: 2px 0 0; font-size: var(--lm-type-body); }
 .lm-chapter-state { display: flex; gap: 6px; }
 .lm-chapter-card > p { max-width: 78ch; margin: 10px 0; color: var(--lm-text); line-height: 1.65; }
+.lm-key-events { max-width: 78ch; margin: 12px 0; color: var(--lm-text); }
+.lm-key-events > summary { min-height: 32px; cursor: pointer; color: var(--lm-text); font-size: var(--lm-type-small); font-weight: 700; }
+.lm-key-events ol { display: grid; gap: 8px; padding: 0; margin: 8px 0 0; list-style: none; }
+.lm-key-events li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.55; }
+.lm-key-events li > span { color: var(--lm-muted); font-weight: 650; white-space: nowrap; }
 .lm-keywords { display: flex; flex-wrap: wrap; gap: 5px; }
 .lm-row-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 9px; }
 
@@ -686,6 +708,8 @@ body.lm-memory-center-open {
     .lm-page-count { flex: 0 0 auto; }
     .lm-timeline { margin-right: 14px; margin-left: 26px; }
     .lm-chapter-card > header { display: grid; }
+    .lm-key-events li { grid-template-columns: 1fr; gap: 2px; }
+    .lm-notice-strip article { align-items: flex-start; }
     .lm-review-list { padding: 14px; }
     .lm-review-card { grid-template-columns: 3px 1fr; }
     .lm-review-card .lm-row-actions { grid-column: 2; }
@@ -724,6 +748,17 @@ body.lm-memory-center-open {
     .lm-text-button,
     .lm-task-disclosure { min-height: 44px; }
     .lm-tab { min-height: 44px; }
+}
+
+@media (max-width: 360px) and (max-height: 650px) {
+    .lm-center-heading .lm-chat-name { display: none; }
+    .lm-center-header { padding-top: max(8px, env(safe-area-inset-top)); padding-bottom: 7px; }
+    .lm-tabs { gap: 0; padding-right: 3px; padding-left: 3px; }
+    .lm-tab { padding-right: 5px; padding-left: 5px; }
+    .lm-injection-footer { display: grid; grid-template-columns: 1fr; min-height: 56px; padding: 6px 10px max(6px, env(safe-area-inset-bottom)); }
+    .lm-injection-footer > div:first-child,
+    .lm-injection-footer .lm-budget-chips { display: none; }
+    .lm-injection-footer .lm-button { width: 100% !important; }
 }
 
 @media (pointer: coarse) {

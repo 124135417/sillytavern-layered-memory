@@ -1,5 +1,6 @@
 import { SLOTS } from './constants.js';
 import { evidenceInSource } from './tokens.js';
+import { validateMemoryEntryShape } from './quality.js';
 
 /**
  * @param {object} item - one slot entry candidate
@@ -14,6 +15,14 @@ export function validateEntry(item, ctx, slot) {
     if (!item || typeof item !== 'object') {
         return { ok: false, errors: ['条目不是对象'], conflict: null };
     }
+
+    const shape = validateMemoryEntryShape({
+        ...item,
+        slot,
+        value: item.value ?? item.new_value,
+        source: ctx.source || 'auto',
+    });
+    errors.push(...shape.errors);
 
     const evidence = item.evidence;
     if (!evidence || typeof evidence !== 'string') {
@@ -99,6 +108,7 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
                 continue;
             }
             if (slot === 'relationship' && (item.new_value || item.old_value)) {
+                if (!item.old_value || !item.new_value) continue;
                 out.adds.push({
                     slot,
                     subject: item.subject,

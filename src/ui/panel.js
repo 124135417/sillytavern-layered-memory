@@ -9,7 +9,13 @@ import {
     rerunEvalCase,
     snapshotForPair,
 } from '../eval/cases.js';
-import { getHistoryBackfillSnapshot, recordMigrationEdit, requestMigrateAbort, startMigration } from '../eval/migrate.js';
+import { recordMigrationEdit } from '../eval/migrate.js';
+import {
+    getHistoryRebuildSnapshot,
+    requestHistoryRebuildAbort,
+    restoreRebuildBackup,
+    startHistoryRebuild,
+} from '../rebuild.js';
 import { getPairs, getPairTexts } from '../ids.js';
 import {
     dismissFailedJob,
@@ -26,6 +32,7 @@ import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
 import { recordManualEvent } from '../branch.js';
+import { displayEntityName, usableMemoryEntries } from '../quality.js';
 
 const ROOT_ID = 'layered-memory-panel';
 const DRAWER_ID = 'layered-memory-drawer';
@@ -165,29 +172,30 @@ function refreshQueueUi() {
     bindQueueControls(panel.querySelector('.lm-body'));
 }
 
-function renderHistoryBackfillStatus(snapshot = getHistoryBackfillSnapshot()) {
+function renderHistoryBackfillStatus(snapshot = getHistoryRebuildSnapshot()) {
+    snapshot = snapshot || { status: 'idle', total: 0, completed: 0, queued: 0, failed: [] };
     const total = Number(snapshot.total) || 0;
     const completed = Math.min(total, Number(snapshot.completed) || 0);
     const measuredPercent = total > 0 ? Math.round((completed / total) * 100) : 0;
     const percent = snapshot.status === 'complete' ? 100 : Math.min(99, measuredPercent);
     const statusCopy = {
-        idle: ['尚未开始', '点击后会在后台逐步整理，不会刷新当前页面。'],
-        running: ['正在补记旧聊天', snapshot.stage],
+        idle: ['尚未开始安全重建', '点击后会先保留旧结果，再在后台逐轮重建；未完成前不会替换当前记忆。'],
+        running: ['正在安全重建旧聊天', snapshot.stage],
         stopping: ['正在安全停止', '未开始的任务已经取消；正在请求模型的这一项结束后停止。'],
-        stopped: ['补记已停止', `已经保留前面完成的 ${completed} 轮，可以随时继续。`],
-        complete: ['补记完成', '旧聊天已经全部整理完成。'],
-        error: ['补记遇到问题', snapshot.error || '有任务未能完成，可以在处理失败项后继续补记。'],
+        stopped: ['安全重建已停止', `已经保留前面完成的 ${completed} 轮，可以随时继续。`],
+        complete: ['安全重建完成', '旧聊天已经逐轮核对，并一次性替换为通过校验的新结果。'],
+        error: ['安全重建遇到问题', snapshot.error || '旧结果仍然保留。处理失败项后可以继续重建。'],
     };
     const [title, detail] = statusCopy[snapshot.status] || statusCopy.idle;
     const canStart = !['running', 'stopping'].includes(snapshot.status);
     const canStop = snapshot.status === 'running';
-    const startLabel = ['stopped', 'error'].includes(snapshot.status) ? '继续补记' : snapshot.status === 'complete' ? '重新检查缺漏' : '开始补记旧聊天';
+    const startLabel = ['stopped', 'error'].includes(snapshot.status) ? '继续安全重建' : snapshot.status === 'complete' ? '重新安全重建' : '安全重建旧结果';
     const waiting = snapshot.queued > 0 ? ` · 还有 ${snapshot.queued} 项等待处理` : '';
     return `<div class="lm-backfill-card" data-state="${escapeHtml(snapshot.status)}" aria-live="polite">
         <div class="lm-backfill-heading"><div><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${completed} / ${total} 轮</strong></div>
-        <progress max="100" value="${percent}" aria-label="旧聊天补记进度：${percent}%">${percent}%</progress>
+        <progress max="100" value="${percent}" aria-label="旧聊天安全重建进度：${percent}%">${percent}%</progress>
         <div class="lm-backfill-meta"><span>${percent}% 已完成${escapeHtml(waiting)}</span>${snapshot.inFlight ? '<span>当前有 1 项正在处理</span>' : ''}</div>
-        <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-migrate" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button><button type="button" class="lm-text-button" id="lm-migrate-abort" ${canStop ? '' : 'disabled'}>停止补记</button></div>
+        <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-migrate" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button><button type="button" class="lm-text-button" id="lm-migrate-abort" ${canStop ? '' : 'disabled'}>停止重建</button></div>
     </div>`;
 }
 
@@ -201,19 +209,19 @@ function refreshHistoryBackfillUi(body) {
 function bindHistoryBackfillControls(host, body) {
     if (!host) return;
     host.querySelector('#lm-migrate')?.addEventListener('click', async () => {
-        if (!confirm('开始补记以前的聊天？插件会在后台慢慢整理旧内容，不会刷新当前页面。')) return;
+        if (!confirm('开始安全重建旧聊天？插件会保留现有结果，在后台逐轮核对；只有全部成功后才会一次性替换。')) return;
         const button = host.querySelector('#lm-migrate');
         if (button) button.disabled = true;
-        await startMigration();
+        await startHistoryRebuild();
         refreshHistoryBackfillUi(body);
-        toastr?.info?.('旧聊天补记已经开始，可以在这里查看进度。');
+        toastr?.info?.('安全重建已经开始。旧结果会保留到新结果全部通过检查。');
     });
     host.querySelector('#lm-migrate-abort')?.addEventListener('click', async () => {
         const button = host.querySelector('#lm-migrate-abort');
         if (button) button.disabled = true;
-        await requestMigrateAbort();
+        await requestHistoryRebuildAbort();
         refreshHistoryBackfillUi(body);
-        toastr?.info?.('停止请求已收到，已取消尚未开始的补记任务。');
+        toastr?.info?.('停止请求已收到，已取消尚未开始的重建任务。');
     });
 }
 
@@ -369,8 +377,8 @@ function renderShellStatus() {
     const data = getChatData();
     const settings = getSettings();
     const queue = getQueueSnapshot();
-    const entries = data.state_table?.entries || [];
-    const reviews = data.review_queue || [];
+    const entries = usableMemoryEntries(data);
+    const reviews = (data.review_queue || []).filter(item => item.kind !== 'alert');
     const failed = queue.failed || [];
     const pendingCount = queue.queued?.length || 0;
     const status = data.branch_origin?.status === 'failed' ? { key: 'error', text: '分支记忆恢复失败' }
@@ -400,10 +408,12 @@ function renderShellStatus() {
         break;
     }
     const maxSealed = pairs.at(-1)?.pairIndex ?? -1;
-    const historical = pairs.filter(p => p.pairIndex <= baseline);
-    const migratedHistory = historical.length > 0 && historical.every(p => extracted.has(`migrated:${p.floorKey}`));
-    const historyNote = baseline >= 0 && !migratedHistory ? ' · 旧聊天尚未补记' : '';
-    const syncLabel = syncedThrough >= liveStart
+    const rebuild = getHistoryRebuildSnapshot();
+    const syncLabel = rebuild?.status === 'complete'
+        ? `已安全重建 ${rebuild.completed} / ${rebuild.total} 轮`
+        : rebuild?.status === 'running' || rebuild?.status === 'stopping'
+            ? `正在安全重建 ${rebuild.completed} / ${rebuild.total} 轮`
+            : syncedThrough >= liveStart
         ? (syncedThrough === maxSealed ? `已整理到第 ${syncedThrough} 轮` : `已整理到第 ${syncedThrough} 轮 · 后面有遗漏`)
         : (maxSealed >= liveStart ? `第 ${liveStart} 轮起有内容尚未整理` : baseline >= 0 ? `从第 ${liveStart} 轮开始记录` : '新聊天');
     const configuredConnection = settings.memoryModelSource === 'direct'
@@ -417,7 +427,7 @@ function renderShellStatus() {
     const metrics = panel.querySelector('.lm-header-metrics');
     if (metrics) {
         metrics.innerHTML = `
-            <span class="lm-metric"><b>${escapeHtml(syncLabel + historyNote)}</b><small>记忆进度</small></span>
+            <span class="lm-metric"><b>${escapeHtml(syncLabel)}</b><small>记忆进度</small></span>
             <span class="lm-metric"><b>${entries.length}</b><small>当前事实</small></span>
             <span class="lm-metric"><b>${reviews.length}</b><small>待你确认</small></span>
             <span class="lm-metric lm-connection"><b>${escapeHtml(connectionLabel)}</b><small>记忆模型</small></span>
@@ -438,7 +448,13 @@ function renderShellStatus() {
 
 function renderStateTab() {
     const data = getChatData();
-    const entries = data.state_table?.entries || [];
+    const entries = usableMemoryEntries(data);
+    const quarantined = data.quarantined_entries || [];
+    const notices = data.notices || [];
+    const statusBanners = [
+        quarantined.length ? `<aside class="lm-quality-alert"><div><strong>已隔离 ${quarantined.length} 条异常结果</strong><p>它们缺少主体、事实或原文证据，不会发送给模型。完成安全重建后会由新结果替换。</p></div></aside>` : '',
+        notices.length ? `<section class="lm-notice-strip" aria-label="状态通知">${notices.slice(-3).map(item => `<article data-notice-id="${escapeHtml(item.id)}"><span>${escapeHtml(item.note || '')}</span><button type="button" class="lm-text-button" data-dismiss-notice>知道了</button></article>`).join('')}</section>` : '',
+    ].filter(Boolean).join('');
     let groups = '';
     for (const slot of SLOTS) {
         const group = entries.filter(e => e.slot === slot);
@@ -463,6 +479,7 @@ function renderStateTab() {
     return `
         <div class="lm-dashboard">
             <main class="lm-memory-main" id="lm-memory-main">
+                ${statusBanners}
                 <div class="lm-memory-toolbar">
                     <label class="lm-search">
                         <span class="fa-solid fa-magnifying-glass" aria-hidden="true"></span>
@@ -490,9 +507,11 @@ function renderStateTab() {
 }
 
 function renderMemoryCard(entry) {
+    const subjectName = displayEntityName(entry.subject);
+    const objectName = displayEntityName(entry.object);
     const subject = entry.object
-        ? `${escapeHtml(entry.subject)} <span aria-hidden="true">→</span> ${escapeHtml(entry.object)}`
-        : escapeHtml(entry.subject || '未命名主体');
+        ? `${escapeHtml(subjectName)} <span aria-hidden="true">→</span> ${escapeHtml(objectName)}`
+        : escapeHtml(subjectName);
     const floor = formatFloorLabel(entry.updated_floor ?? entry.established_floor);
     const searchable = [entry.subject, entry.object, entry.value, entry.evidence, floor].filter(Boolean).join(' ').toLowerCase();
     return `
@@ -559,6 +578,9 @@ function renderTask(job, state) {
         migrate_extract_chapter: '补记旧聊天的重要内容',
         migrate_extract_floor: '补记剩余的旧对话',
         migrate_finalize: '完成旧聊天补记',
+        history_rebuild_segment: '逐轮核对旧聊天',
+        history_rebuild_chapter: '合并旧剧情章节',
+        history_rebuild_commit: '安全替换旧结果',
     };
     const target = job.payload?.pairIndex != null ? `第 ${job.payload.pairIndex} 轮对话`
         : job.payload?.startPair != null ? `第 ${job.payload.startPair}–${job.payload.endPair} 轮对话`
@@ -630,11 +652,12 @@ function renderInjectionFooter() {
         invalid_budget: '聊天历史容量设置无效，本轮没有精简。',
         generation_type: '这次不是普通回复，插件没有改动聊天历史。',
     };
+    const isActual = handoff?.status === 'trimmed' || handoff?.reason === 'within_budget' || handoff?.status === 'blocked';
     const handoffText = handoff?.status === 'trimmed'
         ? `最近一次普通回复已用压缩档案接替第 0–${removedThrough} 轮；聊天历史约从 ${handoff.historyTokensBefore} 减至 ${handoff.historyTokensAfter} token。${handoff.reason === 'coverage_limit' ? '更早内容已精简到当前安全边界，剩余部分交给酒馆继续计算。' : ''}`
         : handoff?.reason === 'within_budget'
             ? `最近一次普通回复中，聊天历史约 ${handoff.historyTokensBefore} token，未超过 ${handoff.historyBudget} token 的目标。`
-            : blockedReasons[handoff?.reason] || '尚无可显示的真实裁剪结果；以下内容是下一次生成前的预计。';
+            : blockedReasons[handoff?.reason] || '尚未发生下一次真实请求。以下是预计内容；真正发送时会根据当时的上下文容量决定加入哪些剧情摘要。';
     const preview = [
         `【上下文交接】\n${handoffText}`,
         l1 && `【当前仍然成立的事实】\n${l1}`,
@@ -645,8 +668,8 @@ function renderInjectionFooter() {
     return `
         <footer class="lm-injection-footer">
             <div>
-                <span class="lm-kicker">下次回复</span>
-                <strong>下一次回复会使用的记忆</strong>
+                <span class="lm-kicker">${isActual ? '上一次真实请求' : '下一次请求预计'}</span>
+                <strong>${isActual ? '模型实际使用的记忆范围' : '预计发送给模型的记忆'}</strong>
             </div>
             <div class="lm-budget-chips">
                 <span>当前事实 ${estimateTokens(l1)} / ${settings.budgetL1}</span>
@@ -657,7 +680,7 @@ function renderInjectionFooter() {
             <button type="button" class="lm-text-button" id="lm-preview-injection">查看发送给模型的内容</button>
             <dialog class="lm-dialog" id="lm-injection-dialog">
                 <form method="dialog" class="lm-dialog-frame">
-                    <header><div><span class="lm-kicker">只读预览</span><h3>下一次会发送给模型的记忆</h3></div><button value="cancel" class="lm-icon-button" aria-label="关闭">×</button></header>
+                    <header><div><span class="lm-kicker">只读预览</span><h3>${isActual ? '上一次真实请求使用的记忆' : '下一次请求的预计记忆'}</h3></div><button value="cancel" class="lm-icon-button" aria-label="关闭">×</button></header>
                     <p class="lm-muted">这里只显示插件补充的记忆。酒馆原有的角色设定、世界书和最近聊天也会照常发送。</p>
                     <pre>${escapeHtml(preview)}</pre>
                 </form>
@@ -667,6 +690,13 @@ function renderInjectionFooter() {
 
 function bindStateTab(body) {
     bindQueueControls(body);
+    body.querySelectorAll('[data-dismiss-notice]').forEach(button => button.addEventListener('click', async () => {
+        const id = button.closest('[data-notice-id]')?.dataset.noticeId;
+        const data = getChatData();
+        data.notices = (data.notices || []).filter(item => item.id !== id);
+        await saveChatData(data);
+        renderActiveTab();
+    }));
     const addEntry = async () => {
         const draft = await openEntryEditor();
         if (!draft) {
@@ -892,10 +922,12 @@ function renderChaptersTab() {
         const state = c.stale ? '<span class="lm-state-tag" data-state="error">原对话已修改 · 等待重新整理</span>'
             : c.demoted ? '<span class="lm-state-tag">已整理进长期摘要</span>'
                 : '<span class="lm-state-tag" data-state="success">摘要已保存</span>';
+        const events = Array.isArray(c.key_events) ? c.key_events.filter(event => event?.text) : [];
         html += `<article class="lm-chapter-card" data-cid="${escapeHtml(c.id)}">
             <span class="lm-timeline-node" aria-hidden="true"></span>
-            <header><div><span class="lm-kicker">${escapeHtml(formatArchiveLabel(c.id, '剧情章节'))}</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4></div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}</div></header>
+            <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4></div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}</div></header>
             <p>${escapeHtml(c.summary)}</p>
+            ${events.length ? `<details class="lm-key-events"><summary>查看 ${events.length} 个关键事件</summary><ol>${events.map(event => `<li><span>第 ${event.floor_range?.[0]}–${event.floor_range?.[1]} 轮</span>${escapeHtml(event.text)}</li>`).join('')}</ol></details>` : ''}
             ${c.keywords?.length ? `<div class="lm-keywords">${c.keywords.map(k => `<span>${escapeHtml(k)}</span>`).join('')}</div>` : ''}
             <div class="lm-row-actions">
                 <button type="button" data-act="edit" class="lm-text-button">编辑摘要</button>
@@ -911,9 +943,9 @@ function renderChaptersTab() {
 }
 
 function bindChaptersTab(body) {
-    body.querySelectorAll('li[data-cid]').forEach(li => {
-        const id = li.dataset.cid;
-        li.querySelector('[data-act="edit"]')?.addEventListener('click', async () => {
+    body.querySelectorAll('article[data-cid]').forEach(card => {
+        const id = card.dataset.cid;
+        card.querySelector('[data-act="edit"]')?.addEventListener('click', async () => {
             const c = getChatData().chapters.find(x => x.id === id);
             if (!c) {
                 return;
@@ -925,11 +957,12 @@ function bindChaptersTab(body) {
             c.summary = summary;
             c.frozen = true;
             c.stale = false;
+            c.manual_override = true;
             await saveChatData();
             updateInjection();
             renderActiveTab();
         });
-        li.querySelector('[data-act="pin"]')?.addEventListener('click', async () => {
+        card.querySelector('[data-act="pin"]')?.addEventListener('click', async () => {
             const c = getChatData().chapters.find(x => x.id === id);
             if (c) {
                 c.pinned = !c.pinned;
@@ -941,15 +974,14 @@ function bindChaptersTab(body) {
 }
 
 function renderReviewTab() {
-    const q = getChatData().review_queue || [];
+    const q = (getChatData().review_queue || []).filter(item => item.kind !== 'alert');
     const entries = getChatData().state_table?.entries || [];
     let html = `<div class="lm-page-heading"><div><span class="lm-kicker">需要你决定</span><h3>待你确认</h3><p>插件不会悄悄修改有冲突的记忆。请在这里决定是否采用建议。</p></div><div class="lm-page-count">${q.length} 项</div></div><div class="lm-review-list">`;
     for (const item of q) {
         const kind = item.kind === 'flag_conflict' ? '两条记忆互相矛盾' : item.kind === 'proofread' ? '检查后发现的建议' : item.kind === 'volume_compress_ask' ? '整理旧摘要前确认' : '需要注意';
         const risk = item.kind === 'flag_conflict' ? 'error' : item.kind === 'proofread' ? 'warning' : 'info';
         const relatedEntry = entries.find(entry => entry.id === item.entry_id);
-        const isAlert = item.kind === 'alert';
-        const title = isAlert ? '状态说明' : item.subject || relatedEntry?.subject || '一条记忆建议';
+        const title = item.subject || relatedEntry?.subject || '一条记忆建议';
         html += `<article class="lm-review-card" data-rid="${escapeHtml(item.id)}">
             <div class="lm-review-mark" data-state="${risk}" aria-hidden="true"></div>
             <div class="lm-review-copy"><span class="lm-state-tag" data-state="${risk}">${kind}</span><h4>${escapeHtml(title)}</h4><p>${escapeHtml(formatReviewNote(item.note || item.value || '需要你的确认'))}</p>${item.object ? `<small>关联：${escapeHtml(item.object)}</small>` : ''}</div>
@@ -1103,8 +1135,8 @@ function renderSettingsTab() {
             </section>
 
             <section class="lm-settings-section">
-                <header><div><span class="fa-solid fa-clock-rotate-left" aria-hidden="true"></span><div><h4>补记以前的聊天</h4><p>${escapeHtml(baselineText)}</p></div></div></header>
-                <div class="lm-settings-fields"><p>插件会在空闲时慢慢整理以前的内容，不会挤掉最新对话的记忆工作。完成后建议到“当前记忆”中检查一次。</p><div id="lm-backfill-status">${renderHistoryBackfillStatus()}</div></div>
+                <header><div><span class="fa-solid fa-clock-rotate-left" aria-hidden="true"></span><div><h4>安全重建以前的聊天</h4><p>${escapeHtml(baselineText)}</p></div></div></header>
+                <div class="lm-settings-fields"><p>插件会把旧聊天分段逐轮核对，在独立暂存区生成新结果。只有全部通过检查后才会替换当前自动记忆。</p><div id="lm-backfill-status">${renderHistoryBackfillStatus()}</div>${getChatData().rebuild_backup ? '<div class="lm-settings-actions"><button type="button" class="lm-text-button" id="lm-restore-rebuild">恢复重建前结果</button></div>' : ''}</div>
             </section>
 
             <details class="lm-settings-section lm-settings-disclosure">
@@ -1123,7 +1155,7 @@ function renderSettingsTab() {
             <details class="lm-settings-section lm-settings-disclosure">
                 <summary><div><span class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></span><div><h4>开发者工具</h4><p>查看纠错记录和后台处理状态。普通使用不需要打开。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
                 <div class="lm-settings-fields">
-                    <label class="lm-switch-row"><span><b>补记旧聊天时收集我的修改</b><small>把手动修改保存成纠错参考，方便以后检查记忆效果。</small></span><input type="checkbox" id="lm-mig-review" ${s.migrationReviewMode ? 'checked' : ''}/></label>
+                    <label class="lm-switch-row"><span><b>整理旧聊天后收集我的修改</b><small>把手动修改保存成纠错参考，方便以后检查记忆效果。</small></span><input type="checkbox" id="lm-mig-review" ${s.migrationReviewMode ? 'checked' : ''}/></label>
                     <p>纠错记录 ${listEvalCases().length} 条 · 正在处理 ${q.inFlight ? '1' : '0'} 项 · 等待 ${q.queued?.length || 0} 项 · 需要处理 ${q.failed?.length || 0} 项</p>
                     <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-eval-export">下载纠错记录</button><button type="button" class="lm-text-button" id="lm-eval-rerun">重新检查全部记录</button></div>
                     <ul class="lm-diagnostic-list">${listEvalCases().slice(-10).reverse().map(c =>
@@ -1139,6 +1171,14 @@ function bindSettingsTab(body) {
     body.querySelectorAll('input, select, textarea').forEach(control => {
         control.addEventListener('input', () => { settingsDirty = true; });
         control.addEventListener('change', () => { settingsDirty = true; });
+    });
+    body.querySelector('#lm-restore-rebuild')?.addEventListener('click', async () => {
+        if (!confirm('恢复安全重建前的旧结果？当前自动生成的重建结果会被替换，手动聊天内容不会改变。')) return;
+        if (await restoreRebuildBackup()) {
+            updateInjection();
+            renderActiveTab();
+            toastr?.success?.('已经恢复重建前的记忆结果。');
+        }
     });
     const syncModelSourcePanels = () => {
         const source = body.querySelector('#lm-model-source')?.value || 'current';

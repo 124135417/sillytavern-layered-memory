@@ -14,6 +14,11 @@ import { appendLog, getChatData, getSettings, saveChatData } from './src/setting
 import { handleStateGcJob } from './src/state-gc.js';
 import { injectPanel, registerMessageMenu, renderActiveTab } from './src/ui/panel.js';
 import { handleVolumeCompressJob } from './src/volume.js';
+import {
+    handleHistoryRebuildChapter,
+    handleHistoryRebuildCommit,
+    handleHistoryRebuildSegment,
+} from './src/rebuild.js';
 import { beginBranchRecovery, ensureBranchCheckpoint, ensureCurrentBranchRecovery, reconcileCurrentHistory, waitForBranchRecovery } from './src/branch.js';
 
 const MODULE = 'layered-memory';
@@ -33,6 +38,9 @@ function wireHandlers() {
     registerHandler('migrate_extract_floor', handleExtractJob);
     registerHandler('migrate_finalize', handleMigrateFinalizeJob);
     registerHandler('migrate_complete', handleMigrateCompleteJob);
+    registerHandler('history_rebuild_segment', handleHistoryRebuildSegment);
+    registerHandler('history_rebuild_chapter', handleHistoryRebuildChapter);
+    registerHandler('history_rebuild_commit', handleHistoryRebuildCommit);
 }
 
 async function onChatChanged() {
@@ -147,7 +155,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.6.2`);
+    console.log(`[${MODULE}] 已加载 v0.7.0`);
 });
 
 export async function onActivate() {

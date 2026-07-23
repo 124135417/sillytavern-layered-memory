@@ -1,11 +1,8 @@
 import { QUEUE_PRIORITY } from './constants.js';
-import { callAuxModel, parseJsonFromModel } from './aux-model.js';
-import { getPairTexts, getPairs } from './ids.js';
-import { CHAPTER_SYSTEM } from './prompts.js';
+import { summarizeChapterNotes } from './archive.js';
 import { enqueue } from './queue.js';
-import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
-import { estimateTokens } from './tokens.js';
-import { extractAiBody } from './body.js';
+import { appendLog, assertChatData, getChatData, saveChatData } from './settings.js';
+import { isUsableMemoryEntry } from './quality.js';
 
 function buildKeywordIndex(data) {
     const index = {};
@@ -23,7 +20,7 @@ function buildKeywordIndex(data) {
             }
         }
     }
-    for (const e of data.state_table?.entries || []) {
+    for (const e of (data.state_table?.entries || []).filter(isUsableMemoryEntry)) {
         for (const name of [e.subject, e.object]) {
             if (!name) {
                 continue;
@@ -74,34 +71,6 @@ function advanceChapterEnd(data, endPair) {
     }
 }
 
-async function buildChapterBody(startPair, endPair, data) {
-    const settings = getSettings();
-    const pairs = getPairs().filter(p => p.pairIndex >= startPair && p.pairIndex <= endPair && p.sealed);
-    const texts = pairs.map(p => {
-        const { userText, aiText } = getPairTexts(p);
-        const body = extractAiBody(aiText, settings.bodyExtractionRegex);
-        return `【第${p.pairIndex}对】\n用户：${userText}\nAI：${body.text}`;
-    });
-    let body = texts.join('\n\n');
-    const cap = settings.chapterInputTokenCap || 20000;
-    if (estimateTokens(body) > cap) {
-        const mid = Math.floor(texts.length / 2);
-        const left = await summarizeChunk(texts.slice(0, mid).join('\n\n'));
-        const right = await summarizeChunk(texts.slice(mid).join('\n\n'));
-        body = `上半摘要：${left.summary}\n下半摘要：${right.summary}`;
-    }
-
-    const prev = (data.chapters || [])
-        .filter(c => !c.stale && c.floor_range?.[1] < startPair)
-        .sort((a, b) => a.floor_range[1] - b.floor_range[1])
-        .at(-1);
-    const bridge = prev?.summary ? prev.summary.slice(-80) : '';
-    return [
-        bridge ? `上一章末尾（仅衔接）：…${bridge}\n\n` : '',
-        body,
-    ].join('');
-}
-
 export async function handleChapterSummaryJob(payload) {
     if (payload.regenStale) {
         await handleRegenStaleChapters();
@@ -117,9 +86,10 @@ export async function handleChapterSummaryJob(payload) {
         return;
     }
 
-    const userPrompt = await buildChapterBody(startPair, endPair, data);
-    assertChatData(data);
-    const result = await summarizeChunk(userPrompt);
+    const notes = (data.turn_summaries || [])
+        .filter(item => item.pairIndex >= startPair && item.pairIndex <= endPair)
+        .sort((a, b) => a.pairIndex - b.pairIndex);
+    const result = await summarizeChapterNotes(notes, startPair, endPair, () => assertChatData(data));
     assertChatData(data);
 
     // Stale (or any) chapter with same range → in-place replace (keep id / volume_id / demoted / pinned)
@@ -128,6 +98,8 @@ export async function handleChapterSummaryJob(payload) {
     if (sameRange) {
         sameRange.summary = result.summary;
         sameRange.keywords = result.keywords || [];
+        sameRange.key_events = result.key_events || [];
+        sameRange.coverage = result.coverage || [];
         sameRange.stale = false;
         sameRange.frozen = true;
         advanceChapterEnd(data, endPair);
@@ -144,6 +116,8 @@ export async function handleChapterSummaryJob(payload) {
         id,
         summary: result.summary,
         keywords: result.keywords || [],
+        key_events: result.key_events || [],
+        coverage: result.coverage || [],
         floor_range: [startPair, endPair],
         pinned: false,
         demoted: false,
@@ -157,20 +131,6 @@ export async function handleChapterSummaryJob(payload) {
     appendLog('info', `章节摘要完成 ${id} [${startPair}-${endPair}]`);
 
     enqueue('volume_compress', { reason: 'budget_check' }, QUEUE_PRIORITY.volume_compress);
-}
-
-async function summarizeChunk(text) {
-    const { text: out } = await callAuxModel({
-        purpose: 'chapter_summary',
-        systemPrompt: CHAPTER_SYSTEM,
-        userPrompt: text,
-        temperature: 0.2,
-    });
-    const raw = parseJsonFromModel(out) || { summary: out, keywords: [] };
-    return {
-        summary: String(raw.summary || out || '').slice(0, 2000),
-        keywords: Array.isArray(raw.keywords) ? raw.keywords.slice(0, 10) : [],
-    };
 }
 
 export async function markChaptersStaleForPair(pairIndex, expectedData = null) {

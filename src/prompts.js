@@ -77,15 +77,70 @@ export const EXTRACT_JSON_SCHEMA = {
     },
 };
 
-export const CHAPTER_SYSTEM = `你是剧情记录员。根据给定楼层原文，写一份约300字的连续叙述摘要。
-输入可能包含预设每轮附加的旧剧情摘要、状态表、思考过程、写作计划或界面组件。它们不是本轮新剧情；不要把这些附加内容再次总结或当作新事件，只整理用户输入和叙事正文中实际发生的内容。
-重点保留因果链（因为X所以Y）与事件顺序，禁止只罗列事件。
-同时给出 3–10 个关键词（实体名、物品名、地点名等），用于日后检索。
-只输出 JSON：{"summary":"...","keywords":["..."]}`;
+export const CHAPTER_SYSTEM = `你是剧情档案合并员，不是作者。输入是已经逐轮核验过的剧情记录，每一轮都有明确编号。
 
-export const VOLUME_SYSTEM = `你是剧情压缩员。将多份章节摘要压缩为一份约400字的卷摘要。
-必须保留「必须保留清单」中的每一个实体名称。
-只输出 JSON：{"summary":"..."}`;
+任务：把全部轮次合并成一份连续、可独立阅读的剧情回顾，并列出便于浏览的关键事件。
+- 必须阅读输入中的每一轮，coverage 必须逐项覆盖全部编号，不得漏掉后半段。
+- 通常 25 轮的 summary 按剧情密度写 450–900 个汉字；如果输入明显少于 25 轮，可以相应缩短但不得为了凑字重复。保留事件顺序、用户行为或话语、他人反应、因果、结果和未解决事项。
+- 删除重复气氛、外貌、动作修辞和同义反复，但不能用删细节为理由漏掉决定、偏好、命令、承诺、身份、关系变化和后续安排。
+- key_events 每项可覆盖连续多轮；至少一项触及本章前半、至少一项触及本章后半。
+- 输入不包含上一章正文。禁止补写、推测或把其他章节的事件写进来。
+- keywords 给出 3–10 个真实出现的实体、物品、地点或稳定主题。
+
+只输出 JSON：{"summary":"...","key_events":[{"floor_range":[0,1],"text":"..."}],"coverage":[{"floor":0,"event_index":0}],"keywords":["..."]}`;
+
+export const HISTORY_SEGMENT_SYSTEM = `你是逐轮剧情与事实档案员，不是作者。输入包含一段连续的编号对话，每轮都同时提供用户输入和 AI 叙事正文。
+
+必须逐轮处理：
+- floors 必须恰好包含输入中的每一个编号，顺序一致，不得缺号、重复、越界或只处理开头。
+- summary 用 40–220 个汉字记录该轮新增剧情，按“<user>说了什么或做了什么 → 其他角色的反应、行动或披露 → 结果或仍未解决的问题”书写。
+- 即使用户只说“继续”，也要结合该轮 AI 正文说明剧情实际推进了什么。
+- 只整理用户输入和叙事正文；预设摘要、状态表、思考过程、写作计划、界面文字不是新剧情。
+- 删除气氛渲染、重复服装外貌、姿态细节和纯文笔修饰。
+
+facts 只记录该轮明确发生、之后仍会成立的内容：承诺、永久身体变化、关系定性变化、身份秘密、关键持有物、世界变化或其他持久事实。
+- subject、value、evidence 必须非空；用户统一写作 <user>。
+- subject 必须是原文中真正执行动作、拥有状态或被揭露身份的对象，禁止因为整轮由用户触发就一律填写 <user>。例如“阿尔德瑞思阅读《恶魔之书》获得力量”的 subject 是“阿尔德瑞思”。
+- evidence 必须逐字引用该轮用户输入或 AI 叙事正文中的连续原句，最多 50 字。
+- relationship 必须同时提供 object、old_value、new_value，value 与 new_value 相同。
+- world 也必须有自然主体，例如“因果契约”“防卫局”，不能留空。
+- 没有持久事实时 facts 输出空数组。不得为了填表把普通动作、情绪或推测写成事实。
+
+只输出 JSON：{"floors":[{"floor":0,"summary":"...","facts":[{"slot":"promise|body|relationship|identity|possession|world|other","subject":"...","object":"","value":"...","old_value":"","new_value":"","evidence":"...","why_persistent":"..."}]}]}`;
+
+export const HISTORY_SEGMENT_JSON_SCHEMA = {
+    name: 'HistorySegment',
+    description: 'Complete per-floor history notes and persistent facts',
+    strict: false,
+    value: {
+        type: 'object',
+        properties: {
+            floors: { type: 'array' },
+        },
+        required: ['floors'],
+    },
+};
+
+export const CHAPTER_JSON_SCHEMA = {
+    name: 'ChapterArchive',
+    description: 'Coverage-checked chapter archive',
+    strict: false,
+    value: {
+        type: 'object',
+        properties: {
+            summary: { type: 'string' },
+            key_events: { type: 'array' },
+            coverage: { type: 'array' },
+            keywords: { type: 'array' },
+        },
+        required: ['summary', 'key_events', 'coverage', 'keywords'],
+    },
+};
+
+export const VOLUME_SYSTEM = `你是长期剧情压缩员。将多份编号章节摘要压缩为一份约500–900字的长期回顾。
+必须阅读并覆盖每一个输入章节，在 covered_chapter_ids 中逐项返回全部章节编号；必须保留「必须保留清单」中的每一个实体名称。
+保留事件顺序、关键因果、身份关系变化、承诺和未解决事项，不得只概括第一章。
+只输出 JSON：{"summary":"...","covered_chapter_ids":["ch_001"]}`;
 
 export const PROOFREAD_SYSTEM = `你是状态表校对员。对照状态表与章节摘要：
 1) 摘要中的持久事实，表里是否有对应条目？缺哪些？

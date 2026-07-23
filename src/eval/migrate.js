@@ -261,11 +261,12 @@ export async function handleMigrateCompleteJob() {
     state.status = state.completed >= state.total ? 'complete' : 'error';
     state.finishedAt = Date.now();
     state.error = state.status === 'error' ? '仍有旧对话未能完成整理，请重试失败任务或继续补记。' : null;
-    const already = (data.review_queue || []).some(item => item.kind === 'alert' && String(item.note || '').includes('旧聊天补记完成'));
+    data.notices = data.notices || [];
+    const already = data.notices.some(item => String(item.note || '').includes('旧聊天补记完成'));
     if (!already && state.status === 'complete') {
-        data.review_queue.push({
+        data.notices.push({
             id: crypto.randomUUID(),
-            kind: 'alert',
+            kind: 'notice',
             note: `旧聊天补记完成：已整理 ${state.completed} / ${state.total} 轮。建议检查“当前记忆”。`,
             createdAt: Date.now(),
         });
