@@ -12,12 +12,88 @@ import {
     saveSettings,
 } from '../settings.js';
 import { ensureActivationBaseline, getPairs } from '../ids.js';
-import { enqueue } from '../queue.js';
+import { cancelQueuedJobs, clearFailedJobs, enqueue, getQueueSnapshot } from '../queue.js';
 
 let migrateAbort = false;
 
-export function requestMigrateAbort() {
+export const MIGRATION_JOB_TYPES = [
+    'migrate_chapter',
+    'migrate_extract_chapter',
+    'migrate_extract_floor',
+    'migrate_finalize',
+    'migrate_complete',
+];
+
+function ensureBackfillState(data = getChatData()) {
+    data.history_backfill = data.history_backfill || {};
+    return Object.assign(data.history_backfill, {
+        status: data.history_backfill.status || 'idle',
+        total: Number(data.history_backfill.total) || 0,
+        completed: Number(data.history_backfill.completed) || 0,
+        startedAt: data.history_backfill.startedAt || null,
+        finishedAt: data.history_backfill.finishedAt || null,
+        stoppedAt: data.history_backfill.stoppedAt || null,
+        error: data.history_backfill.error || null,
+    });
+}
+
+function historyPairs(data = getChatData()) {
+    const baseline = Number(data.progress?.baseline_pair ?? -1);
+    return getPairs().filter(pair => pair.sealed && pair.pairIndex <= baseline);
+}
+
+function countCompleted(data = getChatData(), pairs = historyPairs(data)) {
+    const extracted = new Set(data.extracted_keys || []);
+    return pairs.filter(pair => extracted.has(pair.floorKey) || extracted.has(`migrated:${pair.floorKey}`)).length;
+}
+
+function migrationStage(job) {
+    if (!job) return '等待后台开始';
+    const start = Number(job.payload?.startPair);
+    const end = Number(job.payload?.endPair);
+    if (job.type === 'migrate_chapter' && Number.isFinite(start) && Number.isFinite(end)) return `正在整理第 ${start + 1}–${end + 1} 轮剧情`;
+    if (job.type === 'migrate_extract_chapter' && Number.isFinite(start) && Number.isFinite(end)) return `正在提取第 ${start + 1}–${end + 1} 轮的重要内容`;
+    if (job.type === 'migrate_extract_floor') return `正在整理第 ${Number(job.payload?.pairIndex) + 1} 轮对话`;
+    if (job.type === 'migrate_finalize') return '正在核对尚未补记的对话';
+    if (job.type === 'migrate_complete') return '正在保存补记结果';
+    return '正在整理旧聊天';
+}
+
+export function getHistoryBackfillSnapshot() {
+    const data = getChatData();
+    const state = ensureBackfillState(data);
+    const pairs = historyPairs(data);
+    const completed = countCompleted(data, pairs);
+    const queue = getQueueSnapshot();
+    const queued = queue.queued.filter(job => MIGRATION_JOB_TYPES.includes(job.type));
+    const inFlight = MIGRATION_JOB_TYPES.includes(queue.inFlight?.type) ? queue.inFlight : null;
+    const failed = queue.failed.filter(job => MIGRATION_JOB_TYPES.includes(job.type));
+    const total = Math.max(state.total, pairs.length);
+    return {
+        ...state,
+        total,
+        completed: Math.min(total, completed),
+        queued: queued.length,
+        paused: queue.paused,
+        inFlight,
+        failed,
+        stage: queue.paused ? '后台整理已暂停；恢复后台任务后会继续。' : migrationStage(inFlight || queued[0]),
+    };
+}
+
+export async function requestMigrateAbort() {
     migrateAbort = true;
+    const data = getChatData();
+    const state = ensureBackfillState(data);
+    const queue = getQueueSnapshot();
+    const hasRunning = MIGRATION_JOB_TYPES.includes(queue.inFlight?.type);
+    state.status = hasRunning ? 'stopping' : 'stopped';
+    state.completed = countCompleted(data);
+    state.stoppedAt = hasRunning ? null : Date.now();
+    await cancelQueuedJobs(MIGRATION_JOB_TYPES);
+    await saveChatData(data);
+    appendLog('info', hasRunning ? '补记停止请求已收到，当前任务结束后停止' : '补记已停止');
+    return getHistoryBackfillSnapshot();
 }
 
 /**
@@ -27,17 +103,39 @@ export function requestMigrateAbort() {
  */
 export async function startMigration() {
     migrateAbort = false;
+    const existingQueue = getQueueSnapshot();
+    if (existingQueue.inFlight?.type && MIGRATION_JOB_TYPES.includes(existingQueue.inFlight.type)
+        || existingQueue.queued.some(job => MIGRATION_JOB_TYPES.includes(job.type))) {
+        return getHistoryBackfillSnapshot();
+    }
     const baseline = ensureActivationBaseline();
     const allPairs = getPairs().filter(p => p.sealed);
     const pairs = allPairs.filter(p => baseline >= 0 && p.pairIndex <= baseline);
-    if (!allPairs.length) {
-        appendLog('warn', '迁移：基线前无定格楼层');
-        return;
+    const data = getChatData();
+    const state = ensureBackfillState(data);
+    if (!pairs.length) {
+        state.status = 'complete';
+        state.total = 0;
+        state.completed = 0;
+        state.finishedAt = Date.now();
+        await saveChatData(data);
+        appendLog('info', '没有需要补记的旧聊天');
+        return getHistoryBackfillSnapshot();
     }
 
     const settings = getSettings();
     settings.migrationReviewMode = true;
     saveSettings();
+
+    state.status = 'running';
+    state.total = pairs.length;
+    state.completed = countCompleted(data, pairs);
+    state.startedAt = Date.now();
+    state.finishedAt = null;
+    state.stoppedAt = null;
+    state.error = null;
+    await clearFailedJobs(MIGRATION_JOB_TYPES);
+    await saveChatData(data);
 
     const size = settings.chapterSize || 25;
     const jobs = [];
@@ -54,8 +152,15 @@ export async function startMigration() {
     }
 
     let lastFullEnd = -1;
+    const extracted = new Set(data.extracted_keys || []);
     for (const job of jobs) {
         if (job.full) {
+            const complete = pairs.filter(pair => pair.pairIndex >= job.startPair && pair.pairIndex <= job.endPair)
+                .every(pair => extracted.has(pair.floorKey) || extracted.has(`migrated:${pair.floorKey}`));
+            if (complete) {
+                lastFullEnd = Math.max(lastFullEnd, job.endPair);
+                continue;
+            }
             enqueue('migrate_chapter', {
                 startPair: job.startPair,
                 endPair: job.endPair,
@@ -70,17 +175,18 @@ export async function startMigration() {
     // Residual = sealed pairs after the last full chapter's real endPair (no arithmetic grid).
     enqueue('migrate_finalize', { baseline, lastFullEnd }, QUEUE_PRIORITY.migrate);
     appendLog('info', `迁移已入队：${jobs.filter(j => j.full).length} 完整章；缺少的逐轮剧情记录将在收尾时补齐`);
+    return getHistoryBackfillSnapshot();
 }
 
 export async function handleMigrateChapterJob(payload) {
-    if (migrateAbort) {
+    if (migrateAbort || ['stopping', 'stopped'].includes(ensureBackfillState().status)) {
         return;
     }
     await handleChapterSummaryJob(payload);
 }
 
 export async function handleMigrateExtractChapterJob(payload) {
-    if (migrateAbort) {
+    if (migrateAbort || ['stopping', 'stopped'].includes(ensureBackfillState().status)) {
         return;
     }
     const { startPair, endPair } = payload;
@@ -109,12 +215,13 @@ export async function handleMigrateExtractChapterJob(payload) {
             d.extracted_keys.push(marker);
         }
     }
+    ensureBackfillState(data).completed = countCompleted(data);
     await saveChatData(data);
 }
 
 export async function handleMigrateFinalizeJob(payload = {}) {
     const originData = getChatData();
-    if (migrateAbort) {
+    if (migrateAbort || ['stopping', 'stopped'].includes(ensureBackfillState(originData).status)) {
         appendLog('info', '迁移已中止');
         return;
     }
@@ -122,7 +229,9 @@ export async function handleMigrateFinalizeJob(payload = {}) {
     const extracted = new Set(data.extracted_keys || []);
     const summarized = new Set((data.turn_summaries || []).filter(item => item.summary).map(item => item.floorKey));
     const activeChapters = (data.chapters || []).filter(chapter => !chapter.stale && chapter.summary);
+    const baseline = Number(payload.baseline ?? data.progress?.baseline_pair ?? -1);
     const pairs = getPairs().filter(pair => {
+        if (pair.pairIndex > baseline) return false;
         if (!pair.sealed || summarized.has(pair.floorKey)) return false;
         return !activeChapters.some(chapter =>
             pair.pairIndex >= chapter.floor_range?.[0] && pair.pairIndex <= chapter.floor_range?.[1]);
@@ -135,24 +244,58 @@ export async function handleMigrateFinalizeJob(payload = {}) {
             pairIndex: p.pairIndex,
             ignoreBaseline: true,
             summaryOnly: alreadyExtracted,
+            historyBackfill: true,
         }, QUEUE_PRIORITY.migrate);
     }
+    enqueue('migrate_complete', { baseline }, QUEUE_PRIORITY.migrate_complete);
+    appendLog('info', `迁移收尾：残楼补提 ×${pairs.length}`);
+}
 
-    assertChatData(originData);
-    buildKeywordIndex(originData);
-    const finalData = originData;
-    const already = (finalData.review_queue || []).some(x => x.kind === 'alert' && String(x.note || '').includes('旧聊天'));
-    if (!already) {
-        finalData.review_queue.push({
+export async function handleMigrateCompleteJob() {
+    const data = getChatData();
+    const state = ensureBackfillState(data);
+    if (migrateAbort || ['stopping', 'stopped'].includes(state.status)) return;
+    buildKeywordIndex(data);
+    state.total = historyPairs(data).length;
+    state.completed = countCompleted(data);
+    state.status = state.completed >= state.total ? 'complete' : 'error';
+    state.finishedAt = Date.now();
+    state.error = state.status === 'error' ? '仍有旧对话未能完成整理，请重试失败任务或继续补记。' : null;
+    const already = (data.review_queue || []).some(item => item.kind === 'alert' && String(item.note || '').includes('旧聊天补记完成'));
+    if (!already && state.status === 'complete') {
+        data.review_queue.push({
             id: crypto.randomUUID(),
             kind: 'alert',
-            note: `旧聊天的大段剧情已经补记完成，剩余 ${pairs.length} 轮零散对话正在等待整理。完成后建议检查“当前记忆”。`,
+            note: `旧聊天补记完成：已整理 ${state.completed} / ${state.total} 轮。建议检查“当前记忆”。`,
             createdAt: Date.now(),
         });
     }
-    captureBranchCheckpoint(finalData, 'history_migration_complete');
-    await saveChatData(finalData);
-    appendLog('info', `迁移收尾：残楼补提 ×${pairs.length}`);
+    captureBranchCheckpoint(data, 'history_migration_complete');
+    await saveChatData(data);
+    appendLog('info', state.status === 'complete' ? `旧聊天补记完成：${state.completed}/${state.total}` : state.error);
+}
+
+export async function settleHistoryBackfillStop(expectedData = getChatData()) {
+    if (getChatData() !== expectedData) return false;
+    const state = ensureBackfillState(expectedData);
+    if (state.status !== 'stopping') return false;
+    state.status = 'stopped';
+    state.completed = countCompleted(expectedData);
+    state.stoppedAt = Date.now();
+    await saveChatData(expectedData);
+    appendLog('info', `补记已停止：${state.completed}/${state.total}`);
+    return true;
+}
+
+export async function markHistoryBackfillError(message, expectedData = getChatData()) {
+    if (getChatData() !== expectedData) return false;
+    const state = ensureBackfillState(expectedData);
+    if (state.status === 'stopping' || state.status === 'stopped') return false;
+    state.status = 'error';
+    state.completed = countCompleted(expectedData);
+    state.error = String(message || '补记任务失败');
+    await saveChatData(expectedData);
+    return true;
 }
 
 /**

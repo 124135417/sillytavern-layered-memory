@@ -9,7 +9,7 @@ import {
     rerunEvalCase,
     snapshotForPair,
 } from '../eval/cases.js';
-import { recordMigrationEdit, requestMigrateAbort, startMigration } from '../eval/migrate.js';
+import { getHistoryBackfillSnapshot, recordMigrationEdit, requestMigrateAbort, startMigration } from '../eval/migrate.js';
 import { getPairs, getPairTexts } from '../ids.js';
 import {
     dismissFailedJob,
@@ -147,6 +147,10 @@ function refreshQueueUi() {
         return;
     }
     renderShellStatus();
+    if (activeTab() === 'settings') {
+        refreshHistoryBackfillUi(panel.querySelector('.lm-body'));
+        return;
+    }
     if (activeTab() !== 'state') {
         return;
     }
@@ -159,6 +163,58 @@ function refreshQueueUi() {
     const next = template.content.firstElementChild;
     current.replaceWith(next);
     bindQueueControls(panel.querySelector('.lm-body'));
+}
+
+function renderHistoryBackfillStatus(snapshot = getHistoryBackfillSnapshot()) {
+    const total = Number(snapshot.total) || 0;
+    const completed = Math.min(total, Number(snapshot.completed) || 0);
+    const measuredPercent = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const percent = snapshot.status === 'complete' ? 100 : Math.min(99, measuredPercent);
+    const statusCopy = {
+        idle: ['尚未开始', '点击后会在后台逐步整理，不会刷新当前页面。'],
+        running: ['正在补记旧聊天', snapshot.stage],
+        stopping: ['正在安全停止', '未开始的任务已经取消；正在请求模型的这一项结束后停止。'],
+        stopped: ['补记已停止', `已经保留前面完成的 ${completed} 轮，可以随时继续。`],
+        complete: ['补记完成', '旧聊天已经全部整理完成。'],
+        error: ['补记遇到问题', snapshot.error || '有任务未能完成，可以在处理失败项后继续补记。'],
+    };
+    const [title, detail] = statusCopy[snapshot.status] || statusCopy.idle;
+    const canStart = !['running', 'stopping'].includes(snapshot.status);
+    const canStop = snapshot.status === 'running';
+    const startLabel = ['stopped', 'error'].includes(snapshot.status) ? '继续补记' : snapshot.status === 'complete' ? '重新检查缺漏' : '开始补记旧聊天';
+    const waiting = snapshot.queued > 0 ? ` · 还有 ${snapshot.queued} 项等待处理` : '';
+    return `<div class="lm-backfill-card" data-state="${escapeHtml(snapshot.status)}" aria-live="polite">
+        <div class="lm-backfill-heading"><div><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${completed} / ${total} 轮</strong></div>
+        <progress max="100" value="${percent}" aria-label="旧聊天补记进度：${percent}%">${percent}%</progress>
+        <div class="lm-backfill-meta"><span>${percent}% 已完成${escapeHtml(waiting)}</span>${snapshot.inFlight ? '<span>当前有 1 项正在处理</span>' : ''}</div>
+        <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-migrate" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button><button type="button" class="lm-text-button" id="lm-migrate-abort" ${canStop ? '' : 'disabled'}>停止补记</button></div>
+    </div>`;
+}
+
+function refreshHistoryBackfillUi(body) {
+    const host = body?.querySelector('#lm-backfill-status');
+    if (!host) return;
+    host.innerHTML = renderHistoryBackfillStatus();
+    bindHistoryBackfillControls(host, body);
+}
+
+function bindHistoryBackfillControls(host, body) {
+    if (!host) return;
+    host.querySelector('#lm-migrate')?.addEventListener('click', async () => {
+        if (!confirm('开始补记以前的聊天？插件会在后台慢慢整理旧内容，不会刷新当前页面。')) return;
+        const button = host.querySelector('#lm-migrate');
+        if (button) button.disabled = true;
+        await startMigration();
+        refreshHistoryBackfillUi(body);
+        toastr?.info?.('旧聊天补记已经开始，可以在这里查看进度。');
+    });
+    host.querySelector('#lm-migrate-abort')?.addEventListener('click', async () => {
+        const button = host.querySelector('#lm-migrate-abort');
+        if (button) button.disabled = true;
+        await requestMigrateAbort();
+        refreshHistoryBackfillUi(body);
+        toastr?.info?.('停止请求已收到，已取消尚未开始的补记任务。');
+    });
 }
 
 function injectSettingsEntry() {
@@ -892,13 +948,14 @@ function renderReviewTab() {
         const kind = item.kind === 'flag_conflict' ? '两条记忆互相矛盾' : item.kind === 'proofread' ? '检查后发现的建议' : item.kind === 'volume_compress_ask' ? '整理旧摘要前确认' : '需要注意';
         const risk = item.kind === 'flag_conflict' ? 'error' : item.kind === 'proofread' ? 'warning' : 'info';
         const relatedEntry = entries.find(entry => entry.id === item.entry_id);
-        const title = item.subject || relatedEntry?.subject || '一条记忆建议';
+        const isAlert = item.kind === 'alert';
+        const title = isAlert ? '状态说明' : item.subject || relatedEntry?.subject || '一条记忆建议';
         html += `<article class="lm-review-card" data-rid="${escapeHtml(item.id)}">
             <div class="lm-review-mark" data-state="${risk}" aria-hidden="true"></div>
             <div class="lm-review-copy"><span class="lm-state-tag" data-state="${risk}">${kind}</span><h4>${escapeHtml(title)}</h4><p>${escapeHtml(formatReviewNote(item.note || item.value || '需要你的确认'))}</p>${item.object ? `<small>关联：${escapeHtml(item.object)}</small>` : ''}</div>
             <div class="lm-row-actions">
-                <button type="button" data-act="reject" class="lm-text-button">不采用</button>
-                <button type="button" data-act="approve" class="lm-button lm-button-primary">采用这条建议</button>
+                <button type="button" data-act="reject" class="lm-text-button">${isAlert ? '知道了' : '不采用'}</button>
+                ${isAlert ? '' : '<button type="button" data-act="approve" class="lm-button lm-button-primary">采用这条建议</button>'}
             </div>
         </article>`;
     }
@@ -1047,7 +1104,7 @@ function renderSettingsTab() {
 
             <section class="lm-settings-section">
                 <header><div><span class="fa-solid fa-clock-rotate-left" aria-hidden="true"></span><div><h4>补记以前的聊天</h4><p>${escapeHtml(baselineText)}</p></div></div></header>
-                <div class="lm-settings-fields"><p>插件会在空闲时慢慢整理以前的内容，不会挤掉最新对话的记忆工作。完成后建议到“当前记忆”中检查一次。</p><div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-migrate">开始补记旧聊天</button><button type="button" class="lm-text-button" id="lm-migrate-abort">停止补记</button></div></div>
+                <div class="lm-settings-fields"><p>插件会在空闲时慢慢整理以前的内容，不会挤掉最新对话的记忆工作。完成后建议到“当前记忆”中检查一次。</p><div id="lm-backfill-status">${renderHistoryBackfillStatus()}</div></div>
             </section>
 
             <details class="lm-settings-section lm-settings-disclosure">
@@ -1232,12 +1289,7 @@ function bindSettingsTab(body) {
             ? '规则格式有误；实际整理时会自动读取整条回复。'
             : '最近一条回复没有匹配；实际整理时会自动读取整条回复。';
     });
-    body.querySelector('#lm-migrate')?.addEventListener('click', () => {
-        if (confirm('开始补记以前的聊天？插件会在后台慢慢整理旧内容，不会刷新当前页面。')) {
-            startMigration();
-        }
-    });
-    body.querySelector('#lm-migrate-abort')?.addEventListener('click', () => requestMigrateAbort());
+    bindHistoryBackfillControls(body.querySelector('#lm-backfill-status'), body);
     body.querySelector('#lm-eval-export')?.addEventListener('click', () => {
         const blob = new Blob([exportEvalCasesJson()], { type: 'application/json' });
         const a = document.createElement('a');

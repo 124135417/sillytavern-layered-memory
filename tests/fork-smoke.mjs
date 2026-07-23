@@ -87,7 +87,7 @@ globalThis.fetch = async (url, init) => {
     return { ok: true, json: async () => [{ chat_metadata: { layered_memory: structuredClone(parent) } }] };
 };
 
-const { beginBranchRecovery, buildLegacyRebuildData, ensureCurrentBranchRecovery, reconcileCurrentHistory, replayBranchData, waitForBranchRecovery } = await import('../src/branch.js');
+const { beginBranchRecovery, buildFreshBranchData, buildLegacyRebuildData, ensureCurrentBranchRecovery, reconcileCurrentHistory, replayBranchData, waitForBranchRecovery } = await import('../src/branch.js');
 const indexSource = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 const queueSource = await readFile(new URL('../src/queue.js', import.meta.url), 'utf8');
 assert.match(indexSource, /layeredMemoryIntercept[\s\S]*await waitForBranchRecovery\(\)/u,
@@ -134,6 +134,12 @@ assert.equal(legacy.branch_origin.method, 'safe_rebuild');
 assert.equal(legacy.progress.baseline_pair, -1);
 assert.equal(legacy.review_queue.some(item => item.kind === 'alert'), true);
 
+const fresh = buildFreshBranchData([pair(0), pair(1)], 'Parent Without Memory');
+assert.equal(fresh.branch_origin.method, 'fresh_start');
+assert.equal(fresh.branch_origin.status, 'ready');
+assert.equal(fresh.progress.baseline_pair, 1, 'a parent without plugin data must start from now, not auto-backfill');
+assert.match(fresh.review_queue[0].note, /开始补记旧聊天/u);
+
 const alternateSwipe = replayBranchData(parent, [pair(0), pair(1, '另一个 swipe')], 'Parent Chat');
 assert.equal(alternateSwipe.state_table.entries.some(entry => entry.id === 'e_0002'), false,
     'same message IDs with different active text must not reuse the old swipe fact');
@@ -169,6 +175,13 @@ globalThis.fetch = async (url, init) => {
 };
 assert.equal((await beginBranchRecovery()).status, 'ready');
 assert.equal(groupMetadata.layered_memory.branch_origin.method, 'checkpoint_replay');
+
+const noMemoryMetadata = { main_chat: 'Parent Without Plugin' };
+currentContext = { ...context, chatMetadata: noMemoryMetadata };
+globalThis.fetch = async () => ({ ok: true, json: async () => [{ chat_metadata: {} }] });
+assert.equal((await beginBranchRecovery()).status, 'ready');
+assert.equal(noMemoryMetadata.layered_memory.branch_origin.method, 'fresh_start');
+assert.equal(noMemoryMetadata.layered_memory.branch_origin.status, 'ready');
 
 const failedMetadata = { main_chat: 'Missing Parent' };
 currentContext = { ...context, chatMetadata: failedMetadata };

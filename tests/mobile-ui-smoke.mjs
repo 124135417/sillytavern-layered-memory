@@ -49,6 +49,8 @@ assert.match(css, /\.layered-memory-root \{[\s\S]*z-index: 2147483001/u,
     'the memory center must sit above its modal backdrop');
 assert.match(css, /--lm-type-caption: 0\.875rem/u,
     'the smallest visible text token must remain readable');
+assert.match(css, /\.lm-backfill-heading b,[\s\S]*font-weight: 700/u,
+    'history backfill progress must use readable body-sized bold text');
 assert.match(css, /\.lm-metric b \{[^}]*font-size: var\(--lm-type-body\)/u,
     'header metric numbers must use the full body size');
 assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/u,

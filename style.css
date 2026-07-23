@@ -570,6 +570,19 @@ body.lm-memory-center-open {
 .lm-security-note { display: flex; gap: 8px; margin: 0; padding: 10px; color: var(--lm-muted); background: var(--lm-surface-soft); border-radius: var(--lm-radius-sm); font-size: var(--lm-type-small); line-height: 1.55; }
 .lm-security-note span { color: var(--lm-warning); }
 .lm-settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.lm-backfill-card { display: grid; gap: 12px; padding: 14px; background: var(--lm-surface-soft); border: 1px solid var(--lm-border); border-radius: var(--lm-radius-md); }
+.lm-backfill-card[data-state="running"],
+.lm-backfill-card[data-state="stopping"] { border-color: color-mix(in srgb, var(--lm-warning) 55%, var(--lm-border)); }
+.lm-backfill-card[data-state="complete"] { border-color: color-mix(in srgb, var(--lm-success) 55%, var(--lm-border)); }
+.lm-backfill-card[data-state="error"] { border-color: color-mix(in srgb, var(--lm-error) 60%, var(--lm-border)); }
+.lm-backfill-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.lm-backfill-heading > div { min-width: 0; }
+.lm-backfill-heading b,
+.lm-backfill-heading strong { color: var(--lm-text); font-size: var(--lm-type-body); font-weight: 700; }
+.lm-backfill-heading strong { flex: 0 0 auto; }
+.lm-backfill-heading p { margin: 4px 0 0; color: var(--lm-muted); font-size: var(--lm-type-small); font-weight: 600; line-height: 1.5; }
+.lm-backfill-card progress { width: 100%; height: 12px; accent-color: var(--lm-accent); }
+.lm-backfill-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; color: var(--lm-muted); font-size: var(--lm-type-small); font-weight: 600; }
 .lm-connection-result { color: var(--lm-muted); font-size: var(--lm-type-small); }
 .lm-connection-result[data-state="success"] { color: var(--lm-success); }
 .lm-connection-result[data-state="error"] { color: var(--lm-error); }
@@ -677,6 +690,7 @@ body.lm-memory-center-open {
     .lm-review-card { grid-template-columns: 3px 1fr; }
     .lm-review-card .lm-row-actions { grid-column: 2; }
     .lm-settings-layout { padding: 14px 12px 76px; }
+    .lm-backfill-heading { display: grid; gap: 8px; }
     .lm-field-grid,
     .lm-field-grid-three { grid-template-columns: 1fr; }
     .lm-settings-savebar { justify-content: space-between; }

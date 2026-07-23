@@ -2,6 +2,7 @@ import { handleChapterSummaryJob } from './src/chapter.js';
 import { handleExtractJob } from './src/extract.js';
 import {
     handleMigrateChapterJob,
+    handleMigrateCompleteJob,
     handleMigrateExtractChapterJob,
     handleMigrateFinalizeJob,
 } from './src/eval/migrate.js';
@@ -31,6 +32,7 @@ function wireHandlers() {
     registerHandler('migrate_extract_chapter', handleMigrateExtractChapterJob);
     registerHandler('migrate_extract_floor', handleExtractJob);
     registerHandler('migrate_finalize', handleMigrateFinalizeJob);
+    registerHandler('migrate_complete', handleMigrateCompleteJob);
 }
 
 async function onChatChanged() {
@@ -145,7 +147,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.6.0`);
+    console.log(`[${MODULE}] 已加载 v0.6.1`);
 });
 
 export async function onActivate() {

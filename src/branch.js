@@ -240,6 +240,37 @@ export function buildLegacyRebuildData(livePairs, parentChat = '') {
     return data;
 }
 
+export function buildFreshBranchData(livePairs, parentChat = '') {
+    const data = EMPTY_CHAT_DATA();
+    const head = livePairs.filter(pair => pair.sealed).at(-1);
+    data.progress.baseline_pair = head?.pairIndex ?? -1;
+    data.job_queue.scope_id = crypto.randomUUID();
+    data.branch_origin = {
+        parentChat,
+        forkFloorKey: head?.floorKey || null,
+        forkPairIndex: head?.pairIndex ?? -1,
+        method: 'fresh_start',
+        status: 'ready',
+        recoveredAt: Date.now(),
+    };
+    data.review_queue.push({
+        id: crypto.randomUUID(),
+        kind: 'alert',
+        note: '父聊天还没有可继承的插件记忆。这个分支会从下一轮开始正常记录；如果需要整理此前剧情，请在设置中点击“开始补记旧聊天”。',
+        createdAt: Date.now(),
+    });
+    data.branch_checkpoints.push({
+        id: crypto.randomUUID(),
+        anchorFloorKey: head?.floorKey || null,
+        anchorPairIndex: head?.pairIndex ?? -1,
+        anchorFingerprint: head?.contentFingerprint || null,
+        stateTable: lightweightStateTable(data.state_table),
+        createdAt: Date.now(),
+        reason: 'fresh_branch_seed',
+    });
+    return data;
+}
+
 export function replayBranchData(parentData, livePairs, parentChat = '') {
     const liveByKey = pairMap(livePairs);
     const checkpoints = (parentData.branch_checkpoints || [])
@@ -342,8 +373,9 @@ async function recoverCurrentBranch() {
     try {
         const parentData = await fetchParentChat(parentChat);
         if (getContext().chatMetadata !== metadata) return { status: 'superseded' };
-        if (!parentData) throw new Error('父聊天没有可继承的插件记忆');
-        const restored = replayBranchData(parentData, livePairs, parentChat);
+        const restored = parentData
+            ? replayBranchData(parentData, livePairs, parentChat)
+            : buildFreshBranchData(livePairs, parentChat);
         metadata[MODULE_NAME] = restored;
         await saveChatData(restored);
         appendLog('info', `分支记忆恢复完成：${restored.branch_origin.method}`);

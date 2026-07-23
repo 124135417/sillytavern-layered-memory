@@ -223,6 +223,28 @@ export function dismissFailedJob(jobId) {
     return true;
 }
 
+export async function cancelQueuedJobs(types = []) {
+    const wanted = new Set(types);
+    if (!wanted.size) return 0;
+    const { chatData, state, scopeId } = hydrateCurrentScope();
+    const before = memoryQueue.length;
+    memoryQueue = memoryQueue.filter(job => job.scopeId !== scopeId || !wanted.has(job.type));
+    state.queued = (state.queued || []).filter(job => !wanted.has(job.type));
+    const removed = before - memoryQueue.length;
+    await persistScope(scopeId, chatData);
+    return removed;
+}
+
+export async function clearFailedJobs(types = []) {
+    const wanted = new Set(types);
+    if (!wanted.size) return 0;
+    const { chatData, state, scopeId } = hydrateCurrentScope();
+    const before = state.failed.length;
+    state.failed = state.failed.filter(job => !wanted.has(job.type));
+    await persistScope(scopeId, chatData);
+    return before - state.failed.length;
+}
+
 function sortQueue() {
     memoryQueue.sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt);
 }
@@ -315,6 +337,11 @@ async function pump() {
                 inFlight = null;
             }
 
+            if (job.type.startsWith('migrate_')) {
+                const { settleHistoryBackfillStop } = await import('./eval/migrate.js');
+                await settleHistoryBackfillStop(chatData);
+            }
+
             if (!error) {
                 await persistScope(scopeId, chatData);
                 continue;
@@ -339,6 +366,10 @@ async function pump() {
                 job.failedAt = Date.now();
                 state.failed.push(publicJob(job));
                 appendLog('error', `任务失败 ${job.type} (${job.attempt}/${job.maxAttempts}): ${job.lastError}`);
+                if (job.type.startsWith('migrate_')) {
+                    const { markHistoryBackfillError } = await import('./eval/migrate.js');
+                    await markHistoryBackfillError(job.lastError, chatData);
+                }
             }
             await persistScope(scopeId, chatData);
         }

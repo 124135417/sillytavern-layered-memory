@@ -25,6 +25,7 @@ export const QUEUE_PRIORITY = {
     proofread: 50,
     state_gc: 40,
     migrate: 10,
+    migrate_complete: 9,
 };
 
 /**
@@ -93,6 +94,15 @@ export const EMPTY_CHAT_DATA = () => ({
     /** State-table snapshots anchored to a stable floor key. */
     branch_checkpoints: [],
     branch_origin: null,
+    history_backfill: {
+        status: 'idle',
+        total: 0,
+        completed: 0,
+        startedAt: null,
+        finishedAt: null,
+        stoppedAt: null,
+        error: null,
+    },
     chapters: [],
     volumes: [],
     keyword_index: {},
