@@ -29,6 +29,7 @@ const {
     dismissFailedJob,
     enqueue,
     getQueueSnapshot,
+    isRetryableError,
     retryFailedJob,
     setQueuePaused,
 } = await import('../src/queue.js');
@@ -62,4 +63,9 @@ chats.a.layered_memory.job_queue.failed.push({
 assert.equal(retryFailedJob('failed-2'), true);
 assert.ok(getQueueSnapshot().queued.some(job => job.id === 'failed-2'), '手动重试应重新入队');
 
-console.log('queue smoke: 8/8 passed');
+assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 400'), { status: 400 })), false);
+assert.equal(isRetryableError(new Error('模型服务 HTTP 422: invalid schema')), false);
+assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 429'), { status: 429 })), true);
+assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 503'), { status: 503 })), true);
+
+console.log('queue smoke: 12/12 passed');

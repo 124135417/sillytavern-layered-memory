@@ -264,10 +264,12 @@ function scheduleWake(timestamp) {
     }, delay);
 }
 
-function isRetryableError(error) {
+export function isRetryableError(error) {
     const message = String(error?.message ?? error ?? '');
+    const status = Number(error?.status);
     if (message.startsWith('副模型不可用：')) return false;
-    if (/fallback HTTP (400|401|403|404)\b/.test(message)) return false;
+    if ([400, 401, 403, 404, 422].includes(status)) return false;
+    if (/(?:模型服务|fallback) HTTP (400|401|403|404|422)\b/i.test(message)) return false;
     return true;
 }
 

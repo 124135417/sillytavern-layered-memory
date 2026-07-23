@@ -167,10 +167,7 @@ async function directFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, t
         ],
     };
     if (jsonSchema) {
-        body.response_format = {
-            type: 'json_schema',
-            json_schema: jsonSchema,
-        };
+        body.response_format = directResponseFormat(baseUrl, jsonSchema);
     }
     const res = await fetch(url, {
         method: 'POST',
@@ -188,6 +185,36 @@ async function directFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, t
     }
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
+}
+
+function directResponseFormat(baseUrl, jsonSchema) {
+    if (isOfficialDeepSeekUrl(baseUrl)) {
+        // DeepSeek's public API documents JSON Object mode, not OpenAI's
+        // Structured Outputs envelope. The prompts already require JSON only.
+        return { type: 'json_object' };
+    }
+    return {
+        type: 'json_schema',
+        json_schema: normalizeOpenAiJsonSchema(jsonSchema),
+    };
+}
+
+function isOfficialDeepSeekUrl(baseUrl) {
+    try {
+        return new URL(baseUrl).hostname.toLowerCase() === 'api.deepseek.com';
+    } catch {
+        return false;
+    }
+}
+
+function normalizeOpenAiJsonSchema(jsonSchema) {
+    const schema = jsonSchema?.schema || jsonSchema?.value || jsonSchema;
+    return {
+        name: String(jsonSchema?.name || 'memory_output'),
+        ...(jsonSchema?.description ? { description: String(jsonSchema.description) } : {}),
+        strict: Boolean(jsonSchema?.strict),
+        schema,
+    };
 }
 
 async function directTestFetch({ baseUrl, apiKey, model, timeoutMs }) {

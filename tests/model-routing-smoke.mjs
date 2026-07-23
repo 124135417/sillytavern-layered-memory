@@ -59,8 +59,28 @@ assert.equal(fetchRequest.url, 'https://models.example/v1/chat/completions');
 assert.equal(JSON.parse(fetchRequest.init.body).model, 'direct-model');
 assert.equal(generateRawCalls, 1, 'a selected direct API must not silently use the current chat model');
 
+const schemaPrompt = {
+    ...prompt,
+    jsonSchema: {
+        name: 'MemoryTest',
+        description: 'test schema',
+        strict: false,
+        value: { type: 'object', properties: { ok: { type: 'boolean' } } },
+    },
+};
+await callAuxModel(schemaPrompt);
+const genericBody = JSON.parse(fetchRequest.init.body);
+assert.equal(genericBody.response_format.type, 'json_schema');
+assert.deepEqual(genericBody.response_format.json_schema.schema, schemaPrompt.jsonSchema.value);
+assert.equal(Object.hasOwn(genericBody.response_format.json_schema, 'value'), false);
+
+settings.directBaseUrl = 'https://api.deepseek.com';
+await callAuxModel(schemaPrompt);
+const deepSeekBody = JSON.parse(fetchRequest.init.body);
+assert.deepEqual(deepSeekBody.response_format, { type: 'json_object' });
+
 const models = await listDirectModels({ baseUrl: settings.directBaseUrl, apiKey: settings.directApiKey });
 assert.deepEqual(models, ['model-a', 'model-b']);
-assert.equal(fetchRequest.url, 'https://models.example/v1/models');
+assert.equal(fetchRequest.url, 'https://api.deepseek.com/models');
 
-console.log('model routing smoke: 16/16 passed');
+console.log('model routing smoke: 20/20 passed');
