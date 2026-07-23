@@ -63,10 +63,28 @@
             { id: 'e_5', slot: 'identity', subject: '<user>', object: '', value: '是诡秘之神', cause: '', updated_floor: 92, evidence: '你就是诡秘之神。', pinned: false, source: 'auto' },
         ];
         const extracted = chat.filter(x => !x.is_user).map((_, i) => `${i}-u+${i}-a`);
+        const turnSummaries = Array.from({ length: 132 }, (_, pairIndex) => ({
+            floorKey: `${pairIndex}-u+${pairIndex}-a`,
+            pairIndex,
+            contentFingerprint: `fp-${pairIndex}`,
+            summary: `<user>推进第 ${pairIndex} 轮对话，林许作出回应，双方留下后续事项。`,
+        }));
+        const chapter = (index, start, end) => ({
+            id: `ch_${String(index).padStart(3, '0')}`,
+            summary: `<user>与林许完成第 ${start}–${end} 轮的阶段剧情，双方的目标和关系继续变化。`,
+            keywords: ['伯滔', '林许', `第${index}章`],
+            key_events: [{ floor_range: [start, end], text: `<user>推进本阶段剧情，林许作出回应。` }],
+            coverage: Array.from({ length: end - start + 1 }, (_, offset) => ({ floor: start + offset, event_index: 0 })),
+            floor_range: [start, end], pinned: false, demoted: false, stale: false, frozen: true, volume_id: null,
+        });
         const memoryData = {
             version: 3,
             state_table: { version: 18, entries, changelog: [] },
-            chapters: [{ id: 'ch_005', summary: '伯滔说明自己不喜欢熟鱼、偏好贝类和刺身，林许据此调整居酒屋的用餐安排。两人在交谈中继续确认彼此的边界，伯滔明确要求林许不要采取极端手段；林许接受要求，并承诺之后先沟通再行动。随着身份和动机逐步坦白，双方从互相试探转向有限信任，同时约定完成北港旧灯塔的调查后再讨论下一步安排。', keywords: ['伯滔', '林许', '居酒屋', '饮食偏好'], key_events: [{ floor_range: [100, 108], text: '伯滔说明饮食偏好，林许调整居酒屋安排。' }, { floor_range: [109, 117], text: '双方讨论行动边界，伯滔要求林许不要走极端。' }, { floor_range: [118, 124], text: '关系继续推进，并确认调查后的后续安排。' }], coverage: Array.from({ length: 25 }, (_, i) => ({ floor: 100 + i, event_index: i < 9 ? 0 : i < 18 ? 1 : 2 })), floor_range: [100, 124], pinned: false, demoted: false, stale: false, frozen: true, volume_id: null }],
+            turn_summaries: turnSummaries,
+            chapters: [
+                chapter(1, 0, 24), chapter(2, 25, 49), chapter(3, 50, 74), chapter(4, 75, 99),
+                { ...chapter(5, 100, 124), summary: '伯滔说明自己不喜欢熟鱼、偏好贝类和刺身，林许据此调整居酒屋的用餐安排。两人在交谈中继续确认彼此的边界，伯滔明确要求林许不要采取极端手段；林许接受要求，并承诺之后先沟通再行动。随着身份和动机逐步坦白，双方从互相试探转向有限信任，同时约定完成北港旧灯塔的调查后再讨论下一步安排。', keywords: ['伯滔', '林许', '居酒屋', '饮食偏好'], key_events: [{ floor_range: [100, 108], text: '伯滔说明饮食偏好，林许调整居酒屋安排。' }, { floor_range: [109, 117], text: '双方讨论行动边界，伯滔要求林许不要走极端。' }, { floor_range: [118, 124], text: '关系继续推进，并确认调查后的后续安排。' }] },
+            ],
             volumes: [], keyword_index: {},
             review_queue: [{ id: 'r1', kind: 'flag_conflict', entry_id: 'e_3', note: '新楼层暗示两人已经和解，但旧事实仍为“尚未完全和解”。', createdAt: now }],
             notices: [{ id: 'n1', kind: 'notice', note: '旧聊天安全重建完成：已核对 132 / 132 轮。', createdAt: now }],

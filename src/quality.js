@@ -73,6 +73,14 @@ export function displayEntityName(value, context = null) {
     return cleanText(ctx?.name1) || '你';
 }
 
+export function displayNarrativeText(value, context = null) {
+    const text = cleanText(value);
+    if (!text.includes('<user>')) return text;
+    const ctx = context || globalThis.SillyTavern?.getContext?.();
+    const userName = cleanText(ctx?.name1) || '你';
+    return text.replaceAll('<user>', userName);
+}
+
 export function normalizeGeneratedEntity(value, userName = '') {
     const text = cleanText(value);
     if (!text) return '';

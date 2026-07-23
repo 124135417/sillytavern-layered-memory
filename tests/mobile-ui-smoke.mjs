@@ -57,7 +57,11 @@ assert.match(css, /\.lm-backfill-heading b,[\s\S]*font-weight: 700/u,
     'history backfill progress must use readable body-sized bold text');
 assert.match(css, /\.lm-metric b \{[^}]*font-size: var\(--lm-type-body\)/u,
     'header metric numbers must use the full body size');
+assert.match(css, /\.lm-turn-records > summary \{[^}]*min-height: 44px[^}]*font-size: var\(--lm-type-small\)[^}]*font-weight: 700/u,
+    'per-turn disclosures must remain readable and touch-friendly');
+assert.match(css, /\.lm-turn-records li \{ grid-template-columns: 1fr; gap: 2px; \}/u,
+    'per-turn records must collapse to one column on phones');
 assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/u,
     'visible text must not use fixed pixel sizes below 14px');
 
-console.log('mobile UI smoke: 23/23 passed');
+console.log('mobile UI smoke: responsive and readable timeline passed');

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 
 const { buildRebuildSegmentRanges, handleHistoryRebuildCommit, validateHistorySegment } = await import('../src/rebuild.js');
 const { validateChapterArchive } = await import('../src/archive.js');
-const { isUsableMemoryEntry } = await import('../src/quality.js');
+const { displayNarrativeText, isUsableMemoryEntry } = await import('../src/quality.js');
+const { normalizedTurnSummaries, uncoveredTurnSummaryGroups } = await import('../src/ui/panel.js');
 const { renderL1Block } = await import('../src/render.js');
 const { validateVolumeResult } = await import('../src/volume.js');
 
@@ -72,8 +73,20 @@ for (const entry of [
     { ...usable, evidence: '' },
 ]) assert.equal(isUsableMemoryEntry(entry), false);
 assert.equal(isUsableMemoryEntry(usable), true);
+assert.equal(displayNarrativeText('<user>说明偏好，林许作出回应。', { name1: '伯滔' }), '伯滔说明偏好，林许作出回应。',
+    'stable internal user labels must be human-readable in the UI');
 assert.doesNotMatch(renderL1Block({ state_table: { entries: [usable, { ...usable, id: 'bad', value: 'undefined' }] } }), /undefined/u,
     'injection must omit quarantined-quality entries');
+
+const visibleTurns = normalizedTurnSummaries({ turn_summaries: [
+    { pairIndex: 2, summary: '第三轮' }, { pairIndex: 0, summary: '第一轮' },
+    { pairIndex: 1, summary: '第二轮' }, { pairIndex: 7, summary: '尾部第一轮' },
+    { pairIndex: 8, summary: '尾部第二轮' }, { pairIndex: 9, summary: '' },
+] });
+assert.deepEqual(visibleTurns.map(item => item.pairIndex), [0, 1, 2, 7, 8],
+    'visible per-turn records must be valid and chronologically ordered');
+assert.deepEqual(uncoveredTurnSummaryGroups(visibleTurns, [{ floor_range: [0, 2] }]).map(group => group.map(item => item.pairIndex)), [[7, 8]],
+    'records not yet merged into a chapter must remain visible as a contiguous tail group');
 
 const chapters = [{ id: 'ch_001' }, { id: 'ch_002' }];
 assert.equal(validateVolumeResult({ summary: '林许完整回顾', covered_chapter_ids: ['ch_001'] }, chapters, ['林许']).ok, false);
@@ -137,4 +150,4 @@ assert.equal(commitData.floor_events.find(event => event.pairIndex === 2).entryC
     'rebuilt facts must produce fresh fork-replay events');
 assert.equal(commitData.branch_checkpoints[0].anchorPairIndex, -1, 'fork replay must start from a clean rebuilt seed');
 
-console.log('rebuild quality smoke: validation gates and atomic replacement passed');
+console.log('rebuild quality smoke: validation gates, visible turn records, and atomic replacement passed');

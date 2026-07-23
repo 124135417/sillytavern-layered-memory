@@ -35,6 +35,10 @@ const requiredCopy = [
     '开发者工具',
     '查看发送给模型的内容',
     '这次出了什么问题？',
+    '查看本章',
+    '条逐轮记录',
+    '尚未合并的剧情记录',
+    '已生成 ${turnSummaryCount} / ${total} 条逐轮记录',
 ];
 for (const copy of requiredCopy) {
     assert.ok(panel.includes(copy), `missing plain-language UI copy: ${copy}`);
@@ -70,4 +74,4 @@ assert.ok(auxiliaryModel.includes('listDirectModels'),
 assert.ok(!auxiliaryModel.includes('请配置 Connection Profile'),
     'connection errors should not require SillyTavern connection-manager jargon');
 
-console.log('UI copy smoke: 39/39 passed');
+console.log('UI copy smoke: plain-language timeline and settings copy passed');

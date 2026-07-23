@@ -542,6 +542,15 @@ body.lm-memory-center-open {
 .lm-key-events ol { display: grid; gap: 8px; padding: 0; margin: 8px 0 0; list-style: none; }
 .lm-key-events li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.55; }
 .lm-key-events li > span { color: var(--lm-muted); font-weight: 650; white-space: nowrap; }
+.lm-turn-records { max-width: 78ch; margin: 14px 0 10px; border-top: 1px solid var(--lm-border); }
+.lm-turn-records > summary { display: flex; align-items: center; min-height: 44px; padding: 8px 0; cursor: pointer; color: var(--lm-text); font-size: var(--lm-type-small); font-weight: 700; line-height: 1.45; }
+.lm-turn-records > summary::marker { color: var(--lm-accent); }
+.lm-turn-records > p { margin: 0 0 10px; color: var(--lm-muted); font-size: var(--lm-type-small); font-weight: 600; line-height: 1.55; }
+.lm-turn-records ol { display: grid; padding: 0; margin: 0; list-style: none; }
+.lm-turn-records li { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--lm-border); color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.6; }
+.lm-turn-records li > span { color: var(--lm-muted); font-weight: 700; white-space: nowrap; }
+.lm-turn-records li > p { min-width: 0; margin: 0; color: var(--lm-text); font-weight: 600; overflow-wrap: anywhere; }
+.lm-turn-records-loose { max-width: none; margin: 18px clamp(18px, 3vw, 34px) 8px 48px; padding: 0 16px 8px; background: var(--lm-surface-soft); border: 1px solid var(--lm-border-strong); border-radius: var(--lm-radius-sm); }
 .lm-keywords { display: flex; flex-wrap: wrap; gap: 5px; }
 .lm-row-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 9px; }
 
@@ -709,6 +718,8 @@ body.lm-memory-center-open {
     .lm-timeline { margin-right: 14px; margin-left: 26px; }
     .lm-chapter-card > header { display: grid; }
     .lm-key-events li { grid-template-columns: 1fr; gap: 2px; }
+    .lm-turn-records li { grid-template-columns: 1fr; gap: 2px; }
+    .lm-turn-records-loose { margin-right: 14px; margin-left: 14px; padding-right: 12px; padding-left: 12px; }
     .lm-notice-strip article { align-items: flex-start; }
     .lm-review-list { padding: 14px; }
     .lm-review-card { grid-template-columns: 3px 1fr; }

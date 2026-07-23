@@ -32,7 +32,7 @@ import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
 import { recordManualEvent } from '../branch.js';
-import { displayEntityName, usableMemoryEntries } from '../quality.js';
+import { displayEntityName, displayNarrativeText, usableMemoryEntries } from '../quality.js';
 
 const ROOT_ID = 'layered-memory-panel';
 const DRAWER_ID = 'layered-memory-drawer';
@@ -191,10 +191,11 @@ function renderHistoryBackfillStatus(snapshot = getHistoryRebuildSnapshot()) {
     const canStop = snapshot.status === 'running';
     const startLabel = ['stopped', 'error'].includes(snapshot.status) ? '继续安全重建' : snapshot.status === 'complete' ? '重新安全重建' : '安全重建旧结果';
     const waiting = snapshot.queued > 0 ? ` · 还有 ${snapshot.queued} 项等待处理` : '';
+    const turnSummaryCount = Math.min(total, Number(snapshot.turnSummaryCount) || 0);
     return `<div class="lm-backfill-card" data-state="${escapeHtml(snapshot.status)}" aria-live="polite">
         <div class="lm-backfill-heading"><div><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${completed} / ${total} 轮</strong></div>
         <progress max="100" value="${percent}" aria-label="旧聊天安全重建进度：${percent}%">${percent}%</progress>
-        <div class="lm-backfill-meta"><span>${percent}% 已完成${escapeHtml(waiting)}</span>${snapshot.inFlight ? '<span>当前有 1 项正在处理</span>' : ''}</div>
+        <div class="lm-backfill-meta"><span>${percent}% 已完成${escapeHtml(waiting)}</span><span>已生成 ${turnSummaryCount} / ${total} 条逐轮记录</span>${snapshot.inFlight ? '<span>当前有 1 项正在处理</span>' : ''}</div>
         <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-migrate" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button><button type="button" class="lm-text-button" id="lm-migrate-abort" ${canStop ? '' : 'disabled'}>停止重建</button></div>
     </div>`;
 }
@@ -908,14 +909,19 @@ function openReportDialog({ entryId = null, type = 'miss', pairIndex = null } = 
 function renderChaptersTab() {
     const data = getChatData();
     const chapters = [...(data.chapters || [])].sort((a, b) => (b.floor_range?.[1] || 0) - (a.floor_range?.[1] || 0));
+    const turnSummaries = normalizedTurnSummaries(data);
+    const looseGroups = uncoveredTurnSummaryGroups(turnSummaries, chapters);
     const volumes = data.volumes || [];
     let html = `<div class="lm-page-heading"><div><span class="lm-kicker">剧情回顾</span><h3>剧情时间线</h3><p>插件会按时间整理较早的剧情。修改过原对话时，对应摘要会自动重新整理。</p></div><div class="lm-page-count">${chapters.length} 章 · ${volumes.length} 份长期摘要</div></div>`;
     if (volumes.length) {
         html += '<section class="lm-volume-strip"><h4>很久以前的剧情</h4><div>';
         for (const v of volumes) {
-            html += `<article class="lm-volume-card"><header><b>${escapeHtml(formatArchiveLabel(v.id, '长期摘要'))}</b>${v.stale ? '<span class="lm-state-tag" data-state="error">等待重新整理</span>' : '<span class="lm-state-tag">已整理</span>'}</header><p>${escapeHtml(v.summary)}</p></article>`;
+            html += `<article class="lm-volume-card"><header><b>${escapeHtml(formatArchiveLabel(v.id, '长期摘要'))}</b>${v.stale ? '<span class="lm-state-tag" data-state="error">等待重新整理</span>' : '<span class="lm-state-tag">已整理</span>'}</header><p>${escapeHtml(displayNarrativeText(v.summary))}</p></article>`;
         }
         html += '</div></section>';
+    }
+    for (const group of looseGroups) {
+        html += renderTurnSummaryDisclosure(group, { loose: true });
     }
     html += '<section class="lm-timeline" aria-label="章节列表">';
     for (const c of chapters) {
@@ -923,11 +929,13 @@ function renderChaptersTab() {
             : c.demoted ? '<span class="lm-state-tag">已整理进长期摘要</span>'
                 : '<span class="lm-state-tag" data-state="success">摘要已保存</span>';
         const events = Array.isArray(c.key_events) ? c.key_events.filter(event => event?.text) : [];
+        const chapterTurns = turnSummaries.filter(item => item.pairIndex >= c.floor_range?.[0] && item.pairIndex <= c.floor_range?.[1]);
         html += `<article class="lm-chapter-card" data-cid="${escapeHtml(c.id)}">
             <span class="lm-timeline-node" aria-hidden="true"></span>
             <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4></div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}</div></header>
-            <p>${escapeHtml(c.summary)}</p>
-            ${events.length ? `<details class="lm-key-events"><summary>查看 ${events.length} 个关键事件</summary><ol>${events.map(event => `<li><span>第 ${event.floor_range?.[0]}–${event.floor_range?.[1]} 轮</span>${escapeHtml(event.text)}</li>`).join('')}</ol></details>` : ''}
+            <p>${escapeHtml(displayNarrativeText(c.summary))}</p>
+            ${events.length ? `<details class="lm-key-events"><summary>查看 ${events.length} 个关键事件</summary><ol>${events.map(event => `<li><span>第 ${event.floor_range?.[0]}–${event.floor_range?.[1]} 轮</span>${escapeHtml(displayNarrativeText(event.text))}</li>`).join('')}</ol></details>` : ''}
+            ${chapterTurns.length ? renderTurnSummaryDisclosure(chapterTurns) : ''}
             ${c.keywords?.length ? `<div class="lm-keywords">${c.keywords.map(k => `<span>${escapeHtml(k)}</span>`).join('')}</div>` : ''}
             <div class="lm-row-actions">
                 <button type="button" data-act="edit" class="lm-text-button">编辑摘要</button>
@@ -940,6 +948,42 @@ function renderChaptersTab() {
         html += '<div class="lm-empty-state"><span class="fa-solid fa-book-open" aria-hidden="true"></span><h3>还没有可以回顾的章节</h3><p>聊天达到设定轮数后，插件会自动整理出第一段剧情摘要。</p></div>';
     }
     return html;
+}
+
+export function normalizedTurnSummaries(data) {
+    return (data?.turn_summaries || [])
+        .filter(item => Number.isInteger(item?.pairIndex) && String(item?.summary || '').trim())
+        .map(item => ({ pairIndex: item.pairIndex, summary: String(item.summary).trim() }))
+        .sort((a, b) => a.pairIndex - b.pairIndex);
+}
+
+export function uncoveredTurnSummaryGroups(turnSummaries, chapters) {
+    const covered = turnSummaries.filter(item => (chapters || []).some(chapter => {
+        const [start, end] = chapter.floor_range || [];
+        return Number.isInteger(start) && Number.isInteger(end) && item.pairIndex >= start && item.pairIndex <= end;
+    }));
+    const coveredFloors = new Set(covered.map(item => item.pairIndex));
+    const groups = [];
+    for (const item of turnSummaries.filter(summary => !coveredFloors.has(summary.pairIndex))) {
+        const current = groups.at(-1);
+        if (current && current.at(-1).pairIndex + 1 === item.pairIndex) current.push(item);
+        else groups.push([item]);
+    }
+    return groups.reverse();
+}
+
+function renderTurnSummaryDisclosure(items, { loose = false } = {}) {
+    if (!items.length) return '';
+    const start = items[0].pairIndex;
+    const end = items.at(-1).pairIndex;
+    const label = loose
+        ? `尚未合并的剧情记录 · 第 ${start}–${end} 轮 · ${items.length} 条`
+        : `查看本章 ${items.length} 条逐轮记录`;
+    return `<details class="lm-turn-records ${loose ? 'lm-turn-records-loose' : ''}">
+        <summary>${escapeHtml(label)}</summary>
+        ${loose ? '<p>这些记录还没有凑满一章；Fork 或精简到这里时，插件会直接使用它们。</p>' : ''}
+        <ol>${items.map(item => `<li><span>第 ${item.pairIndex} 轮</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p></li>`).join('')}</ol>
+    </details>`;
 }
 
 function bindChaptersTab(body) {

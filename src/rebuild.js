@@ -405,6 +405,7 @@ export function getHistoryRebuildSnapshot() {
         const total = historyPairs(data).length;
         return {
             status: 'idle', phase: '尚未开始', stage: '尚未开始', total, completed: 0,
+            turnSummaryCount: (data.turn_summaries || []).length,
             queued: 0, inFlight: null, failed: [], paused: false,
         };
     }
@@ -414,6 +415,9 @@ export function getHistoryRebuildSnapshot() {
     const failed = queue.failed.filter(job => REBUILD_JOB_TYPES.includes(job.type));
     return {
         ...state,
+        turnSummaryCount: state.status === 'complete'
+            ? (data.turn_summaries || []).length
+            : (state.turn_summaries || []).length,
         queued: queued.length,
         inFlight,
         failed,
