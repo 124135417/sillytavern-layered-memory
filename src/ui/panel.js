@@ -36,6 +36,7 @@ import { extractAiBody } from '../body.js';
 import { recordManualEvent } from '../branch.js';
 import { displayEntityName, displayNarrativeText, usableMemoryEntries } from '../quality.js';
 import { markChapterStaleForTurnSummaryEdit } from '../chapter.js';
+import { activateEditedFactCandidate, activateFactCandidate, dismissFactCandidate, factCandidateView } from '../facts.js';
 
 const ROOT_ID = 'layered-memory-panel';
 const DRAWER_ID = 'layered-memory-drawer';
@@ -45,6 +46,7 @@ const MENU_ENTRY_ID = 'layered-memory-menu-entry';
 let lastDrawerTrigger = null;
 let lastConnectionTest = null;
 let settingsDirty = false;
+let currentFactView = 'active';
 
 export function injectPanel() {
     if (document.getElementById(DRAWER_ID)) {
@@ -518,6 +520,8 @@ function renderShellStatus() {
 function renderStateTab() {
     const data = getChatData();
     const entries = usableMemoryEntries(data);
+    const candidates = factCandidateView(data);
+    const inactiveCandidates = candidates.filter(item => !['active', 'dismissed'].includes(item.status));
     const quarantined = data.quarantined_entries || [];
     const notices = data.notices || [];
     const rebuild = data.history_rebuild;
@@ -550,10 +554,22 @@ function renderStateTab() {
                 <button type="button" class="lm-button lm-button-primary" data-empty-add>添加第一条记忆</button>
             </div>`;
     }
+    const candidateItems = currentFactView === 'all'
+        ? candidates
+        : currentFactView === 'inactive' ? inactiveCandidates : [];
+    const candidateList = candidateItems.length
+        ? `<div class="lm-discovery-list">${candidateItems.map(renderFactCandidateCard).join('')}</div>`
+        : `<div class="lm-empty-state lm-compact-empty"><h3>${currentFactView === 'inactive' ? '没有等待采用的事实' : '还没有发现事实'}</h3><p>${currentFactView === 'inactive' ? '当前没有被覆盖、未验证或尚未选择的内容。' : '完成逐轮整理后，模型发现的内容会完整保留在这里。'}</p></div>`;
     return `
         <div class="lm-dashboard">
             <main class="lm-memory-main" id="lm-memory-main">
                 ${statusBanners}
+                <div class="lm-fact-overview" aria-label="事实记录概览">
+                    <button type="button" data-fact-view="active" class="${currentFactView === 'active' ? 'active' : ''}"><strong>${entries.length}</strong><span>当前生效</span></button>
+                    <button type="button" data-fact-view="all" class="${currentFactView === 'all' ? 'active' : ''}"><strong>${candidates.length}</strong><span>所有发现</span></button>
+                    <button type="button" data-fact-view="inactive" class="${currentFactView === 'inactive' ? 'active' : ''}"><strong>${inactiveCandidates.length}</strong><span>未生效</span></button>
+                </div>
+                <p class="lm-fact-explainer">“所有发现”保留模型曾经找到的内容；只有“当前生效”会发送给模型。被覆盖或未采用的事实不会再悄悄消失。</p>
                 <div class="lm-memory-toolbar">
                     <label class="lm-search">
                         <span class="fa-solid fa-magnifying-glass" aria-hidden="true"></span>
@@ -568,16 +584,60 @@ function renderStateTab() {
                     <button type="button" class="lm-button lm-button-primary" id="lm-add-entry"><span aria-hidden="true">＋</span> 添加记忆</button>
                 </div>
                 <div class="lm-memory-meta">
-                    <span>当前确立的事实</span>
-                    <small>${entries.length} 条</small>
+                    <span>${currentFactView === 'active' ? '当前确立的事实' : currentFactView === 'all' ? '模型发现过的全部事实' : '尚未加入当前状态的事实'}</span>
+                    <small>${currentFactView === 'active' ? entries.length : candidateItems.length} 条</small>
                 </div>
-                <div id="lm-memory-groups">${groups}</div>
+                <div id="lm-memory-groups">${currentFactView === 'active' ? groups : candidateList}</div>
                 <p class="lm-no-results" hidden>没有找到匹配的记忆。可以试试人物名、物品名或对话轮数。</p>
             </main>
             ${renderTaskRail()}
         </div>
         ${renderInjectionFooter()}
     `;
+}
+
+function renderFactCandidateCard(candidate) {
+    const fact = candidate.fact || {};
+    const subject = fact.object
+        ? `${displayEntityName(fact.subject)} → ${displayEntityName(fact.object)}`
+        : displayEntityName(fact.subject);
+    const labels = {
+        active: '正在生效',
+        unselected: '尚未选择',
+        superseded: '曾被覆盖',
+        unverified: '需要核对',
+        dismissed: '已忽略',
+    };
+    const searchable = [fact.subject, fact.object, fact.topic, fact.value, fact.evidence, candidate.reason].filter(Boolean).join(' ').toLowerCase();
+    const canActivate = ['unselected', 'superseded', 'dismissed'].includes(candidate.status);
+    const canEdit = candidate.status !== 'active';
+    return `<article class="lm-discovery-card" data-candidate-id="${escapeHtml(candidate.id)}" data-slot="${escapeHtml(fact.slot)}" data-search="${escapeHtml(searchable)}" data-status="${escapeHtml(candidate.status)}">
+        <div class="lm-discovery-head"><span class="lm-discovery-status">${escapeHtml(labels[candidate.status] || candidate.status)}</span><span>${escapeHtml(formatFloorLabel(candidate.floor))}</span></div>
+        <h3>${escapeHtml(readableCandidateText(subject, '主体需要补充'))}</h3>
+        ${fact.topic ? `<small class="lm-fact-topic">具体事项：${escapeHtml(fact.topic)}</small>` : ''}
+        <p>${escapeHtml(readableCandidateText(fact.value, '事实内容需要补充'))}</p>
+        <p class="lm-discovery-reason">${escapeHtml(candidate.reason)}</p>
+        ${fact.evidence ? `<details class="lm-evidence"><summary>查看原文依据</summary><blockquote>${escapeHtml(fact.evidence)}</blockquote></details>` : ''}
+        <div class="lm-discovery-actions">
+            ${canActivate ? '<button type="button" class="lm-button lm-button-primary" data-candidate-action="activate">加入生效事实</button>' : candidate.status === 'active' ? '<span class="lm-active-note">这条内容已经发送给模型</span>' : ''}
+            ${canEdit ? `<button type="button" class="lm-text-button" data-candidate-action="edit">${candidate.status === 'unverified' ? '核对后加入' : '编辑后加入'}</button>` : ''}
+            ${candidate.status !== 'active' && candidate.status !== 'dismissed' ? '<button type="button" class="lm-text-button" data-candidate-action="dismiss">不采用</button>' : ''}
+        </div>
+    </article>`;
+}
+
+function readableCandidateText(value, fallback) {
+    const text = String(value ?? '').trim();
+    return !text || ['undefined', 'null', '未填写事实', '未命名主体'].includes(text.toLowerCase()) ? fallback : text;
+}
+
+function editableCandidateFact(fact = {}) {
+    return {
+        ...fact,
+        subject: readableCandidateText(fact.subject, ''),
+        object: readableCandidateText(fact.object, ''),
+        value: readableCandidateText(fact.value, ''),
+    };
 }
 
 function renderMemoryCard(entry) {
@@ -719,7 +779,7 @@ function renderInjectionFooter() {
     const settings = getSettings();
     const handoff = data.context_handoff;
     const removedThrough = Number.isInteger(handoff?.removedThrough) ? handoff.removedThrough : -1;
-    const l1 = renderL1Block(data, settings.budgetL1);
+    const l1 = renderL1Block(data, settings.budgetL1, SillyTavern.getContext());
     const l2 = renderL2Block(data, { budget: settings.budgetL2, throughPair: removedThrough });
     const hits = settings.l4Enabled ? retrieveHits(data, settings.budgetL4) : [];
     const l4 = settings.l4Enabled ? renderL4Block(hits, settings.budgetL4) : '';
@@ -774,6 +834,10 @@ function renderInjectionFooter() {
 }
 
 function bindStateTab(body) {
+    body.querySelectorAll('[data-fact-view]').forEach(button => button.addEventListener('click', () => {
+        currentFactView = button.dataset.factView;
+        renderActiveTab();
+    }));
     bindQueueControls(body);
     body.querySelectorAll('[data-dismiss-notice]').forEach(button => button.addEventListener('click', async () => {
         const id = button.closest('[data-notice-id]')?.dataset.noticeId;
@@ -823,6 +887,12 @@ function bindStateTab(body) {
             });
             group.hidden = groupVisible === 0;
         });
+        body.querySelectorAll('.lm-discovery-card').forEach(card => {
+            const match = (!query || card.dataset.search?.includes(query))
+                && (!slot || card.dataset.slot === slot);
+            card.hidden = !match;
+            if (match) visible += 1;
+        });
         const empty = body.querySelector('.lm-no-results');
         if (empty) {
             empty.hidden = visible > 0 || getChatData().state_table.entries.length === 0;
@@ -830,6 +900,53 @@ function bindStateTab(body) {
     };
     body.querySelector('#lm-memory-search')?.addEventListener('input', applyMemoryFilter);
     body.querySelector('#lm-slot-filter')?.addEventListener('change', applyMemoryFilter);
+
+    body.querySelectorAll('.lm-discovery-card[data-candidate-id]').forEach(card => {
+        const candidateId = card.dataset.candidateId;
+        const anchor = () => {
+            const pair = getPairs().filter(item => item.sealed).at(-1);
+            return pair ? { floorKey: pair.floorKey, pairIndex: pair.pairIndex, contentFingerprint: pair.contentFingerprint } : {};
+        };
+        card.querySelector('[data-candidate-action="activate"]')?.addEventListener('click', async () => {
+            const data = getChatData();
+            const result = activateFactCandidate(data, candidateId, anchor());
+            if (!result || result.error) {
+                const candidate = factCandidateView(data).find(item => item.id === candidateId);
+                const draft = await openEntryEditor(editableCandidateFact(candidate?.fact));
+                if (!draft) return;
+                const edited = activateEditedFactCandidate(data, candidateId, { ...draft, topic: candidate?.fact?.topic || draft.value, evidence: '' }, anchor());
+                for (const replaced of edited?.replaced || []) recordManualEvent(data, { op: 'delete', before: replaced, after: null, reason: 'candidate_edit_superseded', sourceCandidate: edited.candidate });
+                if (edited?.entry && !edited.existed) recordManualEvent(data, { op: 'upsert', before: null, after: edited.entry, reason: 'candidate_edit_activate', sourceCandidate: edited.candidate });
+            } else if (!result.existed) {
+                for (const replaced of result.replaced || []) {
+                    recordManualEvent(data, { op: 'delete', before: replaced, after: null, reason: 'candidate_superseded', sourceCandidate: result.candidate });
+                }
+                recordManualEvent(data, { op: 'upsert', before: null, after: result.entry, reason: 'candidate_activate', sourceCandidate: result.candidate });
+            }
+            await saveChatData(data);
+            updateInjection();
+            toastr?.success?.('已经加入当前事实，下一次请求会发送给模型。');
+            renderActiveTab();
+        });
+        card.querySelector('[data-candidate-action="edit"]')?.addEventListener('click', async () => {
+            const data = getChatData();
+            const candidate = factCandidateView(data).find(item => item.id === candidateId);
+            const draft = await openEntryEditor(editableCandidateFact(candidate?.fact));
+            if (!draft) return;
+            const edited = activateEditedFactCandidate(data, candidateId, { ...draft, topic: candidate?.fact?.topic || draft.value, evidence: '' }, anchor());
+            for (const replaced of edited?.replaced || []) recordManualEvent(data, { op: 'delete', before: replaced, after: null, reason: 'candidate_edit_superseded', sourceCandidate: edited.candidate });
+            if (edited?.entry && !edited.existed) recordManualEvent(data, { op: 'upsert', before: null, after: edited.entry, reason: 'candidate_edit_activate', sourceCandidate: edited.candidate });
+            await saveChatData(data);
+            updateInjection();
+            renderActiveTab();
+        });
+        card.querySelector('[data-candidate-action="dismiss"]')?.addEventListener('click', async () => {
+            const data = getChatData();
+            dismissFactCandidate(data, candidateId, anchor());
+            await saveChatData(data);
+            renderActiveTab();
+        });
+    });
 
     body.querySelector('#lm-preview-injection')?.addEventListener('click', () => {
         const dialog = body.querySelector('#lm-injection-dialog');
@@ -1052,7 +1169,7 @@ function renderChaptersTab() {
         const events = Array.isArray(c.key_events) ? c.key_events.filter(event => event?.text) : [];
         html += `<article class="lm-chapter-card" data-cid="${escapeHtml(c.id)}" data-staged="${staged ? 'true' : 'false'}">
             <span class="lm-timeline-node" aria-hidden="true"></span>
-            <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4></div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}${qualityState}</div></header>
+            <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4>${c.story_time_range?.label ? `<small class="lm-story-time">剧情时间：${escapeHtml(c.story_time_range.label)}</small>` : '<small class="lm-story-time lm-time-unknown">剧情时间未明确</small>'}</div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}${qualityState}</div></header>
             <p>${escapeHtml(displayNarrativeText(c.summary))}</p>
             ${events.length ? `<details class="lm-key-events"><summary>查看 ${events.length} 个关键事件</summary><ol>${events.map(event => `<li><span>第 ${event.floor_range?.[0]}–${event.floor_range?.[1]} 轮</span>${escapeHtml(displayNarrativeText(event.text))}</li>`).join('')}</ol></details>` : ''}
             ${c.keywords?.length ? `<div class="lm-keywords">${c.keywords.map(k => `<span>${escapeHtml(k)}</span>`).join('')}</div>` : ''}
@@ -1073,7 +1190,7 @@ function renderChaptersTab() {
 export function normalizedTurnSummaries(data) {
     return (data?.turn_summaries || [])
         .filter(item => Number.isInteger(item?.pairIndex) && String(item?.summary || '').trim())
-        .map(item => ({ pairIndex: item.pairIndex, summary: String(item.summary).trim(), manual_override: Boolean(item.manual_override) }))
+        .map(item => ({ pairIndex: item.pairIndex, summary: String(item.summary).trim(), story_time: item.story_time || null, manual_override: Boolean(item.manual_override) }))
         .sort((a, b) => a.pairIndex - b.pairIndex);
 }
 
@@ -1105,7 +1222,7 @@ function renderTurnSummaryDisclosure(items, { loose = false, draft = false, edit
         <summary>${escapeHtml(label)}</summary>
         ${loose ? '<p>这些记录还没有凑满一章；Fork 或精简到这里时，插件会直接使用它们。</p>' : ''}
         ${draft && partial ? '<p>这部分会保留为逐轮记录，不会因为不足一章而丢失；以后聊满设定轮数后再合并成章节。</p>' : ''}
-        <ol>${items.map(item => `<li><span>第 ${item.pairIndex} 轮${item.manual_override ? '<em>人工修改</em>' : ''}</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p>${editable ? `<button type="button" class="lm-text-button" data-turn-edit="${item.pairIndex}" data-draft="${draft ? 'true' : 'false'}">编辑</button>` : ''}</li>`).join('')}</ol>
+        <ol>${items.map(item => `<li><span>第 ${item.pairIndex} 轮${item.manual_override ? '<em>人工修改</em>' : ''}${item.story_time?.label ? `<em class="lm-time-label">${escapeHtml(item.story_time.label)}</em>` : ''}</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p>${editable ? `<button type="button" class="lm-text-button" data-turn-edit="${item.pairIndex}" data-draft="${draft ? 'true' : 'false'}">编辑</button>` : ''}</li>`).join('')}</ol>
     </details>`;
 }
 
@@ -1199,12 +1316,17 @@ function renderReviewTab() {
         const risk = item.kind === 'flag_conflict' ? 'error' : item.kind === 'proofread' ? 'warning' : 'info';
         const relatedEntry = entries.find(entry => entry.id === item.entry_id);
         const title = item.subject || relatedEntry?.subject || '一条记忆建议';
+        const needsEdit = (item.kind === 'flag_conflict' && !item.candidate_id)
+            || (item.kind === 'proofread' && item.op !== 'add');
+        const canApprove = item.kind === 'volume_compress_ask' || Boolean(item.candidate_id)
+            || item.kind === 'proofread' || Boolean(relatedEntry);
+        const approveLabel = needsEdit ? '查看并编辑' : '采用这条建议';
         html += `<article class="lm-review-card" data-rid="${escapeHtml(item.id)}">
             <div class="lm-review-mark" data-state="${risk}" aria-hidden="true"></div>
             <div class="lm-review-copy"><span class="lm-state-tag" data-state="${risk}">${kind}</span><h4>${escapeHtml(title)}</h4><p>${escapeHtml(formatReviewNote(item.note || item.value || '需要你的确认'))}</p>${item.object ? `<small>关联：${escapeHtml(item.object)}</small>` : ''}</div>
             <div class="lm-row-actions">
-                <button type="button" data-act="reject" class="lm-text-button">${isAlert ? '知道了' : '不采用'}</button>
-                ${isAlert ? '' : '<button type="button" data-act="approve" class="lm-button lm-button-primary">采用这条建议</button>'}
+                <button type="button" data-act="reject" class="lm-text-button">不采用</button>
+                ${canApprove ? `<button type="button" data-act="approve" class="lm-button lm-button-primary">${approveLabel}</button>` : ''}
             </div>
         </article>`;
     }
@@ -1220,8 +1342,17 @@ function bindReviewTab(body) {
         const id = li.dataset.rid;
         li.querySelector('[data-act="reject"]')?.addEventListener('click', async () => {
             const data = getChatData();
+            const item = data.review_queue.find(x => x.id === id);
+            if (item?.candidate_id) {
+                const pair = getPairs().filter(candidate => candidate.sealed).at(-1);
+                dismissFactCandidate(data, item.candidate_id, pair ? {
+                    floorKey: pair.floorKey,
+                    pairIndex: pair.pairIndex,
+                    contentFingerprint: pair.contentFingerprint,
+                } : {});
+            }
             data.review_queue = data.review_queue.filter(x => x.id !== id);
-            await saveChatData();
+            await saveChatData(data);
             renderActiveTab();
         });
         li.querySelector('[data-act="approve"]')?.addEventListener('click', async () => {
@@ -1230,28 +1361,75 @@ function bindReviewTab(body) {
             if (!item) {
                 return;
             }
+            let applied = false;
             if (item.kind === 'volume_compress_ask') {
                 enqueue('volume_compress', { confirmed: true, force: true }, QUEUE_PRIORITY.volume_compress);
-            } else if (item.kind === 'proofread' && item.op === 'add') {
-                const entry = {
-                    id: `e_${String(data.progress.next_entry_seq++).padStart(4, '0')}`,
-                    slot: item.slot || 'other',
-                    subject: item.subject || '',
-                    object: item.object || '',
-                    value: item.value || '',
-                    cause: '',
-                    established_floor: 'proofread',
-                    updated_floor: 'proofread',
-                    evidence: '',
-                    pinned: false,
-                    source: 'proofread',
+                applied = true;
+            } else if (item.kind === 'proofread') {
+                const current = item.entry_id ? data.state_table.entries.find(entry => entry.id === item.entry_id) : null;
+                if (item.op !== 'add' && !current) {
+                    toastr?.error?.('原来的事实已经不存在，这条建议没有被删除。');
+                    return;
+                }
+                const proposed = {
+                    ...(current || {}),
+                    slot: item.slot || current?.slot || 'other',
+                    subject: item.subject || current?.subject || '',
+                    object: item.object || current?.object || '',
+                    value: item.value || current?.value || '',
                 };
-                data.state_table.entries.push(entry);
+                const draft = await openEntryEditor(proposed);
+                if (!draft) return;
+                if (current) {
+                    const before = structuredClone(current);
+                    Object.assign(current, draft, { source: 'manual', manual_override: true, updated_floor: 'manual' });
+                    data.state_table.version += 1;
+                    recordManualEvent(data, { op: 'upsert', before, after: current, reason: 'proofread_edit_approval' });
+                } else {
+                    const entry = {
+                        id: `e_${String(data.progress.next_entry_seq++).padStart(4, '0')}`,
+                        ...draft,
+                        established_floor: 'proofread', updated_floor: 'manual', evidence: '',
+                        pinned: false, source: 'manual', manual_override: true,
+                    };
+                    data.state_table.entries.push(entry);
+                    data.state_table.version += 1;
+                    recordManualEvent(data, { op: 'upsert', after: entry, reason: 'proofread_add_approval' });
+                }
+                applied = true;
+            } else if (item.kind === 'flag_conflict' && item.candidate_id) {
+                const pair = getPairs().filter(candidate => candidate.sealed).at(-1);
+                const result = activateFactCandidate(data, item.candidate_id, pair ? {
+                    floorKey: pair.floorKey,
+                    pairIndex: pair.pairIndex,
+                    contentFingerprint: pair.contentFingerprint,
+                } : {});
+                if (!result || result.error) {
+                    toastr?.error?.(result?.error || '这条候选事实已经不存在，待确认项仍会保留。');
+                    return;
+                }
+                if (result?.entry && !result.existed) {
+                    for (const replaced of result.replaced || []) {
+                        recordManualEvent(data, { op: 'delete', before: replaced, after: null, reason: 'conflict_candidate_superseded', sourceCandidate: result.candidate });
+                    }
+                    recordManualEvent(data, { op: 'upsert', before: null, after: result.entry, reason: 'conflict_candidate_approval', sourceCandidate: result.candidate });
+                }
+                applied = true;
+            } else if (item.kind === 'flag_conflict' && item.entry_id) {
+                const current = data.state_table.entries.find(entry => entry.id === item.entry_id);
+                if (!current) {
+                    toastr?.error?.('发生矛盾的原事实已经不存在，待确认项仍会保留。');
+                    return;
+                }
+                const before = structuredClone(current);
+                const draft = await openEntryEditor(current);
+                if (!draft) return;
+                Object.assign(current, draft, { source: 'manual', manual_override: true, updated_floor: 'manual' });
                 data.state_table.version += 1;
-                recordManualEvent(data, { op: 'upsert', after: entry, reason: 'proofread_approval' });
-            } else if (item.entry_id && item.kind === 'flag_conflict') {
-                // approve conflict = no auto change; just dismiss (user may edit manually)
+                recordManualEvent(data, { op: 'upsert', before, after: current, reason: 'conflict_manual_resolution' });
+                applied = true;
             }
+            if (!applied) return;
             data.review_queue = data.review_queue.filter(x => x.id !== id);
             await saveChatData(data);
             updateInjection();

@@ -86,6 +86,7 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
         adds: [],
         updates: [],
         conflicts: [],
+        storyTimeRaw: raw?.story_time ?? null,
         pipeline,
     };
     if (!raw || typeof raw !== 'object') {
@@ -111,6 +112,7 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
                 if (!item.old_value || !item.new_value) continue;
                 out.adds.push({
                     slot,
+                    topic: item.topic,
                     subject: item.subject,
                     object: item.object ?? '',
                     value: item.new_value ?? item.value,
@@ -122,6 +124,7 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
             } else {
                 out.adds.push({
                     slot,
+                    topic: item.topic,
                     subject: item.subject,
                     object: item.object ?? '',
                     value: item.value ?? item.new_value,

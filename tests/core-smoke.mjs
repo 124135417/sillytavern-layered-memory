@@ -107,6 +107,40 @@ assert.equal(chatData.state_table.entries.length, 0);
 assert.equal(chatData.turn_summaries.length, 0, '按楼回滚必须同时移除剧情记录');
 assert.equal(chatData.floor_events.length, 0, '按楼回滚必须同时移除 Fork 楼层事件');
 
+chatData.state_table.entries.push({ id: 'e_0099', slot: 'relationship', topic: '双方关系状态', subject: '林晚', object: '周衡', value: '仍在冷战', evidence: '两人仍在冷战', source: 'auto' });
+const conflicting = normalizeExtractOutput({
+    turn_summary: '<user>询问两人的关系，周衡声称已经和解。',
+    relationship: [{ topic: '双方关系状态', subject: '林晚', object: '周衡', old_value: '已经和解', new_value: '恢复亲近', evidence: '周衡声称已经和解' }],
+});
+const conflictResult = await mergeExtractResult(conflicting, {
+    pipeline: 'per_floor', sourceText: '周衡声称已经和解', stateTable: chatData.state_table,
+    floorKey: 'floor-conflict', contentFingerprint: 'conflict-fp', pairIndex: 2, floorLabel: 2, source: 'auto',
+});
+assert.deepEqual(conflictResult, { applied: 0, discarded: 1, conflicts: 1 });
+assert.equal(chatData.state_table.entries.find(entry => entry.id === 'e_0099').value, '仍在冷战', 'old_value 冲突不得偷偷覆盖当前事实');
+assert.equal(chatData.review_queue.at(-1).candidate_id != null, true, '冲突必须关联可审阅的事实发现');
+await rollbackFloor('floor-conflict');
+chatData.state_table.entries = chatData.state_table.entries.filter(entry => entry.id !== 'e_0099');
+
+chatData.state_table.entries.push({
+    id: 'e_pinned', slot: 'identity', topic: '组织职位', subject: '顾南', object: '',
+    value: '调查员', evidence: '顾南仍是调查员', source: 'manual', pinned: true,
+});
+const pinnedResult = await mergeExtractResult(normalizeExtractOutput({
+    turn_summary: '<user>询问顾南的职位，顾南称自己已升任队长。',
+    identity: [{ topic: '组织职位', subject: '顾南', object: '', value: '队长', evidence: '顾南称自己已升任队长' }],
+}), {
+    pipeline: 'per_floor', sourceText: '顾南称自己已升任队长', stateTable: chatData.state_table,
+    floorKey: 'floor-pinned', contentFingerprint: 'pinned-fp', pairIndex: 3, floorLabel: 3, source: 'auto',
+});
+assert.equal(pinnedResult.applied, 0);
+assert.equal(chatData.state_table.entries.find(entry => entry.id === 'e_pinned').value, '调查员');
+assert.equal(chatData.fact_ledger.some(candidate => candidate.fact?.subject === '顾南'
+    && candidate.fact?.value === '队长'), true,
+    'a value blocked by a pinned current fact must still remain visible in all discoveries');
+await rollbackFloor('floor-pinned');
+chatData.state_table.entries = chatData.state_table.entries.filter(entry => entry.id !== 'e_pinned');
+
 const bodyMatch = extractAiBody('<thinking>忽略</thinking><content>真正正文</content><table>忽略</table>', '<content>([\\s\\S]*?)</content>');
 assert.equal(bodyMatch.text, '真正正文');
 assert.equal(bodyMatch.mode, 'regex');
@@ -221,4 +255,4 @@ const blank = EMPTY_CHAT_DATA();
 assert.ok(blank.job_queue && Array.isArray(blank.job_queue.failed), '新聊天必须带持久队列结构');
 assert.ok(metadataSaveCount >= 2, '合并与回滚必须保存 metadata');
 
-console.log('core smoke: 35/35 passed');
+console.log('core smoke: fact merge, trim safety, and routing passed');

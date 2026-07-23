@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, EMPTY_CHAT_DATA, MODULE_NAME } from './constants.js';
 import { quarantineInvalidEntries } from './quality.js';
+import { ensureFactLedger } from './facts.js';
 
 export function getContext() {
     return SillyTavern.getContext();
@@ -108,6 +109,7 @@ function getActiveChatData() {
         data.notices = data.notices.filter(item => !/父聊天还没有可继承|从下一轮开始正常记录|开始自动记录/.test(String(item.note || '')));
     }
     quarantineInvalidEntries(data);
+    ensureFactLedger(data);
     return data;
 }
 

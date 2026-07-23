@@ -37,8 +37,17 @@ const parent = {
         { floorKey: 'u2+a2', pairIndex: 2, contentFingerprint: pair(2).contentFingerprint, recordedAt: 300, entryChanges: [{ op: 'upsert', after: { id: 'e_0001', slot: 'identity', subject: '甲', value: '未来身份' } }] },
     ],
     manual_events: [],
+    fact_ledger: [
+        { id: 'fc1', floor: 1, floorKey: 'u1+a1', contentFingerprint: pair(1).contentFingerprint, fact: { slot: 'other', subject: '乙', object: '', value: '分支内发现' } },
+        { id: 'fc2', floor: 2, floorKey: 'u2+a2', contentFingerprint: pair(2).contentFingerprint, fact: { slot: 'other', subject: '甲', object: '', value: '分支外发现' } },
+    ],
+    fact_decisions: [
+        { id: 'fd1', candidateId: 'fc1', action: 'activate', anchorFloorKey: 'u1+a1', anchorPairIndex: 1, anchorFingerprint: pair(1).contentFingerprint },
+        { id: 'fd2', candidateId: 'fc2', action: 'dismiss', anchorFloorKey: 'u2+a2', anchorPairIndex: 2, anchorFingerprint: pair(2).contentFingerprint },
+    ],
     branch_checkpoints: [{
         id: 'cp0', anchorFloorKey: 'u0+a0', anchorPairIndex: 0, anchorFingerprint: pair(0).contentFingerprint, createdAt: 100, reason: 'seed',
+        prefixFingerprints: [{ pairIndex: 0, floorKey: 'u0+a0', contentFingerprint: pair(0).contentFingerprint }],
         stateTable: { version: 1, entries: [{ id: 'e_0001', slot: 'identity', subject: '甲', value: '原身份' }], changelog: [{ op: 'old' }] },
     }],
     chapters: [
@@ -107,6 +116,8 @@ assert.deepEqual(replayed.extracted_keys, ['u0+a0', 'u1+a1']);
 assert.equal(replayed.job_queue.queued.length, 0);
 assert.equal(replayed.history_rebuild, null, 'a fork must not inherit the parent branch rebuild workspace');
 assert.equal(replayed.rebuild_backup, null, 'a fork must not expose the parent branch backup');
+assert.deepEqual(replayed.fact_ledger.map(item => item.id), ['fc1'], 'fork must retain only discoveries grounded inside the verified prefix');
+assert.deepEqual(replayed.fact_decisions.map(item => item.id), ['fd1'], 'fork must retain only decisions grounded inside the verified prefix');
 assert.notEqual(replayed.job_queue.scope_id, 'parent-scope');
 assert.equal(replayed.branch_origin.method, 'checkpoint_replay');
 assert.equal(replayed.branch_checkpoints.every(point => point.stateTable.changelog.length === 0), true,
@@ -150,6 +161,65 @@ assert.equal(alternateSwipe.state_table.entries.some(entry => entry.id === 'e_00
     'same message IDs with different active text must not reuse the old swipe fact');
 assert.deepEqual(alternateSwipe.turn_summaries.map(item => item.pairIndex), [0]);
 assert.deepEqual(alternateSwipe.extracted_keys, ['u0+a0']);
+assert.equal(alternateSwipe.fact_ledger.length, 0, 'a discovery from another swipe must not cross into the branch');
+assert.equal(alternateSwipe.fact_decisions.length, 0, 'a decision from another swipe must not cross into the branch');
+
+const lateCheckpointParent = structuredClone(parent);
+lateCheckpointParent.branch_checkpoints = [{
+    id: 'cp-late', anchorFloorKey: 'u1+a1', anchorPairIndex: 1,
+    anchorFingerprint: pair(1).contentFingerprint,
+    prefixFingerprints: [
+        { pairIndex: 0, floorKey: 'u0+a0', contentFingerprint: pair(0).contentFingerprint },
+        { pairIndex: 1, floorKey: 'u1+a1', contentFingerprint: pair(1).contentFingerprint },
+    ],
+    stateTable: { version: 1, entries: [{ id: 'unsafe-old', slot: 'identity', subject: '甲', value: '旧分支事实' }], changelog: [] },
+    createdAt: 500,
+}];
+const changedEarlyFloor = replayBranchData(lateCheckpointParent, [pair(0, '更早楼层已经改变'), pair(1)], 'Parent Chat');
+assert.equal(changedEarlyFloor.branch_origin.method, 'safe_rebuild',
+    'a matching checkpoint anchor must not hide a changed earlier floor');
+assert.equal(changedEarlyFloor.state_table.entries.some(entry => entry.id === 'unsafe-old'), false,
+    'facts embedded in a checkpoint with a mismatched prefix must never be restored');
+
+const unverifiableOldCheckpoint = structuredClone(parent);
+delete unverifiableOldCheckpoint.branch_checkpoints[0].prefixFingerprints;
+assert.equal(replayBranchData(unverifiableOldCheckpoint, [pair(0), pair(1)], 'Parent Chat').branch_origin.method, 'safe_rebuild',
+    'old checkpoints without a complete prefix proof must fail closed');
+
+const legacyCandidateParent = structuredClone(parent);
+legacyCandidateParent.floor_events = legacyCandidateParent.floor_events.filter(item => item.pairIndex !== 1);
+legacyCandidateParent.turn_summaries = legacyCandidateParent.turn_summaries.filter(item => item.pairIndex !== 1);
+legacyCandidateParent.fact_ledger = [{
+    id: 'legacy-unanchored', floor: 1, floorKey: null, contentFingerprint: null,
+    source: 'legacy', fact: { slot: 'identity', subject: '甲', object: '', value: '旧分支身份' },
+}];
+legacyCandidateParent.fact_decisions = [{
+    id: 'legacy-decision', candidateId: 'legacy-unanchored', action: 'activate',
+    anchorFloorKey: 'u2+a2', anchorPairIndex: 2, anchorFingerprint: pair(2).contentFingerprint,
+}];
+legacyCandidateParent.manual_events = [{
+    id: 'legacy-activation', anchorFloorKey: 'u2+a2', anchorPairIndex: 2,
+    anchorFingerprint: pair(2).contentFingerprint, op: 'upsert', reason: 'candidate_activate', recordedAt: 350,
+    after: { id: 'legacy-active', slot: 'identity', subject: '甲', value: '旧分支身份' },
+}];
+const legacyCandidateFork = replayBranchData(legacyCandidateParent, [pair(0), pair(1, '已修改的早期 swipe'), pair(2)], 'Parent Chat');
+assert.equal(legacyCandidateFork.fact_ledger.length, 0, 'unverifiable legacy discoveries must not cross a fork');
+assert.equal(legacyCandidateFork.fact_decisions.length, 0, 'decisions must not outlive an unverifiable source discovery');
+assert.equal(legacyCandidateFork.state_table.entries.some(entry => entry.id === 'legacy-active'), false,
+    'an old candidate activation without a source fingerprint must fail closed');
+
+const sourcedCandidateParent = structuredClone(parent);
+sourcedCandidateParent.manual_events.push({
+    id: 'sourced-activation', anchorFloorKey: 'u1+a1', anchorPairIndex: 1,
+    anchorFingerprint: pair(1).contentFingerprint, op: 'upsert', reason: 'candidate_activate', recordedAt: 250,
+    sourceCandidateId: 'fc1', sourceFloorKey: 'u1+a1', sourcePairIndex: 1,
+    sourceFingerprint: pair(1).contentFingerprint,
+    after: { id: 'candidate-active', slot: 'other', subject: '乙', value: '分支内发现' },
+});
+assert.equal(replayBranchData(sourcedCandidateParent, [pair(0), pair(1)], 'Parent Chat').state_table.entries
+    .some(entry => entry.id === 'candidate-active'), true, 'a fully grounded candidate activation should replay');
+assert.equal(replayBranchData(sourcedCandidateParent, [pair(0), pair(1, '另一个 swipe')], 'Parent Chat').state_table.entries
+    .some(entry => entry.id === 'candidate-active'), false, 'candidate activation must be rejected when its source swipe changed');
 
 const restoredThenSwiped = structuredClone(replayed);
 reconcileCurrentHistory(restoredThenSwiped, [pair(0), pair(1, '恢复后换 swipe')]);

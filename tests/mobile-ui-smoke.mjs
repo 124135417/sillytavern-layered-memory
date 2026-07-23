@@ -37,8 +37,8 @@ assert.match(css, /@media \(max-height: 520px\) and \(max-width: 899px\)/u,
     'short landscape viewports need a dedicated layout');
 assert.match(css, /@media \(max-width: 360px\) and \(max-height: 650px\)/u,
     'very small portrait phones need a compact footer and tab layout');
-assert.match(css, /\.lm-header-metrics \{ display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/u,
-    'phone metrics should fit in one compact row');
+assert.match(css, /\.lm-header-metrics \{ display: grid; grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/u,
+    'phone metrics should reserve a readable full row for the connection status');
 assert.match(css, /\.lm-icon-button \{ width: 44px !important; height: 44px !important;/u,
     'coarse pointers must override the host-enforced icon button size');
 assert.match(css, /\.lm-button-primary \{ color: var\(--lm-on-accent\)/u,
@@ -67,6 +67,12 @@ assert.match(css, /\.lm-turn-records li \{ grid-template-columns: 1fr; gap: 2px;
     'per-turn records must collapse to one column on phones');
 assert.match(css, /@media \(max-width: 899px\)[\s\S]*\.lm-rebuild-workflows \{ grid-template-columns: 1fr; \}/u,
     'the two independent workflow cards must stack on narrow screens');
+assert.match(css, /@media \(max-width: 599px\)[\s\S]*\.lm-fact-overview button \{ min-height: 58px/u,
+    'fact ledger filters must stay touch-friendly on phones');
+assert.match(css, /\.lm-injection-footer \{ grid-template-columns: minmax\(0, 1fr\)/u,
+    'phone injection preview must not overflow beside a second fixed-width column');
+assert.match(panel, /data-candidate-action="activate">加入生效事实/u,
+    'inactive discoveries must expose a direct activation action');
 assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/u,
     'visible text must not use fixed pixel sizes below 14px');
 

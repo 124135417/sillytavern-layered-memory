@@ -83,7 +83,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const EMPTY_CHAT_DATA = () => ({
-    version: 3,
+    version: 4,
     state_table: {
         version: 1,
         entries: [],
@@ -112,6 +112,10 @@ export const EMPTY_CHAT_DATA = () => ({
     review_queue: [],
     notices: [],
     quarantined_entries: [],
+    /** Immutable discoveries; current facts are a user-controllable view over this ledger. */
+    fact_ledger: [],
+    /** User choices over immutable discoveries; anchored for Fork-safe replay. */
+    fact_decisions: [],
     history_rebuild: null,
     rebuild_backup: null,
     pending_floors: [],

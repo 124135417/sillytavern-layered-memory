@@ -16,6 +16,28 @@ function currentAnchor() {
         : { floorKey: null, pairIndex: -1, contentFingerprint: null };
 }
 
+function prefixFingerprints(pairs, throughPair) {
+    return (pairs || [])
+        .filter(item => item.sealed && Number(item.pairIndex) <= Number(throughPair))
+        .map(item => ({
+            pairIndex: Number(item.pairIndex),
+            floorKey: item.floorKey,
+            contentFingerprint: item.contentFingerprint,
+        }));
+}
+
+function checkpointMatchesPrefix(checkpoint, livePairs) {
+    const through = Number(checkpoint?.anchorPairIndex ?? -1);
+    if (through < 0) return true;
+    const recorded = Array.isArray(checkpoint?.prefixFingerprints) ? checkpoint.prefixFingerprints : null;
+    if (!recorded) return false;
+    const live = prefixFingerprints(livePairs, through);
+    if (recorded.length !== live.length) return false;
+    return recorded.every((item, index) => item.pairIndex === live[index]?.pairIndex
+        && item.floorKey === live[index]?.floorKey
+        && item.contentFingerprint === live[index]?.contentFingerprint);
+}
+
 function lightweightStateTable(table) {
     const snapshot = clone(table || EMPTY_CHAT_DATA().state_table);
     snapshot.changelog = [];
@@ -30,6 +52,7 @@ export function recordFloorEvent(data, event) {
         pairIndex: Number(event.pairIndex),
         contentFingerprint: String(event.contentFingerprint),
         turnSummary: String(event.turnSummary || ''),
+        storyTime: event.storyTime ? clone(event.storyTime) : null,
         entryChanges: clone(event.entryChanges || []),
         recordedAt: Date.now(),
     };
@@ -42,7 +65,7 @@ export function recordFloorEvent(data, event) {
     } else data.floor_events.push(normalized);
 }
 
-export function recordManualEvent(data, { op, before = null, after = null, reason = 'manual' }) {
+export function recordManualEvent(data, { op, before = null, after = null, reason = 'manual', sourceCandidate = null }) {
     if (op !== 'upsert' && op !== 'delete') return null;
     const anchor = currentAnchor();
     const event = {
@@ -54,6 +77,11 @@ export function recordManualEvent(data, { op, before = null, after = null, reaso
         before: before ? clone(before) : null,
         after: after ? clone(after) : null,
         reason,
+        sourceKind: sourceCandidate ? 'candidate' : null,
+        sourceCandidateId: sourceCandidate?.id || null,
+        sourceFloorKey: sourceCandidate?.floorKey || null,
+        sourcePairIndex: Number.isFinite(Number(sourceCandidate?.floor)) ? Number(sourceCandidate.floor) : null,
+        sourceFingerprint: sourceCandidate?.contentFingerprint || null,
         recordedAt: Date.now(),
     };
     data.manual_events = Array.isArray(data.manual_events) ? data.manual_events : [];
@@ -69,6 +97,7 @@ export function captureBranchCheckpoint(data = getChatData(), reason = 'automati
         anchorFloorKey: anchor.floorKey,
         anchorPairIndex: anchor.pairIndex,
         anchorFingerprint: anchor.contentFingerprint,
+        prefixFingerprints: prefixFingerprints(getPairs(), anchor.pairIndex),
         stateTable: lightweightStateTable(data.state_table),
         createdAt: Date.now(),
         reason,
@@ -141,6 +170,16 @@ function matchesFloor(record, liveByKey, keyField = 'floorKey', fingerprintField
     return Boolean(pair && fingerprint && fingerprint === pair.contentFingerprint);
 }
 
+function isCandidateDerivedManualEvent(event) {
+    return event?.sourceKind === 'candidate' || String(event?.reason || '').includes('candidate');
+}
+
+function manualEventMatchesSource(event, liveByKey) {
+    if (!isCandidateDerivedManualEvent(event)) return true;
+    return Boolean(event.sourceFloorKey && event.sourceFingerprint
+        && matchesFloor(event, liveByKey, 'sourceFloorKey', 'sourceFingerprint'));
+}
+
 function reconcileArchives(data, maxPair) {
     data.chapters = (data.chapters || []).filter(chapter => {
         const [start, end] = chapter.floor_range || [];
@@ -171,13 +210,23 @@ function reconcileArchives(data, maxPair) {
 function finishBranchData(data, parentData, livePairs, parentChat, method, trustedMaxPair) {
     const liveByKey = pairMap(livePairs);
     const maxPair = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
-    const withinTrustedPrefix = item => Number(item.pairIndex ?? item.anchorPairIndex) <= trustedMaxPair;
+    const withinTrustedPrefix = item => Number(item.floor ?? item.pairIndex ?? item.anchorPairIndex) <= trustedMaxPair;
     data.turn_summaries = (parentData.turn_summaries || [])
         .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
     data.floor_events = (parentData.floor_events || [])
         .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
     data.manual_events = (parentData.manual_events || [])
-        .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')).map(clone);
+        .filter(item => withinTrustedPrefix(item)
+            && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')
+            && manualEventMatchesSource(item, liveByKey)).map(clone);
+    data.fact_ledger = (parentData.fact_ledger || [])
+        .filter(item => withinTrustedPrefix(item)
+            && item.floorKey && item.contentFingerprint && matchesFloor(item, liveByKey)).map(clone);
+    const trustedCandidateIds = new Set(data.fact_ledger.map(item => item.id));
+    data.fact_decisions = (parentData.fact_decisions || [])
+        .filter(item => trustedCandidateIds.has(item.candidateId)
+            && withinTrustedPrefix(item)
+            && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')).map(clone);
     const trustedKeys = new Set([
         ...data.floor_events.map(item => item.floorKey),
         ...data.turn_summaries.map(item => item.floorKey),
@@ -236,6 +285,7 @@ export function buildLegacyRebuildData(livePairs, parentChat = '') {
         anchorFloorKey: null,
         anchorPairIndex: -1,
         anchorFingerprint: null,
+        prefixFingerprints: [],
         stateTable: lightweightStateTable(data.state_table),
         createdAt: Date.now(),
         reason: 'safe_rebuild_seed',
@@ -267,6 +317,7 @@ export function buildFreshBranchData(livePairs, parentChat = '') {
         anchorFloorKey: head?.floorKey || null,
         anchorPairIndex: head?.pairIndex ?? -1,
         anchorFingerprint: head?.contentFingerprint || null,
+        prefixFingerprints: prefixFingerprints(livePairs, head?.pairIndex ?? -1),
         stateTable: lightweightStateTable(data.state_table),
         createdAt: Date.now(),
         reason: 'fresh_branch_seed',
@@ -277,7 +328,9 @@ export function buildFreshBranchData(livePairs, parentChat = '') {
 export function replayBranchData(parentData, livePairs, parentChat = '') {
     const liveByKey = pairMap(livePairs);
     const checkpoints = (parentData.branch_checkpoints || [])
-        .filter(point => point?.stateTable && matchesFloor(point, liveByKey, 'anchorFloorKey', 'anchorFingerprint'))
+        .filter(point => point?.stateTable
+            && matchesFloor(point, liveByKey, 'anchorFloorKey', 'anchorFingerprint')
+            && checkpointMatchesPrefix(point, livePairs))
         .sort((a, b) => Number(a.anchorPairIndex) - Number(b.anchorPairIndex) || Number(a.createdAt) - Number(b.createdAt));
     const checkpoint = checkpoints.at(-1);
     if (!checkpoint) return buildLegacyRebuildData(livePairs, parentChat);
@@ -286,6 +339,9 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
         ...(parentData.floor_events || []).map(item => ({ ...item, index: item.pairIndex, keyField: 'floorKey', fpField: 'contentFingerprint' })),
         ...(parentData.turn_summaries || []).map(item => ({ ...item, index: item.pairIndex, keyField: 'floorKey', fpField: 'contentFingerprint' })),
         ...(parentData.manual_events || []).map(item => ({ ...item, index: item.anchorPairIndex, keyField: 'anchorFloorKey', fpField: 'anchorFingerprint' })),
+        ...(parentData.manual_events || []).filter(isCandidateDerivedManualEvent).map(item => ({
+            ...item, index: item.sourcePairIndex, keyField: 'sourceFloorKey', fpField: 'sourceFingerprint',
+        })),
     ].filter(item => Number(item.index) > Number(checkpoint.anchorPairIndex)
         && liveByKey.has(item[item.keyField])
         && !matchesFloor(item, liveByKey, item.keyField, item.fpField));
@@ -307,7 +363,8 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
         ...(parentData.manual_events || [])
             .filter(event => Number(event.recordedAt) > Number(checkpoint.createdAt)
                 && Number(event.anchorPairIndex) <= trustedMaxPair
-                && matchesFloor(event, liveByKey, 'anchorFloorKey', 'anchorFingerprint'))
+                && matchesFloor(event, liveByKey, 'anchorFloorKey', 'anchorFingerprint')
+                && manualEventMatchesSource(event, liveByKey))
             .map(event => ({ kind: 'manual', at: Number(event.recordedAt), event })),
     ].sort((a, b) => a.at - b.at);
     for (const item of replayItems) {
@@ -323,6 +380,7 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
         anchorFloorKey: data.branch_origin.forkFloorKey,
         anchorPairIndex: branchHead,
         anchorFingerprint: livePairs.filter(pair => pair.sealed).at(-1)?.contentFingerprint || null,
+        prefixFingerprints: prefixFingerprints(livePairs, branchHead),
         stateTable: lightweightStateTable(data.state_table),
         createdAt: Date.now(),
         reason: 'fork_recovery',

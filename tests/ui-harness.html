@@ -69,6 +69,7 @@
             pairIndex,
             contentFingerprint: `fp-${pairIndex}`,
             summary: `<user>推进第 ${pairIndex} 轮对话，林许作出回应，双方留下后续事项。`,
+            ...(pairIndex === 0 ? { story_time: { label: '次日清晨', evidence: '次日清晨', kind: 'relative' } } : {}),
         }));
         const chapter = (index, start, end) => ({
             id: `ch_${String(index).padStart(3, '0')}`,
@@ -79,8 +80,15 @@
             floor_range: [start, end], pinned: false, demoted: false, stale: false, frozen: true, volume_id: null,
         });
         const memoryData = {
-            version: 3,
+            version: 4,
             state_table: { version: 18, entries, changelog: [] },
+            floor_events: [{
+                floorKey: '124-u+124-a', pairIndex: 124, contentFingerprint: 'fp-124', recordedAt: 124,
+                entryChanges: [
+                    { op: 'upsert', after: { id: 'e_2', slot: 'promise', subject: '周衡', object: '林晚', value: '答应护送林晚到北港', evidence: '我会把你送到北港。', source: 'auto' } },
+                    { op: 'upsert', after: { id: 'e_2', slot: 'promise', subject: '周衡', object: '林晚', value: '答应替林晚保管航海日志', evidence: '日志先放在我这里。', source: 'auto' } },
+                ],
+            }],
             turn_summaries: turnSummaries,
             chapters: [
                 chapter(1, 0, 24), chapter(2, 25, 49), chapter(3, 50, 74), chapter(4, 75, 99),

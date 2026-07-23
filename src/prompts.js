@@ -12,6 +12,8 @@ export const EXTRACT_SYSTEM = `你是逐轮剧情记录员兼事实记录员，�
 
 再检查持久事实：只记录已在文本中明确发生、之后仍会成立的变化，不推测、不补完、不评价重要性。
 
+另写 story_time：只记录本轮原文明示的剧情内时间。格式为 {"label":"次日清晨","kind":"absolute|relative|time_of_day","evidence":"原文连续引文"}；没有明确依据就写 null，禁止用现实聊天时间或自行推算日期。
+
 你将看到：当前状态表、本楼用户输入、本楼 AI 回复。
 AI 回复可能同时包含叙事正文，以及预设附加的回顾摘要、状态表、思考过程、写作计划或界面组件。只有用户输入或叙事正文中明确发生的内容才是事实证据；附加的回顾、状态、思考、计划和格式说明只能帮助理解，不能单独作为 evidence。
 请对下列槽位逐一作答。每个槽位合法输出是「无变化」或条目数组。
@@ -27,7 +29,7 @@ AI 回复可能同时包含叙事正文，以及预设附加的回顾摘要、�
 - other：其它会持续为真的事实？必须含 why_persistent。
 - conflicts：表中条目与本楼矛盾时填写 [{entry_id, note}]
 
-每条事实必须含 evidence：原文中的直接引文（≤50字）。引不出原句就不许填。
+每条事实必须含 topic 与 evidence。topic 是这条事实具体在说什么，例如“右手图案”“组织内职位”“停止讨论某人”，用于区分同一人物的多条承诺、身份或物品；不同事项不得使用同一个 topic。evidence 是原文中的直接引文（≤50字）。引不出原句就不许填。
 单条 value ≤80 字。只输出 JSON，不要其它说明。
 
 ## few-shot
@@ -36,25 +38,25 @@ AI 回复可能同时包含叙事正文，以及预设附加的回顾摘要、�
 用户：今天天气不错。
 AI：是啊，要不要去散步？
 输出：
-{"turn_summary":"<user>提到天气不错，另一人提议一起散步。","promise":"无变化","body":"无变化","relationship":"无变化","identity":"无变化","possession":"无变化","world":"无变化","other":"无变化","conflicts":[]}
+{"turn_summary":"<user>提到天气不错，另一人提议一起散步。","story_time":null,"promise":"无变化","body":"无变化","relationship":"无变化","identity":"无变化","possession":"无变化","world":"无变化","other":"无变化","conflicts":[]}
 
 ### 例2（纯战斗描写无持久后果 → 全部无变化）
 用户：我挥刀砍向他。
 AI：刀锋擦过护甲溅起火星，两人拉开距离喘息。
 输出：
-{"turn_summary":"<user>挥刀攻击对方，刀锋被护甲挡开，双方暂时拉开距离。","promise":"无变化","body":"无变化","relationship":"无变化","identity":"无变化","possession":"无变化","world":"无变化","other":"无变化","conflicts":[]}
+{"turn_summary":"<user>挥刀攻击对方，刀锋被护甲挡开，双方暂时拉开距离。","story_time":null,"promise":"无变化","body":"无变化","relationship":"无变化","identity":"无变化","possession":"无变化","world":"无变化","other":"无变化","conflicts":[]}
 
 ### 例3（关系定性变化）
 用户：……我不想再看到你。
 AI：艾琳把门摔上。卡尔站在书房里，冷战开始了。
 输出：
-{"turn_summary":"<user>明确表示不想再见卡尔，艾琳摔门离开，两人的关系转入冷战。","promise":"无变化","body":"无变化","relationship":[{"subject":"艾琳","object":"卡尔","old_value":"亲近","new_value":"冷战中","evidence":"我不想再看到你。"}],"identity":"无变化","possession":"无变化","world":"无变化","other":"无变化","conflicts":[]}
+{"turn_summary":"<user>明确表示不想再见卡尔，艾琳摔门离开，两人的关系转入冷战。","story_time":null,"promise":"无变化","body":"无变化","relationship":[{"topic":"双方关系状态","subject":"艾琳","object":"卡尔","old_value":"亲近","new_value":"冷战中","evidence":"我不想再看到你。"}],"identity":"无变化","possession":"无变化","world":"无变化","other":"无变化","conflicts":[]}
 
 ### 例4（持有物）
 用户：我把母亲的银坠交给她。
 AI：她接过银坠，郑重地点头。
 输出：
-{"turn_summary":"<user>把母亲留下的银坠交给对方，对方郑重收下。","promise":"无变化","body":"无变化","relationship":"无变化","identity":"无变化","possession":[{"subject":"她","object":"","value":"获得母亲的银坠","evidence":"我把母亲的银坠交给她。"}],"world":"无变化","other":"无变化","conflicts":[]}
+{"turn_summary":"<user>把母亲留下的银坠交给对方，对方郑重收下。","story_time":null,"promise":"无变化","body":"无变化","relationship":"无变化","identity":"无变化","possession":[{"topic":"母亲留下的银坠","subject":"她","object":"","value":"获得母亲的银坠","evidence":"我把母亲的银坠交给她。"}],"world":"无变化","other":"无变化","conflicts":[]}
 `;
 
 export const EXTRACT_JSON_SCHEMA = {
@@ -65,6 +67,7 @@ export const EXTRACT_JSON_SCHEMA = {
         type: 'object',
         properties: {
             turn_summary: { type: 'string' },
+            story_time: {},
             promise: {},
             body: {},
             relationship: {},
@@ -99,14 +102,16 @@ export const HISTORY_SEGMENT_SYSTEM = `你是逐轮剧情与事实档案员，�
 - 删除气氛渲染、重复服装外貌、姿态细节和纯文笔修饰。
 
 facts 只记录该轮明确发生、之后仍会成立的内容：承诺、永久身体变化、关系定性变化、身份秘密、关键持有物、世界变化或其他持久事实。
+- story_time 只记录该轮原文明示的剧情内时间，格式为 {"label":"次日清晨","kind":"absolute|relative|time_of_day","evidence":"原文连续引文"}；没有就写 null，禁止自行推算日期。
 - subject、value、evidence 必须非空；用户统一写作 <user>。
-- subject 必须是原文中真正执行动作、拥有状态或被揭露身份的对象，禁止因为整轮由用户触发就一律填写 <user>。例如“阿尔德瑞思阅读《恶魔之书》获得力量”的 subject 是“阿尔德瑞思”。
+- topic 必须非空，并用自然语言说明具体事项，例如“右手图案”“组织内职位”“停止讨论某人”。同一人物的不同承诺或身份必须使用不同 topic，不能因为类型相同而合并。
+- subject 必须是原文中真正执行动作、拥有状态或被揭露身份的对象，禁止因为整轮由用户触发就一律填写 <user>。例如“某角色阅读禁书获得力量”的 subject 应是该角色的原文姓名，而不是 <user>。
 - evidence 必须逐字引用该轮用户输入或 AI 叙事正文中的连续原句，最多 50 字。
 - relationship 必须同时提供 object、old_value、new_value，value 与 new_value 相同。
 - world 也必须有自然主体，例如“因果契约”“防卫局”，不能留空。
 - 没有持久事实时 facts 输出空数组。不得为了填表把普通动作、情绪或推测写成事实。
 
-只输出 JSON：{"floors":[{"floor":0,"summary":"...","facts":[{"slot":"promise|body|relationship|identity|possession|world|other","subject":"...","object":"","value":"...","old_value":"","new_value":"","evidence":"...","why_persistent":"..."}]}]}`;
+只输出 JSON：{"floors":[{"floor":0,"summary":"...","story_time":{"label":"次日清晨","kind":"relative","evidence":"次日清晨"},"facts":[{"slot":"promise|body|relationship|identity|possession|world|other","topic":"具体事项","subject":"...","object":"","value":"...","old_value":"","new_value":"","evidence":"...","why_persistent":"..."}]}]}`;
 
 export const HISTORY_SEGMENT_JSON_SCHEMA = {
     name: 'HistorySegment',

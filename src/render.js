@@ -2,16 +2,31 @@ import { SLOT_LABELS, SLOTS } from './constants.js';
 import { estimateTokens, truncateToBudget } from './tokens.js';
 import { usableMemoryEntries } from './quality.js';
 
-export function renderL1Block(data, budget = 2000) {
+export function renderL1Block(data, budget = 2000, context = null) {
     const entries = usableMemoryEntries(data);
     if (!entries.length) {
         return '';
     }
     const lines = [
+        '## 长期记忆使用规则',
+        '- 最近保留的完整对话负责最新变化；若与旧摘要冲突，以最近完整对话为准。',
+        '- 当前事实描述现在仍然成立的状态；剧情摘要只说明过去发生过什么，不得反向覆盖当前状态。',
+        '- 只需自然地保持连续性，不要复述、解释或提及记忆系统。',
+        '',
+    ];
+    const userName = String(context?.name1 || '').trim();
+    const roleName = String(context?.name2 || context?.characters?.[context?.characterId]?.name || '').trim();
+    if (userName || roleName) {
+        lines.push('## 当前对话身份');
+        if (userName) lines.push(`- <user>：当前显示名为${userName}`);
+        if (roleName) lines.push(`- 当前角色卡：${roleName}`);
+        lines.push('');
+    }
+    lines.push(
         '## 当前确立的事实',
         '以下是先前剧情中确立、至今仍然为真的事实。生成时必须与之保持一致，但不要主动复述或提及本列表的存在。',
         '',
-    ];
+    );
     for (const slot of SLOTS) {
         const group = entries.filter(e => e.slot === slot);
         if (!group.length) {
@@ -81,7 +96,7 @@ export function renderL2Block(data, { forBudget = false, budget = 5000, throughP
         items.push({
             start: c.floor_range[0],
             end: c.floor_range[1],
-            text: `### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要\n${c.summary}`,
+            text: `### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要${c.story_time_range?.label ? `（剧情时间：${c.story_time_range.label}）` : ''}\n${c.summary}`,
         });
         coveredRanges.push(c.floor_range);
     }
@@ -93,7 +108,7 @@ export function renderL2Block(data, { forBudget = false, budget = 5000, throughP
         items.push({
             start: item.pairIndex,
             end: item.pairIndex,
-            text: `### 第 ${item.pairIndex} 轮对话的剧情记录\n${item.summary}`,
+            text: `### 第 ${item.pairIndex} 轮对话的剧情记录${item.story_time?.label ? `（剧情时间：${item.story_time.label}）` : ''}\n${item.summary}`,
         });
     }
     items.sort((a, b) => a.start - b.start || a.end - b.end);

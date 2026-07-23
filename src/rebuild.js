@@ -10,6 +10,8 @@ import { cancelQueuedJobs, clearFailedJobs, enqueue, getQueueSnapshot } from './
 import { normalizeGeneratedEntity, validateMemoryEntryShape } from './quality.js';
 import { appendLog, assertChatData, getChatData, getContext, getSettings, saveChatData } from './settings.js';
 import { evidenceInSource } from './tokens.js';
+import { factIdentityKey, makeFactCandidate, upsertFactCandidate } from './facts.js';
+import { normalizeStoryTime, storyTimeRange } from './story-time.js';
 
 export const REBUILD_JOB_TYPES = ['history_rebuild_segment', 'history_rebuild_chapter', 'history_rebuild_commit'];
 const SEGMENT_SIZE = 13;
@@ -25,6 +27,7 @@ function rebuildState(data = getChatData()) {
     if (!Array.isArray(state.turn_summaries) && state.status !== 'complete') state.turn_summaries = [];
     if (!Array.isArray(state.entries) && state.status !== 'complete') state.entries = [];
     if (!Array.isArray(state.fact_events) && state.status !== 'complete') state.fact_events = [];
+    if (!Array.isArray(state.fact_candidates) && state.status !== 'complete') state.fact_candidates = [];
     if (!Array.isArray(state.chapters) && state.status !== 'complete') state.chapters = [];
     if (!Array.isArray(state.extracted_keys) && state.status !== 'complete') state.extracted_keys = [];
     if (!Array.isArray(state.unresolved_floors)) state.unresolved_floors = [];
@@ -52,6 +55,7 @@ function createStaging(total, baseline) {
         turn_summaries: [],
         entries: [],
         fact_events: [],
+        fact_candidates: [],
         chapters: [],
         extracted_keys: [],
         unresolved_floors: [],
@@ -72,6 +76,9 @@ function backupCurrent(data) {
         keyword_index: clone(data.keyword_index || {}),
         extracted_keys: clone(data.extracted_keys || []),
         quarantined_entries: clone(data.quarantined_entries || []),
+        fact_ledger: clone(data.fact_ledger || []),
+        fact_decisions: clone(data.fact_decisions || []),
+        manual_events: clone(data.manual_events || []),
         history_backfill: clone(data.history_backfill || {}),
         review_queue: clone(data.review_queue || []),
         notices: clone(data.notices || []),
@@ -168,6 +175,7 @@ function normalizeFact(raw, source, userName) {
     const value = slot === 'relationship' ? raw?.new_value : (raw?.value ?? raw?.new_value);
     const fact = {
         slot,
+        topic: String(raw?.topic ?? '').trim() || String(value ?? '').trim(),
         subject: normalizeGeneratedEntity(raw?.subject, userName),
         object: normalizeGeneratedEntity(raw?.object, userName),
         value: String(value ?? '').trim(),
@@ -195,6 +203,7 @@ export function validateHistorySegment(raw, sources, userName = '') {
     const warnings = [];
     const failedFloors = [];
     const normalized = [];
+    const candidates = [];
     const expectedSet = new Set(expected);
     for (const item of floors) {
         const floor = Number(item?.floor);
@@ -202,27 +211,37 @@ export function validateHistorySegment(raw, sources, userName = '') {
     }
     for (const source of sources) {
         const floor = source.pair.pairIndex;
-        const candidates = floors.filter(item => Number(item?.floor) === floor);
-        if (!candidates.length) {
+        const floorResults = floors.filter(item => Number(item?.floor) === floor);
+        if (!floorResults.length) {
             const message = `第 ${floor} 轮缺少结果`;
             errors.push(message);
             failedFloors.push({ floor, errors: [message] });
             continue;
         }
-        if (candidates.length > 1) {
+        if (floorResults.length > 1) {
             const message = `第 ${floor} 轮返回了重复结果`;
             errors.push(message);
             failedFloors.push({ floor, errors: [message] });
             continue;
         }
-        const item = candidates[0] || {};
+        const item = floorResults[0] || {};
         const summary = normalizeHistoryUserSummary(item.summary, userName);
         const floorErrors = [];
         if ([...summary].length < 10 || [...summary].length > 500) floorErrors.push(`第 ${floor} 轮摘要为空或长度异常`);
         if (summary && !summary.startsWith('<user>')) floorErrors.push(`第 ${floor} 轮摘要遗漏了用户本轮的行为或话语`);
         const facts = [];
+        let factIndex = 0;
         for (const rawFact of Array.isArray(item.facts) ? item.facts : []) {
             const checked = normalizeFact(rawFact, source, userName);
+            candidates.push(makeFactCandidate({
+                fact: checked.fact,
+                floor,
+                floorKey: source.pair.floorKey,
+                contentFingerprint: source.pair.contentFingerprint || null,
+                source: 'auto',
+                errors: checked.errors,
+                index: factIndex++,
+            }));
             if (checked.errors.length) warnings.push(`第 ${floor} 轮已忽略一条不可靠事实：${checked.errors.join('；')}`);
             else facts.push(checked.fact);
         }
@@ -231,14 +250,13 @@ export function validateHistorySegment(raw, sources, userName = '') {
             failedFloors.push({ floor, errors: floorErrors });
             continue;
         }
-        normalized.push({ floor, summary, facts });
+        normalized.push({ floor, summary, facts, story_time: normalizeStoryTime(item.story_time, source.sourceText) });
     }
-    return { ok: failedFloors.length === 0, errors, warnings, failedFloors, floors: normalized };
+    return { ok: failedFloors.length === 0, errors, warnings, failedFloors, floors: normalized, candidates };
 }
 
 function upsertStagedFact(staging, fact, floor) {
-    const duplicate = staging.entries.find(entry => entry.slot === fact.slot
-        && entry.subject === fact.subject && (entry.object || '') === (fact.object || ''));
+    const duplicate = staging.entries.find(entry => factIdentityKey(entry) === factIdentityKey(fact));
     if (duplicate) {
         duplicate.value = fact.value;
         duplicate.evidence = fact.evidence;
@@ -272,6 +290,7 @@ function applySegment(staging, validated, sources) {
             pairIndex: item.floor,
             contentFingerprint: source.pair.contentFingerprint,
             summary: item.summary,
+            story_time: item.story_time,
             sourceMode: source.bodyMode,
             updatedAt: Date.now(),
         };
@@ -288,6 +307,10 @@ function applySegment(staging, validated, sources) {
         upsertStagedFact(staging, event.fact, event.floor);
     }
     staging.completed = staging.turn_summaries.length;
+    staging.fact_candidates = (staging.fact_candidates || []).filter(candidate => !replacedFloors.has(candidate.floor));
+    for (const candidate of validated.candidates || []) {
+        if (replacedFloors.has(candidate.floor)) upsertFactCandidate(staging.fact_candidates, candidate);
+    }
 }
 
 export async function handleHistoryRebuildSegment(payload) {
@@ -360,6 +383,7 @@ export async function handleHistoryRebuildChapter(payload) {
     const chapter = {
                 id: existing?.id || `staged_ch_${String(staging.chapters.length + 1).padStart(3, '0')}`,
                 ...result,
+                story_time_range: storyTimeRange(notes),
                 floor_range: [payload.startPair, payload.endPair],
                 pinned: false,
                 demoted: false,
@@ -424,9 +448,9 @@ export async function handleHistoryRebuildCommit() {
     const preservedEntries = (data.state_table?.entries || []).filter(entry => entry.source === 'manual'
         || entry.source === 'proofread' || entry.pinned || entry.manual_override);
     const entryIds = idFactory(preservedEntries, 'e', 4);
-    const preservedKeys = new Set(preservedEntries.map(entry => `${entry.slot}\u0000${entry.subject}\u0000${entry.object || ''}`));
+    const preservedKeys = new Set(preservedEntries.map(factIdentityKey));
     const rebuiltEntries = staging.entries
-        .filter(entry => !preservedKeys.has(`${entry.slot}\u0000${entry.subject}\u0000${entry.object || ''}`))
+        .filter(entry => !preservedKeys.has(factIdentityKey(entry)))
         .map(entry => ({ ...entry, id: entryIds.take() }));
     const pinnedChapters = (data.chapters || []).filter(chapter => chapter.pinned || chapter.manual_override);
     const pinnedRanges = new Set(pinnedChapters.map(chapter => JSON.stringify(chapter.floor_range)));
@@ -450,20 +474,20 @@ export async function handleHistoryRebuildCommit() {
             && manual.contentFingerprint === summary.contentFingerprint;
         return sameSource ? { ...summary, summary: manual.summary, manual_override: true, updatedAt: manual.updatedAt } : summary;
     });
-    const rebuiltByKey = new Map(rebuiltEntries.map(entry => [memoryKey(entry), entry]));
+    const rebuiltByKey = new Map(rebuiltEntries.map(entry => [factIdentityKey(entry), entry]));
     const firstFloorByKey = new Map();
     for (const event of (staging.fact_events || []).slice().sort((a, b) => a.floor - b.floor)) {
-        const key = memoryKey(event.fact);
+        const key = factIdentityKey(event.fact);
         if (!firstFloorByKey.has(key)) firstFloorByKey.set(key, event.floor);
     }
     const factEventsByFloor = new Map();
     for (const event of staging.fact_events || []) {
-        const finalEntry = rebuiltByKey.get(memoryKey(event.fact));
+        const finalEntry = rebuiltByKey.get(factIdentityKey(event.fact));
         if (!finalEntry) continue;
         const after = {
             ...clone(event.fact),
             id: finalEntry.id,
-            established_floor: firstFloorByKey.get(memoryKey(event.fact)),
+            established_floor: firstFloorByKey.get(factIdentityKey(event.fact)),
             updated_floor: event.floor,
             pinned: false,
             source: 'auto',
@@ -477,9 +501,15 @@ export async function handleHistoryRebuildCommit() {
         pairIndex: summary.pairIndex,
         contentFingerprint: summary.contentFingerprint,
         turnSummary: summary.summary,
+        storyTime: summary.story_time || null,
         entryChanges: factEventsByFloor.get(summary.pairIndex) || [],
         recordedAt: Math.max(1, summary.pairIndex + 1),
     }));
+    const preservedCandidateIds = new Set((data.fact_decisions || []).map(item => item.candidateId));
+    const preservedCandidates = (data.fact_ledger || []).filter(candidate => preservedCandidateIds.has(candidate.id)
+        || candidate.source === 'manual');
+    data.fact_ledger = [...preservedCandidates];
+    for (const candidate of staging.fact_candidates || []) upsertFactCandidate(data.fact_ledger, clone(candidate));
     data.chapters = [...pinnedChapters, ...rebuiltChapters].sort((a, b) => a.floor_range[0] - b.floor_range[0]);
     data.volumes = [];
     data.extracted_keys = clone(staging.extracted_keys);
@@ -501,6 +531,7 @@ export async function handleHistoryRebuildCommit() {
     delete staging.turn_summaries;
     delete staging.entries;
     delete staging.fact_events;
+    delete staging.fact_candidates;
     delete staging.chapters;
     delete staging.extracted_keys;
     data.notices = (data.notices || []).filter(item => !/补记|重建|父聊天还没有可继承|开始自动记录/.test(String(item.note || '')));
@@ -510,6 +541,7 @@ export async function handleHistoryRebuildCommit() {
         anchorFloorKey: null,
         anchorPairIndex: -1,
         anchorFingerprint: null,
+        prefixFingerprints: [],
         stateTable: { version: 1, entries: [], changelog: [] },
         createdAt: 0,
         reason: 'history_rebuild_seed',
@@ -774,7 +806,7 @@ export async function restoreRebuildBackup() {
     if (!backup || ['running', 'stopping'].includes(data.history_rebuild?.status)) return false;
     for (const key of ['state_table', 'turn_summaries', 'floor_events', 'branch_checkpoints', 'chapters', 'volumes',
         'keyword_index', 'extracted_keys', 'quarantined_entries', 'history_backfill', 'review_queue', 'notices',
-        'context_handoff', 'progress']) {
+        'context_handoff', 'progress', 'fact_ledger', 'fact_decisions', 'manual_events']) {
         data[key] = clone(backup[key]);
     }
     data.history_rebuild = null;

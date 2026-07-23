@@ -45,6 +45,8 @@ const completeFloors = sources.map(source => ({
 const validSegment = validateHistorySegment({ floors: completeFloors }, sources, '伯滔');
 assert.equal(validSegment.ok, true, validSegment.errors.join('\n'));
 assert.equal(validSegment.floors[3].facts[0].subject, '<user>');
+assert.equal(validSegment.candidates.length, 1, 'every extracted fact must also enter the all-discoveries ledger');
+assert.equal(validSegment.candidates[0].contentFingerprint, 'fp-3');
 assert.equal(validateHistorySegment({ floors: completeFloors.slice(0, -1) }, sources).ok, false,
     'missing the last floor must be rejected');
 assert.equal(validateHistorySegment({ floors: completeFloors.map((item, index) => index === 24 ? { ...item, floor: 23 } : item) }, sources).ok, false,
@@ -312,7 +314,13 @@ assert.equal(incompleteData.turn_summaries[0].pairIndex, 88, 'an incomplete rebu
 const targetedChapterPrompts = [];
 const targetedChapterData = {
     state_table: { version: 1, entries: [], changelog: [] },
-    turn_summaries: Array.from({ length: 50 }, (_, pairIndex) => ({ pairIndex, summary: `<user>推进第 ${pairIndex} 轮，林许回应并形成结果。` })),
+    turn_summaries: Array.from({ length: 75 }, (_, pairIndex) => ({
+        pairIndex,
+        summary: `<user>推进第 ${pairIndex} 轮，林许回应并形成结果。`,
+        story_time: [0, 24, 50, 74].includes(pairIndex)
+            ? { label: pairIndex < 25 ? (pairIndex === 0 ? '第一日清晨' : '第一日夜晚') : (pairIndex === 50 ? '第三日清晨' : '第三日夜晚') }
+            : null,
+    })),
     chapters: [
         { id: 'ch_keep_1', floor_range: [0, 24], summary: '需要更新的旧章节', keywords: ['旧章节'], key_events: [], coverage: [], stale: true, stale_reason: 'turn_summary_edit', manual_override: true },
         { id: 'ch_keep_2', floor_range: [25, 49], summary: '绝不能改变的相邻章节', keywords: ['相邻章节'], key_events: [], coverage: [], stale: false },
@@ -331,7 +339,15 @@ globalThis.SillyTavern = { getContext: () => ({
     extensionSettings: { layered_memory: { memoryModelSource: 'current' } },
     generateRaw: async ({ prompt }) => {
         targetedChapterPrompts.push(prompt);
-        return JSON.stringify(regeneratedChapter);
+        if (!prompt.includes('【第 50 轮')) return JSON.stringify(regeneratedChapter);
+        return JSON.stringify({
+            ...regeneratedChapter,
+            key_events: [
+                { floor_range: [50, 62], text: '第三日前半段事件得到推进并形成阶段性结果。' },
+                { floor_range: [63, 74], text: '第三日后半段继续发展并明确后续安排。' },
+            ],
+            coverage: Array.from({ length: 25 }, (_, index) => ({ floor: 50 + index, event_index: index < 13 ? 0 : 1 })),
+        });
     },
     saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
 }) };
@@ -343,6 +359,12 @@ assert.equal(targetedChapterData.chapters[0].stale, false);
 assert.equal(targetedChapterData.chapters[0].stale_reason, null);
 assert.equal(targetedChapterData.chapters[0].manual_override, false);
 assert.equal(targetedChapterData.chapters[1].summary, '绝不能改变的相邻章节');
+assert.equal(targetedChapterData.chapters[0].story_time_range.label, '第一日清晨 → 第一日夜晚',
+    'in-place chapter regeneration must persist narrative time');
+await handleChapterSummaryJob({ startPair: 50, endPair: 74 });
+assert.equal(targetedChapterPrompts.length, 2, 'creating one new chapter must make one additional request');
+assert.equal(targetedChapterData.chapters.find(item => item.floor_range[0] === 50).story_time_range.label,
+    '第三日清晨 → 第三日夜晚', 'new live chapters must persist narrative time');
 
 let shortChapterAttempts = 0;
 globalThis.SillyTavern = { getContext: () => ({

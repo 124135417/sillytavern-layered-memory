@@ -41,7 +41,7 @@ export function updateInjection({ archiveEndPair } = {}) {
     const throughPair = Number.isInteger(archiveEndPair)
         ? archiveEndPair
         : (Number.isInteger(data.context_handoff?.removedThrough) ? data.context_handoff.removedThrough : -1);
-    const l1 = renderL1Block(data, settings.budgetL1);
+    const l1 = renderL1Block(data, settings.budgetL1, SillyTavern.getContext());
     const l2 = renderL2Block(data, { budget: settings.budgetL2, throughPair });
 
     if (estimateTokens(renderL2Block(data, { forBudget: true })) > (settings.budgetL2 || 5000)) {

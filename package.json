@@ -1,9 +1,9 @@
 {
   "name": "sillytavern-layered-memory",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/core-smoke.mjs && node tests/queue-smoke.mjs && node tests/model-routing-smoke.mjs && node tests/fork-smoke.mjs && node tests/migration-progress-smoke.mjs && node tests/rebuild-quality-smoke.mjs && node tests/mobile-ui-smoke.mjs && node tests/ui-copy-smoke.mjs"
+    "test": "node tests/core-smoke.mjs && node tests/queue-smoke.mjs && node tests/model-routing-smoke.mjs && node tests/fork-smoke.mjs && node tests/migration-progress-smoke.mjs && node tests/rebuild-quality-smoke.mjs && node tests/fact-ledger-smoke.mjs && node tests/mobile-ui-smoke.mjs && node tests/ui-copy-smoke.mjs"
   }
 }

@@ -1,6 +1,8 @@
 import { appendLog, getChatData, saveChatData } from './settings.js';
 import { validateEntry, validateUpdateId } from './validate.js';
 import { recordFloorEvent } from './branch.js';
+import { factIdentityKey, makeFactCandidate, upsertFactCandidate } from './facts.js';
+import { normalizeStoryTime } from './story-time.js';
 
 function nextEntryId(data) {
     const seq = data.progress.next_entry_seq || 1;
@@ -9,10 +11,8 @@ function nextEntryId(data) {
 }
 
 function findDuplicate(entries, slot, subject, object) {
-    return entries.find(e =>
-        e.slot === slot
-        && e.subject === subject
-        && (e.object || '') === (object || ''));
+    const candidate = typeof slot === 'object' ? slot : { slot, subject, object };
+    return entries.find(e => factIdentityKey(e) === factIdentityKey(candidate));
 }
 
 function pushChangelog(data, record) {
@@ -50,6 +50,7 @@ export async function mergeExtractResult(normalized, ctx) {
             pairIndex: Number(ctx.pairIndex ?? ctx.floorLabel),
             contentFingerprint: ctx.contentFingerprint || '',
             summary: normalized.turnSummary,
+            story_time: normalizeStoryTime(normalized.storyTimeRaw, ctx.sourceText),
             sourceMode: ctx.bodyMode || 'full',
             updatedAt: Date.now(),
         };
@@ -60,25 +61,37 @@ export async function mergeExtractResult(normalized, ctx) {
         }
     }
 
-    for (const item of normalized.adds) {
-        const dup = findDuplicate(table.entries, item.slot, item.subject, item.object || '');
+    for (let itemIndex = 0; itemIndex < normalized.adds.length; itemIndex += 1) {
+        const item = normalized.adds[itemIndex];
+        const dup = findDuplicate(table.entries, item);
         if (dup) {
             // treat as update
             if (dup.pinned) {
+                data.fact_ledger = upsertFactCandidate(data.fact_ledger, makeFactCandidate({
+                    fact: item, floor: Number(ctx.pairIndex ?? ctx.floorLabel), floorKey, contentFingerprint: ctx.contentFingerprint || null, source: ctx.source || 'auto', index: itemIndex,
+                }));
                 discarded += 1;
                 continue;
             }
             const v = validateEntry({ ...item, _updateId: dup.id }, ctx, item.slot);
             if (v.conflict) {
+                const conflictCandidate = makeFactCandidate({
+                    fact: item, floor: Number(ctx.pairIndex ?? ctx.floorLabel), floorKey, contentFingerprint: ctx.contentFingerprint || null, source: ctx.source || 'auto', index: itemIndex,
+                    errors: [v.conflict.note],
+                });
                 data.review_queue.push({
                     id: crypto.randomUUID(),
                     kind: 'flag_conflict',
                     entry_id: v.conflict.entry_id,
                     note: v.conflict.note,
+                    candidate_id: conflictCandidate.id,
                     floorKey,
                     createdAt: Date.now(),
                 });
                 conflicts += 1;
+                data.fact_ledger = upsertFactCandidate(data.fact_ledger, conflictCandidate);
+                discarded += 1;
+                continue;
             }
             if (!v.ok) {
                 discarded += 1;
@@ -95,6 +108,7 @@ export async function mergeExtractResult(normalized, ctx) {
                 after: { value: item.value, cause: item.cause || item.old_value },
             });
             dup.value = item.value;
+            dup.topic = item.topic || dup.topic || item.value;
             if (item.cause) {
                 dup.cause = item.cause;
             }
@@ -103,11 +117,17 @@ export async function mergeExtractResult(normalized, ctx) {
             table.version += 1;
             entryChanges.push({ op: 'upsert', id: dup.id, after: structuredClone(dup) });
             applied += 1;
+            data.fact_ledger = upsertFactCandidate(data.fact_ledger, makeFactCandidate({
+                fact: { ...item, topic: item.topic || item.value }, floor: Number(ctx.pairIndex ?? ctx.floorLabel), floorKey, contentFingerprint: ctx.contentFingerprint || null, source: ctx.source || 'auto', index: itemIndex,
+            }));
             continue;
         }
 
         const v = validateEntry(item, ctx, item.slot);
         if (!v.ok) {
+            data.fact_ledger = upsertFactCandidate(data.fact_ledger, makeFactCandidate({
+                fact: item, floor: Number(ctx.pairIndex ?? ctx.floorLabel), floorKey, contentFingerprint: ctx.contentFingerprint || null, source: ctx.source || 'auto', index: itemIndex, errors: v.errors,
+            }));
             discarded += 1;
             appendLog('warn', `丢弃 add: ${v.errors.join('; ')}`, item);
             continue;
@@ -127,6 +147,7 @@ export async function mergeExtractResult(normalized, ctx) {
         const entry = {
             id: nextEntryId(data),
             slot: item.slot,
+            topic: item.topic || item.value,
             subject: item.subject || '',
             object: item.object || '',
             value: item.value || '',
@@ -149,6 +170,9 @@ export async function mergeExtractResult(normalized, ctx) {
         table.version += 1;
         entryChanges.push({ op: 'upsert', id: entry.id, after: structuredClone(entry) });
         applied += 1;
+        data.fact_ledger = upsertFactCandidate(data.fact_ledger, makeFactCandidate({
+            fact: entry, floor: Number(ctx.pairIndex ?? ctx.floorLabel), floorKey, contentFingerprint: ctx.contentFingerprint || null, source: ctx.source || 'auto', index: itemIndex,
+        }));
     }
 
     for (const c of normalized.conflicts || []) {
@@ -172,6 +196,7 @@ export async function mergeExtractResult(normalized, ctx) {
             floorKey,
             pairIndex: Number(ctx.pairIndex ?? ctx.floorLabel),
             turnSummary: normalized.turnSummary,
+            storyTime: normalizeStoryTime(normalized.storyTimeRaw, ctx.sourceText),
             entryChanges,
             contentFingerprint: ctx.contentFingerprint || '',
         });
@@ -213,6 +238,9 @@ export async function rollbackFloor(floorKey, expectedData = null) {
     table.changelog = (table.changelog || []).filter(c => c.floorKey !== floorKey);
     data.extracted_keys = (data.extracted_keys || []).filter(k => k !== floorKey);
     data.floor_events = (data.floor_events || []).filter(event => event.floorKey !== floorKey);
+    const removedCandidateIds = new Set((data.fact_ledger || []).filter(item => item.floorKey === floorKey).map(item => item.id));
+    data.fact_ledger = (data.fact_ledger || []).filter(item => item.floorKey !== floorKey);
+    data.fact_decisions = (data.fact_decisions || []).filter(item => !removedCandidateIds.has(item.candidateId));
     if (logs.length) table.version += 1;
     await saveChatData(data);
     return Math.max(logs.length, removedSummary ? 1 : 0);
@@ -225,6 +253,6 @@ export function renderStateTableCompact(table) {
     }
     return entries.map(e => {
         const obj = e.object ? `↔${e.object}` : '';
-        return `- [${e.id}] (${e.slot}) ${e.subject}${obj}: ${e.value}${e.cause ? `（因：${e.cause}）` : ''}`;
+        return `- [${e.id}] (${e.slot}｜事项：${e.topic || e.value}) ${e.subject}${obj}: ${e.value}${e.cause ? `（因：${e.cause}）` : ''}`;
     }).join('\n');
 }

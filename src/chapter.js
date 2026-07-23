@@ -115,6 +115,7 @@ export async function handleChapterSummaryJob(payload) {
         sameRange.keywords = result.keywords || [];
         sameRange.key_events = result.key_events || [];
         sameRange.coverage = result.coverage || [];
+        sameRange.story_time_range = result.story_time_range || null;
         sameRange.stale = false;
         sameRange.stale_reason = null;
         sameRange.frozen = true;
@@ -137,6 +138,7 @@ export async function handleChapterSummaryJob(payload) {
         keywords: result.keywords || [],
         key_events: result.key_events || [],
         coverage: result.coverage || [],
+        story_time_range: result.story_time_range || null,
         floor_range: [startPair, endPair],
         pinned: false,
         demoted: false,

@@ -1,10 +1,11 @@
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { CHAPTER_JSON_SCHEMA, CHAPTER_SYSTEM } from './prompts.js';
+import { storyTimeRange } from './story-time.js';
 
 function promptForNotes(notes, retryNote = '') {
     return [
         retryNote ? `上次输出没有通过校验：${retryNote}\n请重新覆盖全部轮次。\n\n` : '',
-        ...notes.map(item => `【第 ${item.pairIndex} 轮】${item.summary}`),
+        ...notes.map(item => `【第 ${item.pairIndex} 轮${item.story_time?.label ? `｜剧情时间：${item.story_time.label}` : ''}】${item.summary}`),
     ].join('\n\n');
 }
 
@@ -72,6 +73,7 @@ export function validateChapterArchive(raw, startPair, endPair) {
             key_events: normalizedEvents,
             coverage: coverage.map(item => ({ floor: Number(item.floor), event_index: Number(item.event_index) })),
             keywords,
+            story_time_range: storyTimeRange([]),
             quality_warnings: warnings,
         },
     };
@@ -91,7 +93,10 @@ export async function summarizeChapterNotes(notes, startPair, endPair, assertCur
         });
         assertCurrent();
         const checked = validateChapterArchive(parseJsonFromModel(text), startPair, endPair);
-        if (checked.ok && (!checked.warnings.length || attempt === 1)) return checked.chapter;
+        if (checked.ok && (!checked.warnings.length || attempt === 1)) {
+            checked.chapter.story_time_range = storyTimeRange(notes);
+            return checked.chapter;
+        }
         retryNote = checked.errors.length
             ? checked.errors.join('；')
             : `${checked.warnings.join('；')}。请在不编造、不重复和不灌水的前提下，补充遗漏的因果、角色决定、关系变化与未解决事项，使概述达到建议长度`;

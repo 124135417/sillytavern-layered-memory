@@ -21,6 +21,7 @@ export function validateMemoryEntryShape(entry) {
     if (cleanText(entry.subject).length > 80) errors.push('主体名称超过 80 字');
     if (cleanText(entry.object).length > 80) errors.push('关联对象超过 80 字');
     if (cleanText(entry.value).length > 80) errors.push('事实内容超过 80 字');
+    if (cleanText(entry.topic).length > 80) errors.push('具体事项超过 80 字');
     if (cleanText(entry.evidence).length > 50) errors.push('原文证据超过 50 字');
     if (entry.slot === 'relationship' && !isMeaningful(entry.object)) errors.push('关系记忆缺少另一方');
     if (entry.source === 'auto' && !isMeaningful(entry.evidence)) errors.push('自动记忆缺少原文证据');
