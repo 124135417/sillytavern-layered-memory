@@ -71,6 +71,21 @@ function advanceChapterEnd(data, endPair) {
     }
 }
 
+export function markChapterStaleForTurnSummaryEdit(data, pairIndex) {
+    const affected = [];
+    for (const chapter of data?.chapters || []) {
+        if (pairIndex < chapter.floor_range?.[0] || pairIndex > chapter.floor_range?.[1]) continue;
+        chapter.stale = true;
+        chapter.stale_reason = 'turn_summary_edit';
+        affected.push(chapter.id);
+        if (chapter.volume_id) {
+            const volume = (data.volumes || []).find(candidate => candidate.id === chapter.volume_id);
+            if (volume) volume.stale = true;
+        }
+    }
+    return affected;
+}
+
 export async function handleChapterSummaryJob(payload) {
     if (payload.regenStale) {
         await handleRegenStaleChapters();
@@ -101,12 +116,16 @@ export async function handleChapterSummaryJob(payload) {
         sameRange.key_events = result.key_events || [];
         sameRange.coverage = result.coverage || [];
         sameRange.stale = false;
+        sameRange.stale_reason = null;
         sameRange.frozen = true;
+        if (payload.reason === 'turn_summary_edit') sameRange.manual_override = false;
         advanceChapterEnd(data, endPair);
         buildKeywordIndex(data);
         await saveChatData(data);
         appendLog('info', `章节摘要原地更新 ${sameRange.id} [${startPair}-${endPair}]`);
-        enqueue('volume_compress', { reason: 'budget_check' }, QUEUE_PRIORITY.volume_compress);
+        if (payload.reason !== 'turn_summary_edit') {
+            enqueue('volume_compress', { reason: 'budget_check' }, QUEUE_PRIORITY.volume_compress);
+        }
         return;
     }
 

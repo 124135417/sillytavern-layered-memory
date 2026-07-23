@@ -519,6 +519,7 @@ body.lm-memory-center-open {
 }
 .lm-quality-alert strong { font-size: var(--lm-type-body); }
 .lm-quality-alert p { margin: 4px 0 0; color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.55; }
+.lm-page-heading + .lm-quality-alert { margin-right: clamp(18px, 3vw, 34px); margin-left: clamp(18px, 3vw, 34px); }
 .lm-notice-strip { display: grid; gap: 7px; margin-bottom: 14px; }
 .lm-notice-strip article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 12px; background: var(--lm-surface-raised); border: 1px solid var(--lm-border); border-radius: var(--lm-radius-sm); }
 .lm-notice-strip span { color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.5; }
@@ -547,8 +548,9 @@ body.lm-memory-center-open {
 .lm-turn-records > summary::marker { color: var(--lm-accent); }
 .lm-turn-records > p { margin: 0 0 10px; color: var(--lm-muted); font-size: var(--lm-type-small); font-weight: 600; line-height: 1.55; }
 .lm-turn-records ol { display: grid; padding: 0; margin: 0; list-style: none; }
-.lm-turn-records li { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--lm-border); color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.6; }
+.lm-turn-records li { display: grid; grid-template-columns: 80px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 0; border-top: 1px solid var(--lm-border); color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.6; }
 .lm-turn-records li > span { color: var(--lm-muted); font-weight: 700; white-space: nowrap; }
+.lm-turn-records li > span em { display: block; color: var(--lm-accent); font-size: var(--lm-type-caption); font-style: normal; font-weight: 700; }
 .lm-turn-records li > p { min-width: 0; margin: 0; color: var(--lm-text); font-weight: 600; overflow-wrap: anywhere; }
 .lm-turn-records-loose { max-width: none; margin: 18px clamp(18px, 3vw, 34px) 8px 48px; padding: 0 16px 8px; background: var(--lm-surface-soft); border: 1px solid var(--lm-border-strong); border-radius: var(--lm-radius-sm); }
 .lm-keywords { display: flex; flex-wrap: wrap; gap: 5px; }

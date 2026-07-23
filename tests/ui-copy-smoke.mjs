@@ -40,6 +40,12 @@ const requiredCopy = [
     '尚未合并的剧情记录',
     '已生成 ${turnSummaryCount} / ${total} 条逐轮记录',
     '已忽略 ${warningCount} 条不可靠事实',
+    '逐轮记录已经生成',
+    '检查逐轮记录',
+    '根据逐轮记录生成章节摘要',
+    '编辑这里只改变剧情记录',
+    '根据修改后的记录重新生成本章',
+    '准备检查逐轮记录',
 ];
 for (const copy of requiredCopy) {
     assert.ok(panel.includes(copy), `missing plain-language UI copy: ${copy}`);

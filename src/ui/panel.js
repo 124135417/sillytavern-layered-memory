@@ -12,9 +12,11 @@ import {
 import { recordMigrationEdit } from '../eval/migrate.js';
 import {
     getHistoryRebuildSnapshot,
+    normalizeHistoryUserSummary,
     requestHistoryRebuildAbort,
     restoreRebuildBackup,
     startHistoryRebuild,
+    startHistoryRebuildChapters,
 } from '../rebuild.js';
 import { getPairs, getPairTexts } from '../ids.js';
 import {
@@ -33,6 +35,7 @@ import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
 import { recordManualEvent } from '../branch.js';
 import { displayEntityName, displayNarrativeText, usableMemoryEntries } from '../quality.js';
+import { markChapterStaleForTurnSummaryEdit } from '../chapter.js';
 
 const ROOT_ID = 'layered-memory-panel';
 const DRAWER_ID = 'layered-memory-drawer';
@@ -177,19 +180,20 @@ function renderHistoryBackfillStatus(snapshot = getHistoryRebuildSnapshot()) {
     const total = Number(snapshot.total) || 0;
     const completed = Math.min(total, Number(snapshot.completed) || 0);
     const measuredPercent = total > 0 ? Math.round((completed / total) * 100) : 0;
-    const percent = snapshot.status === 'complete' ? 100 : Math.min(99, measuredPercent);
+    const percent = ['complete', 'review'].includes(snapshot.status) ? 100 : Math.min(99, measuredPercent);
     const statusCopy = {
         idle: ['尚未开始安全重建', '点击后会先保留旧结果，再在后台逐轮重建；未完成前不会替换当前记忆。'],
         running: ['正在安全重建旧聊天', snapshot.stage],
         stopping: ['正在安全停止', '未开始的任务已经取消；正在请求模型的这一项结束后停止。'],
         stopped: ['安全重建已停止', `已经保留前面完成的 ${completed} 轮，可以随时继续。`],
+        review: ['逐轮记录已经生成', '请在“剧情时间线”检查或修改；确认后再生成章节摘要。'],
         complete: ['安全重建完成', '旧聊天已经逐轮核对，并一次性替换为通过校验的新结果。'],
         error: ['安全重建遇到问题', snapshot.error || '旧结果仍然保留。处理失败项后可以继续重建。'],
     };
     const [title, detail] = statusCopy[snapshot.status] || statusCopy.idle;
-    const canStart = !['running', 'stopping'].includes(snapshot.status);
+    const canStart = !['running', 'stopping', 'review'].includes(snapshot.status);
     const canStop = snapshot.status === 'running';
-    const startLabel = ['stopped', 'error'].includes(snapshot.status) ? '继续安全重建' : snapshot.status === 'complete' ? '重新安全重建' : '安全重建旧结果';
+    const startLabel = ['stopped', 'error'].includes(snapshot.status) ? '继续安全重建' : snapshot.status === 'complete' ? '重新安全重建' : '生成逐轮剧情记录';
     const waiting = snapshot.queued > 0 ? ` · 还有 ${snapshot.queued} 项等待处理` : '';
     const turnSummaryCount = Math.min(total, Number(snapshot.turnSummaryCount) || 0);
     const warningCount = Number(snapshot.warningCount) || 0;
@@ -197,7 +201,7 @@ function renderHistoryBackfillStatus(snapshot = getHistoryRebuildSnapshot()) {
         <div class="lm-backfill-heading"><div><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${completed} / ${total} 轮</strong></div>
         <progress max="100" value="${percent}" aria-label="旧聊天安全重建进度：${percent}%">${percent}%</progress>
         <div class="lm-backfill-meta"><span>${percent}% 已完成${escapeHtml(waiting)}</span><span>已生成 ${turnSummaryCount} / ${total} 条逐轮记录</span>${warningCount ? `<span>已忽略 ${warningCount} 条不可靠事实</span>` : ''}${snapshot.inFlight ? '<span>当前有 1 项正在处理</span>' : ''}</div>
-        <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-migrate" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button><button type="button" class="lm-text-button" id="lm-migrate-abort" ${canStop ? '' : 'disabled'}>停止重建</button></div>
+        <div class="lm-settings-actions">${snapshot.status === 'review' ? '<button type="button" class="lm-button lm-button-primary" id="lm-build-rebuild-chapters">根据逐轮记录生成章节摘要</button><button type="button" class="lm-text-button" id="lm-review-rebuild-turns">检查逐轮记录</button>' : `<button type="button" class="lm-button" id="lm-migrate" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button><button type="button" class="lm-text-button" id="lm-migrate-abort" ${canStop ? '' : 'disabled'}>停止重建</button>`}</div>
     </div>`;
 }
 
@@ -224,6 +228,15 @@ function bindHistoryBackfillControls(host, body) {
         await requestHistoryRebuildAbort();
         refreshHistoryBackfillUi(body);
         toastr?.info?.('停止请求已收到，已取消尚未开始的重建任务。');
+    });
+    host.querySelector('#lm-review-rebuild-turns')?.addEventListener('click', () => selectTab('chapters'));
+    host.querySelector('#lm-build-rebuild-chapters')?.addEventListener('click', async () => {
+        if (!confirm('根据当前逐轮记录生成章节摘要？人工修改会作为生成依据；只会处理完整章节。')) return;
+        const button = host.querySelector('#lm-build-rebuild-chapters');
+        if (button) button.disabled = true;
+        await startHistoryRebuildChapters();
+        refreshHistoryBackfillUi(body);
+        toastr?.info?.('已经开始根据逐轮记录生成章节摘要。');
     });
 }
 
@@ -413,6 +426,8 @@ function renderShellStatus() {
     const rebuild = getHistoryRebuildSnapshot();
     const syncLabel = rebuild?.status === 'complete'
         ? `已安全重建 ${rebuild.completed} / ${rebuild.total} 轮`
+        : rebuild?.status === 'review'
+            ? `逐轮记录待检查 ${rebuild.completed} / ${rebuild.total} 轮`
         : rebuild?.status === 'running' || rebuild?.status === 'stopping'
             ? `正在安全重建 ${rebuild.completed} / ${rebuild.total} 轮`
             : syncedThrough >= liveStart
@@ -584,6 +599,10 @@ function renderTask(job, state) {
         history_rebuild_chapter: '合并旧剧情章节',
         history_rebuild_commit: '安全替换旧结果',
     };
+    if (job.type === 'history_rebuild_commit'
+        && (job.payload?.reviewOnly || getChatData().history_rebuild?.stage_mode !== 'chapters')) {
+        labels.history_rebuild_commit = '准备检查逐轮记录';
+    }
     const target = job.payload?.pairIndex != null ? `第 ${job.payload.pairIndex} 轮对话`
         : job.payload?.startPair != null ? `第 ${job.payload.startPair}–${job.payload.endPair} 轮对话`
             : '';
@@ -909,6 +928,25 @@ function openReportDialog({ entryId = null, type = 'miss', pairIndex = null } = 
 
 function renderChaptersTab() {
     const data = getChatData();
+    const rebuild = data.history_rebuild;
+    const draftMode = rebuild?.stage_mode === 'turns'
+        && ['running', 'stopping', 'stopped', 'error', 'review'].includes(rebuild?.status)
+        && Array.isArray(rebuild.turn_summaries);
+    if (draftMode) {
+        const drafts = normalizedTurnSummaries({ turn_summaries: rebuild.turn_summaries });
+        const size = getSettings().chapterSize || 25;
+        const groups = [];
+        for (let offset = 0; offset < drafts.length; offset += size) groups.push(drafts.slice(offset, offset + size));
+        let draftHtml = `<div class="lm-page-heading"><div><span class="lm-kicker">重建草稿</span><h3>逐轮剧情记录</h3><p>这些内容还在独立暂存区，不会发送给模型。你可以先修改，确认后再生成章节摘要。</p></div><div class="lm-page-count">${drafts.length} / ${Number(rebuild.total) || 0} 条</div></div>`;
+        draftHtml += '<aside class="lm-quality-alert"><span class="fa-solid fa-pen" aria-hidden="true"></span><div><strong>编辑这里只改变剧情记录</strong><p>人物身份、关系和其他结构化事实仍请到“当前记忆”修改。</p></div></aside>';
+        for (const group of groups.reverse()) {
+            draftHtml += renderTurnSummaryDisclosure(group, { draft: true, editable: true });
+        }
+        if (!drafts.length) {
+            draftHtml += '<div class="lm-empty-state"><span class="fa-solid fa-spinner" aria-hidden="true"></span><h3>正在等待第一批逐轮记录</h3><p>生成后会自动出现在这里。</p></div>';
+        }
+        return draftHtml;
+    }
     const chapters = [...(data.chapters || [])].sort((a, b) => (b.floor_range?.[1] || 0) - (a.floor_range?.[1] || 0));
     const turnSummaries = normalizedTurnSummaries(data);
     const looseGroups = uncoveredTurnSummaryGroups(turnSummaries, chapters);
@@ -922,11 +960,12 @@ function renderChaptersTab() {
         html += '</div></section>';
     }
     for (const group of looseGroups) {
-        html += renderTurnSummaryDisclosure(group, { loose: true });
+        html += renderTurnSummaryDisclosure(group, { loose: true, editable: true });
     }
     html += '<section class="lm-timeline" aria-label="章节列表">';
     for (const c of chapters) {
-        const state = c.stale ? '<span class="lm-state-tag" data-state="error">原对话已修改 · 等待重新整理</span>'
+        const state = c.stale_reason === 'turn_summary_edit' ? '<span class="lm-state-tag" data-state="error">逐轮记录已修改 · 等待更新本章</span>'
+            : c.stale ? '<span class="lm-state-tag" data-state="error">原对话已修改 · 等待重新整理</span>'
             : c.demoted ? '<span class="lm-state-tag">已整理进长期摘要</span>'
                 : '<span class="lm-state-tag" data-state="success">摘要已保存</span>';
         const events = Array.isArray(c.key_events) ? c.key_events.filter(event => event?.text) : [];
@@ -936,10 +975,11 @@ function renderChaptersTab() {
             <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4></div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}</div></header>
             <p>${escapeHtml(displayNarrativeText(c.summary))}</p>
             ${events.length ? `<details class="lm-key-events"><summary>查看 ${events.length} 个关键事件</summary><ol>${events.map(event => `<li><span>第 ${event.floor_range?.[0]}–${event.floor_range?.[1]} 轮</span>${escapeHtml(displayNarrativeText(event.text))}</li>`).join('')}</ol></details>` : ''}
-            ${chapterTurns.length ? renderTurnSummaryDisclosure(chapterTurns) : ''}
+            ${chapterTurns.length ? renderTurnSummaryDisclosure(chapterTurns, { editable: true }) : ''}
             ${c.keywords?.length ? `<div class="lm-keywords">${c.keywords.map(k => `<span>${escapeHtml(k)}</span>`).join('')}</div>` : ''}
             <div class="lm-row-actions">
                 <button type="button" data-act="edit" class="lm-text-button">编辑摘要</button>
+                ${c.stale_reason === 'turn_summary_edit' ? '<button type="button" data-act="regenerate" class="lm-button">根据修改后的记录重新生成本章</button>' : ''}
                 <button type="button" data-act="pin" class="lm-text-button">${c.pinned ? '恢复自动整理' : '始终保留本章'}</button>
             </div>
         </article>`;
@@ -954,7 +994,7 @@ function renderChaptersTab() {
 export function normalizedTurnSummaries(data) {
     return (data?.turn_summaries || [])
         .filter(item => Number.isInteger(item?.pairIndex) && String(item?.summary || '').trim())
-        .map(item => ({ pairIndex: item.pairIndex, summary: String(item.summary).trim() }))
+        .map(item => ({ pairIndex: item.pairIndex, summary: String(item.summary).trim(), manual_override: Boolean(item.manual_override) }))
         .sort((a, b) => a.pairIndex - b.pairIndex);
 }
 
@@ -973,21 +1013,55 @@ export function uncoveredTurnSummaryGroups(turnSummaries, chapters) {
     return groups.reverse();
 }
 
-function renderTurnSummaryDisclosure(items, { loose = false } = {}) {
+function renderTurnSummaryDisclosure(items, { loose = false, draft = false, editable = false } = {}) {
     if (!items.length) return '';
     const start = items[0].pairIndex;
     const end = items.at(-1).pairIndex;
-    const label = loose
+    const label = draft
+        ? `第 ${start}–${end} 轮 · ${items.length} 条逐轮草稿`
+        : loose
         ? `尚未合并的剧情记录 · 第 ${start}–${end} 轮 · ${items.length} 条`
         : `查看本章 ${items.length} 条逐轮记录`;
-    return `<details class="lm-turn-records ${loose ? 'lm-turn-records-loose' : ''}">
+    return `<details class="lm-turn-records ${loose || draft ? 'lm-turn-records-loose' : ''}">
         <summary>${escapeHtml(label)}</summary>
         ${loose ? '<p>这些记录还没有凑满一章；Fork 或精简到这里时，插件会直接使用它们。</p>' : ''}
-        <ol>${items.map(item => `<li><span>第 ${item.pairIndex} 轮</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p></li>`).join('')}</ol>
+        <ol>${items.map(item => `<li><span>第 ${item.pairIndex} 轮${item.manual_override ? '<em>人工修改</em>' : ''}</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p>${editable ? `<button type="button" class="lm-text-button" data-turn-edit="${item.pairIndex}" data-draft="${draft ? 'true' : 'false'}">编辑</button>` : ''}</li>`).join('')}</ol>
     </details>`;
 }
 
 function bindChaptersTab(body) {
+    body.querySelectorAll('[data-turn-edit]').forEach(button => {
+        button.addEventListener('click', async () => {
+            const data = getChatData();
+            const pairIndex = Number(button.dataset.turnEdit);
+            const draft = button.dataset.draft === 'true';
+            const collection = draft ? data.history_rebuild?.turn_summaries : data.turn_summaries;
+            const item = collection?.find(summary => summary.pairIndex === pairIndex);
+            if (!item) return;
+            const edited = prompt(`编辑第 ${pairIndex} 轮剧情记录。这里只修改剧情摘要，不会改变“当前记忆”中的结构化事实。`, displayNarrativeText(item.summary));
+            if (edited == null) return;
+            const summary = normalizeHistoryUserSummary(edited, SillyTavern.getContext().name1 || '');
+            if (!summary.trim()) {
+                alert('逐轮剧情记录不能为空。');
+                return;
+            }
+            item.summary = summary;
+            item.manual_override = true;
+            item.updatedAt = Date.now();
+            if (draft) {
+                data.history_rebuild.chapters = (data.history_rebuild.chapters || []).filter(chapter =>
+                    pairIndex < chapter.floor_range?.[0] || pairIndex > chapter.floor_range?.[1]);
+            } else {
+                const floorEvent = (data.floor_events || []).find(event => event.pairIndex === pairIndex);
+                if (floorEvent) floorEvent.turnSummary = summary;
+                markChapterStaleForTurnSummaryEdit(data, pairIndex);
+            }
+            await saveChatData(data);
+            updateInjection();
+            renderActiveTab();
+            toastr?.success?.(draft ? '逐轮草稿已保存。生成章节时会使用修改后的内容。' : '逐轮记录已保存，只需重新生成它所属的章节。');
+        });
+    });
     body.querySelectorAll('article[data-cid]').forEach(card => {
         const id = card.dataset.cid;
         card.querySelector('[data-act="edit"]')?.addEventListener('click', async () => {
@@ -1014,6 +1088,18 @@ function bindChaptersTab(body) {
                 await saveChatData();
                 renderActiveTab();
             }
+        });
+        card.querySelector('[data-act="regenerate"]')?.addEventListener('click', async () => {
+            const data = getChatData();
+            const chapter = data.chapters.find(candidate => candidate.id === id);
+            if (!chapter) return;
+            const button = card.querySelector('[data-act="regenerate"]');
+            if (button) button.disabled = true;
+            enqueue('chapter_summary', {
+                startPair: chapter.floor_range[0], endPair: chapter.floor_range[1], reason: 'turn_summary_edit',
+            }, QUEUE_PRIORITY.chapter_summary);
+            toastr?.info?.(`只会重新生成第 ${chapter.floor_range[0]}–${chapter.floor_range[1]} 轮这一章。`);
+            renderActiveTab();
         });
     });
 }

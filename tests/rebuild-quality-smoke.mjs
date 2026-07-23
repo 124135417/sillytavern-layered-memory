@@ -10,6 +10,7 @@ const {
     validateHistorySegment,
 } = await import('../src/rebuild.js');
 const { validateChapterArchive } = await import('../src/archive.js');
+const { handleChapterSummaryJob, markChapterStaleForTurnSummaryEdit } = await import('../src/chapter.js');
 const { displayNarrativeText, isUsableMemoryEntry } = await import('../src/quality.js');
 const { normalizedTurnSummaries, uncoveredTurnSummaryGroups } = await import('../src/ui/panel.js');
 const { renderL1Block } = await import('../src/render.js');
@@ -121,6 +122,28 @@ assert.equal(segmentStaging.warnings.length, 1, 'the invented optional fact shou
 assert.equal(segmentStaging.fact_events.length, 0, 'the invented fact must not enter staging');
 assert.equal(segmentStaging.unresolved_floors.length, 0);
 
+const reviewData = {
+    state_table: { version: 1, entries: [], changelog: [] },
+    turn_summaries: [{ pairIndex: 77, summary: '仍在使用的正式旧结果' }],
+    history_rebuild: {
+        status: 'running', stage_mode: 'turns', total: 2, completed: 2, baseline: 1, startedAt: 1,
+        turn_summaries: structuredClone(segmentStaging.turn_summaries), entries: [], fact_events: [], chapters: [], extracted_keys: [],
+    },
+    progress: { baseline_pair: 1 },
+};
+globalThis.SillyTavern = { getContext: () => ({
+    chat: segmentChat,
+    name1: '伯滔',
+    chatMetadata: { layered_memory: reviewData },
+    extensionSettings: { layered_memory: { chapterSize: 25 } },
+    saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
+}) };
+await handleHistoryRebuildCommit();
+assert.equal(reviewData.history_rebuild.status, 'review', 'turn generation must stop for user review before chapters');
+assert.equal(reviewData.history_rebuild.stage_mode, 'turns');
+assert.equal(reviewData.turn_summaries[0].pairIndex, 77, 'review drafts must not replace the formal old result');
+assert.equal(reviewData.history_rebuild.chapters.length, 0, 'review transition must not generate chapters');
+
 const chapterSummary = '本章按照时间顺序完整回顾了用户的行动、角色回应、因果结果与后续安排。'.repeat(14);
 const coverage = sources.map((source, index) => ({ floor: source.pair.pairIndex, event_index: index < 13 ? 0 : 1 }));
 const validChapter = {
@@ -166,6 +189,18 @@ const chapters = [{ id: 'ch_001' }, { id: 'ch_002' }];
 assert.equal(validateVolumeResult({ summary: '林许完整回顾', covered_chapter_ids: ['ch_001'] }, chapters, ['林许']).ok, false);
 assert.equal(validateVolumeResult({ summary: '林许完整回顾', covered_chapter_ids: ['ch_001', 'ch_002'] }, chapters, ['林许']).ok, true);
 
+const targetedData = {
+    chapters: [
+        { id: 'ch_001', floor_range: [0, 24], stale: false, volume_id: 'vol_1' },
+        { id: 'ch_002', floor_range: [25, 49], stale: false, volume_id: null },
+    ],
+    volumes: [{ id: 'vol_1', stale: false }],
+};
+assert.deepEqual(markChapterStaleForTurnSummaryEdit(targetedData, 24), ['ch_001']);
+assert.equal(targetedData.chapters[0].stale_reason, 'turn_summary_edit');
+assert.equal(targetedData.chapters[1].stale, false, 'editing floor 24 must not invalidate the next chapter');
+assert.equal(targetedData.volumes[0].stale, true, 'an owning long-term summary must be marked stale without auto-regeneration');
+
 const chat = [];
 for (let index = 0; index < 4; index += 1) {
     chat.push({ is_user: true, mes: `用户 ${index}`, extra: { layered_memory_id: `u${index}` } });
@@ -176,17 +211,18 @@ const preservedManual = { id: 'e_0007', slot: 'identity', subject: '<user>', obj
 const preservedPinned = { id: 'e_0008', slot: 'promise', subject: '林许', object: '', value: '保留约定', evidence: '保留约定', source: 'auto', pinned: true };
 const oldAuto = { id: 'e_0009', slot: 'world', subject: '旧世界', object: '', value: '将被替换', evidence: '将被替换', source: 'auto', pinned: false };
 const stagedSummary = index => ({ floorKey: `u${index}+a${index}`, pairIndex: index, contentFingerprint: `fp${index}`, summary: `<user>推进第 ${index} 轮。` });
+const preservedManualTurn = { ...stagedSummary(0), summary: '<user>人工修正了第 0 轮剧情。', manual_override: true, updatedAt: 99 };
 const commitData = {
     version: 3,
     state_table: { version: 1, entries: [preservedManual, preservedPinned, oldAuto], changelog: [] },
-    turn_summaries: [{ pairIndex: 99, summary: '旧自动摘要' }],
+    turn_summaries: [preservedManualTurn, { pairIndex: 99, summary: '旧自动摘要' }],
     floor_events: [], manual_events: [], branch_checkpoints: [], branch_origin: null,
     history_backfill: { status: 'idle', total: 0, completed: 0 },
     chapters: [{ id: 'ch_004', summary: '用户人工改写章节', floor_range: [0, 1], pinned: false, manual_override: true, keywords: [] }],
     volumes: [{ id: 'vol_old', chapter_ids: [], summary: '旧长期摘要' }], keyword_index: {}, review_queue: [{ id: 'old', kind: 'proofread' }], notices: [],
     quarantined_entries: [], rebuild_backup: { marker: 'old-results-remain-recoverable' },
     history_rebuild: {
-        status: 'running', total: 4, completed: 4, startedAt: 1, baseline: 3,
+        status: 'running', stage_mode: 'chapters', total: 4, completed: 4, startedAt: 1, baseline: 3,
         turn_summaries: [0, 1, 2, 3].map(stagedSummary),
         entries: [{ slot: 'identity', subject: '林许', object: '', value: '是防卫局特工', evidence: '回复 2', source: 'auto', established_floor: 2, updated_floor: 2 }],
         fact_events: [{ floor: 2, fact: { slot: 'identity', subject: '林许', object: '', value: '是防卫局特工', evidence: '回复 2', source: 'auto' } }],
@@ -219,6 +255,8 @@ assert.equal(commitData.chapters.some(chapter => chapter.floor_range[0] === 2), 
 assert.deepEqual(commitData.rebuild_backup, { marker: 'old-results-remain-recoverable' });
 assert.equal(commitData.history_rebuild.status, 'complete');
 assert.equal(commitData.history_backfill.completed, 4);
+assert.equal(commitData.turn_summaries.find(summary => summary.pairIndex === 0).summary, '<user>人工修正了第 0 轮剧情。',
+    'a manual per-turn correction for unchanged source text must survive future rebuilds');
 assert.equal(commitData.review_queue.length, 0);
 assert.equal(commitData.floor_events.find(event => event.pairIndex === 2).entryChanges.length, 1,
     'rebuilt facts must produce fresh fork-replay events');
@@ -251,5 +289,40 @@ assert.equal(incompleteData.history_rebuild.status, 'error');
 assert.match(incompleteData.history_rebuild.error, /第 2 轮/u);
 assert.equal(incompleteData.state_table.entries[0].id, 'old-safe', 'an incomplete rebuild must not replace old facts');
 assert.equal(incompleteData.turn_summaries[0].pairIndex, 88, 'an incomplete rebuild must not replace old summaries');
+
+const targetedChapterPrompts = [];
+const targetedChapterData = {
+    state_table: { version: 1, entries: [], changelog: [] },
+    turn_summaries: Array.from({ length: 50 }, (_, pairIndex) => ({ pairIndex, summary: `<user>推进第 ${pairIndex} 轮，林许回应并形成结果。` })),
+    chapters: [
+        { id: 'ch_keep_1', floor_range: [0, 24], summary: '需要更新的旧章节', keywords: ['旧章节'], key_events: [], coverage: [], stale: true, stale_reason: 'turn_summary_edit', manual_override: true },
+        { id: 'ch_keep_2', floor_range: [25, 49], summary: '绝不能改变的相邻章节', keywords: ['相邻章节'], key_events: [], coverage: [], stale: false },
+    ],
+    volumes: [], keyword_index: {}, progress: { baseline_pair: 49, last_chapter_end_pair: 49, next_chapter_seq: 3 },
+};
+const regeneratedChapter = {
+    summary: chapterSummary,
+    key_events: validChapter.key_events,
+    coverage: validChapter.coverage,
+    keywords: validChapter.keywords,
+};
+globalThis.SillyTavern = { getContext: () => ({
+    chat: [], name1: '伯滔',
+    chatMetadata: { layered_memory: targetedChapterData },
+    extensionSettings: { layered_memory: { memoryModelSource: 'current' } },
+    generateRaw: async ({ prompt }) => {
+        targetedChapterPrompts.push(prompt);
+        return JSON.stringify(regeneratedChapter);
+    },
+    saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
+}) };
+await handleChapterSummaryJob({ startPair: 0, endPair: 24, reason: 'turn_summary_edit' });
+assert.equal(targetedChapterPrompts.length, 1, 'targeted regeneration must make exactly one chapter request');
+assert.doesNotMatch(targetedChapterPrompts[0], /【第 25 轮】/u, 'targeted regeneration must not include the neighboring chapter');
+assert.equal(targetedChapterData.chapters[0].id, 'ch_keep_1', 'targeted regeneration must preserve the chapter id');
+assert.equal(targetedChapterData.chapters[0].stale, false);
+assert.equal(targetedChapterData.chapters[0].stale_reason, null);
+assert.equal(targetedChapterData.chapters[0].manual_override, false);
+assert.equal(targetedChapterData.chapters[1].summary, '绝不能改变的相邻章节');
 
 console.log('rebuild quality smoke: validation gates, visible turn records, and atomic replacement passed');

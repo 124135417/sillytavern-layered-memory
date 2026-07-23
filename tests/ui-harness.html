@@ -50,6 +50,7 @@
     </div>
     <script type="module">
         const now = Date.now();
+        const harnessMode = new URLSearchParams(location.search).get('mode') || 'complete';
         const chat = [];
         for (let i = 0; i < 132; i += 1) {
             chat.push({ is_user: true, mes: `用户消息 ${i}`, send_date: `${i}-u`, extra: { layered_memory_id: `${i}-u` } });
@@ -83,13 +84,15 @@
             turn_summaries: turnSummaries,
             chapters: [
                 chapter(1, 0, 24), chapter(2, 25, 49), chapter(3, 50, 74), chapter(4, 75, 99),
-                { ...chapter(5, 100, 124), summary: '伯滔说明自己不喜欢熟鱼、偏好贝类和刺身，林许据此调整居酒屋的用餐安排。两人在交谈中继续确认彼此的边界，伯滔明确要求林许不要采取极端手段；林许接受要求，并承诺之后先沟通再行动。随着身份和动机逐步坦白，双方从互相试探转向有限信任，同时约定完成北港旧灯塔的调查后再讨论下一步安排。', keywords: ['伯滔', '林许', '居酒屋', '饮食偏好'], key_events: [{ floor_range: [100, 108], text: '伯滔说明饮食偏好，林许调整居酒屋安排。' }, { floor_range: [109, 117], text: '双方讨论行动边界，伯滔要求林许不要走极端。' }, { floor_range: [118, 124], text: '关系继续推进，并确认调查后的后续安排。' }] },
+                { ...chapter(5, 100, 124), ...(harnessMode === 'target' ? { stale: true, stale_reason: 'turn_summary_edit' } : {}), summary: '伯滔说明自己不喜欢熟鱼、偏好贝类和刺身，林许据此调整居酒屋的用餐安排。两人在交谈中继续确认彼此的边界，伯滔明确要求林许不要采取极端手段；林许接受要求，并承诺之后先沟通再行动。随着身份和动机逐步坦白，双方从互相试探转向有限信任，同时约定完成北港旧灯塔的调查后再讨论下一步安排。', keywords: ['伯滔', '林许', '居酒屋', '饮食偏好'], key_events: [{ floor_range: [100, 108], text: '伯滔说明饮食偏好，林许调整居酒屋安排。' }, { floor_range: [109, 117], text: '双方讨论行动边界，伯滔要求林许不要走极端。' }, { floor_range: [118, 124], text: '关系继续推进，并确认调查后的后续安排。' }] },
             ],
             volumes: [], keyword_index: {},
             review_queue: [{ id: 'r1', kind: 'flag_conflict', entry_id: 'e_3', note: '新楼层暗示两人已经和解，但旧事实仍为“尚未完全和解”。', createdAt: now }],
             notices: [{ id: 'n1', kind: 'notice', note: '旧聊天安全重建完成：已核对 132 / 132 轮。', createdAt: now }],
             quarantined_entries: [{ id: 'bad1', slot: 'world', subject: '', value: 'undefined', quarantineReason: '缺少明确主体；缺少事实内容' }],
-            history_rebuild: { status: 'complete', total: 132, completed: 132, phase: '安全重建完成', warnings: ['第 31 轮已忽略一条不可靠事实'], startedAt: now - 100000, finishedAt: now },
+            history_rebuild: harnessMode === 'review'
+                ? { status: 'review', stage_mode: 'turns', total: 132, completed: 132, phase: '逐轮记录已经生成，等待检查和修改', turn_summaries: structuredClone(turnSummaries), entries: [], fact_events: [], chapters: [], extracted_keys: [], warnings: [], unresolved_floors: [], startedAt: now - 100000 }
+                : { status: 'complete', stage_mode: 'chapters', total: 132, completed: 132, phase: '安全重建完成', warnings: ['第 31 轮已忽略一条不可靠事实'], startedAt: now - 100000, finishedAt: now },
             rebuild_backup: { createdAt: now - 100000 },
             pending_floors: [], extracted_keys: extracted,
             job_queue: {
@@ -122,7 +125,7 @@
         window.toastr = { info: console.log, error: console.error, success: console.log };
         window.alert = console.log;
         window.confirm = () => true;
-        window.prompt = () => null;
+        window.prompt = (_message, current) => harnessMode === 'review' ? `${current}（人工修正）` : null;
         const { injectPanel, openMemoryCenter } = await import('../src/ui/panel.js');
         injectPanel();
         openMemoryCenter(true);
