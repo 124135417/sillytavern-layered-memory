@@ -9,15 +9,23 @@ export function getSettings() {
     if (!extensionSettings[MODULE_NAME]) {
         extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
     }
+    const settings = extensionSettings[MODULE_NAME];
+    if (!Object.hasOwn(settings, 'minRecentPairs')) {
+        const legacyRecent = Number(settings.recentPairs);
+        settings.minRecentPairs = Math.max(6, Number.isFinite(legacyRecent) ? legacyRecent : 0);
+    }
+    if (!['compact', 'balanced', 'detailed', 'custom'].includes(settings.historyBudgetMode)) {
+        settings.historyBudgetMode = 'balanced';
+    }
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
-        if (!Object.hasOwn(extensionSettings[MODULE_NAME], key)) {
-            extensionSettings[MODULE_NAME][key] = structuredClone(DEFAULT_SETTINGS[key]);
+        if (!Object.hasOwn(settings, key)) {
+            settings[key] = structuredClone(DEFAULT_SETTINGS[key]);
         }
     }
-    if (!Array.isArray(extensionSettings[MODULE_NAME].eval_cases)) {
-        extensionSettings[MODULE_NAME].eval_cases = [];
+    if (!Array.isArray(settings.eval_cases)) {
+        settings.eval_cases = [];
     }
-    return extensionSettings[MODULE_NAME];
+    return settings;
 }
 
 export function saveSettings() {

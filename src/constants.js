@@ -48,6 +48,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     budgetL1: 2000,
     budgetL2: 5000,
     budgetL4: 1500,
+    /** How much of the model context the post-regex chat history may use. */
+    historyBudgetMode: 'balanced', // compact | balanced | detailed | custom
+    historyTokenBudget: 12000,
+    minRecentPairs: 6,
+    /** @deprecated Kept for settings migration from <= 0.2.0. */
     recentPairs: 3,
     chapterSize: 25,
     proofreadEvery: 75,
@@ -97,5 +102,7 @@ export const EMPTY_CHAT_DATA = () => ({
          */
         baseline_pair: null,
     },
+    /** Last request-only context handoff. Contains counts/ranges, never chat text. */
+    context_handoff: null,
     logs: [],
 });

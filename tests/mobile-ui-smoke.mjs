@@ -41,9 +41,11 @@ assert.match(css, /\.lm-dialog input,[\s\S]*\.lm-dialog textarea \{/u,
     'body-level dialogs must own their form foreground and background styles');
 assert.match(css, /height: calc\(100dvh - 58px\)/u,
     'tablet and narrow desktop panels need a definite height, not only a max-height');
+assert.match(css, /\.lm-body \{[\s\S]*scroll-padding-bottom: 92px/u,
+    'focused phone settings must scroll clear of the sticky save bar');
 assert.match(css, /\.lm-memory-backdrop \{[\s\S]*z-index: 2147483000/u,
     'the modal backdrop must sit above hostile host controls');
 assert.match(css, /\.layered-memory-root \{[\s\S]*z-index: 2147483001/u,
     'the memory center must sit above its modal backdrop');
 
-console.log('mobile UI smoke: 19/19 passed');
+console.log('mobile UI smoke: 20/20 passed');

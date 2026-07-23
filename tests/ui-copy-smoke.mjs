@@ -9,6 +9,10 @@ const [panel, auxiliaryModel, renderedMemory] = await Promise.all([
 
 const requiredCopy = [
     '用哪个模型整理记忆？',
+    '希望保留多少最近剧情？',
+    '节省上下文',
+    '平衡（推荐）',
+    '尽量完整',
     '保留最近几轮完整对话',
     '每多少轮整理一次剧情摘要',
     '每多少轮自动检查一次记忆',
@@ -37,6 +41,7 @@ const retiredCopy = [
     'CONTROL ROOM',
     'HUMAN REVIEW',
     'NEXT GENERATION',
+    '推荐 3。',
 ];
 for (const copy of retiredCopy) {
     assert.ok(!panel.includes(copy), `retired technical UI copy returned: ${copy}`);
@@ -50,4 +55,4 @@ assert.ok(auxiliaryModel.includes('没有找到可用的记忆模型'),
 assert.ok(!auxiliaryModel.includes('请配置 Connection Profile'),
     'connection errors should not require SillyTavern connection-manager jargon');
 
-console.log('UI copy smoke: 27/27 passed');
+console.log('UI copy smoke: 32/32 passed');

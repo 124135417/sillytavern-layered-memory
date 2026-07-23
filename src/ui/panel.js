@@ -551,14 +551,33 @@ function bindQueueControls(body) {
 function renderInjectionFooter() {
     const data = getChatData();
     const settings = getSettings();
+    const handoff = data.context_handoff;
+    const removedThrough = Number.isInteger(handoff?.removedThrough) ? handoff.removedThrough : -1;
     const l1 = renderL1Block(data, settings.budgetL1);
-    const l2 = renderL2Block(data, { budget: settings.budgetL2 });
+    const l2 = renderL2Block(data, { budget: settings.budgetL2, throughPair: removedThrough });
     const hits = settings.l4Enabled ? retrieveHits(data, settings.budgetL4) : [];
     const l4 = settings.l4Enabled ? renderL4Block(hits, settings.budgetL4) : '';
     const pairs = getPairs();
-    const recent = pairs.slice(-(settings.recentPairs || 3));
-    const range = recent.length ? `第 ${recent[0].pairIndex}–${recent.at(-1).pairIndex} 轮对话` : '还没有完整对话';
+    const minRecent = settings.minRecentPairs || settings.recentPairs || 6;
+    const recent = pairs.slice(-minRecent);
+    const range = handoff?.status === 'trimmed'
+        ? `第 ${handoff.keptFrom}–${pairs.at(-1)?.pairIndex ?? handoff.keptFrom} 轮对话`
+        : recent.length ? `至少保留第 ${recent[0].pairIndex}–${recent.at(-1).pairIndex} 轮对话` : '还没有完整对话';
+    const blockedReasons = {
+        summary_gap: '较早聊天还没有被有效摘要连续覆盖，为避免断档，本轮没有精简。',
+        message_mapping: '无法安全确认请求消息对应的原楼层，为避免误删，本轮没有精简。',
+        recent_floor: '聊天还没有超过必须保留的最近轮数，本轮没有精简。',
+        archive_budget: '用于接替旧聊天的压缩档案仍然太长，为避免摘要被截断，本轮没有精简。',
+        invalid_budget: '聊天历史容量设置无效，本轮没有精简。',
+        generation_type: '这次不是普通回复，插件没有改动聊天历史。',
+    };
+    const handoffText = handoff?.status === 'trimmed'
+        ? `最近一次普通回复已用压缩档案接替第 0–${removedThrough} 轮；聊天历史约从 ${handoff.historyTokensBefore} 减至 ${handoff.historyTokensAfter} token。${handoff.reason === 'coverage_limit' ? '更早内容已精简到当前安全边界，剩余部分交给酒馆继续计算。' : ''}`
+        : handoff?.reason === 'within_budget'
+            ? `最近一次普通回复中，聊天历史约 ${handoff.historyTokensBefore} token，未超过 ${handoff.historyBudget} token 的目标。`
+            : blockedReasons[handoff?.reason] || '尚无可显示的真实裁剪结果；以下内容是下一次生成前的预计。';
     const preview = [
+        `【上下文交接】\n${handoffText}`,
         l1 && `【当前仍然成立的事实】\n${l1}`,
         l2 && `【以前的剧情摘要】\n${l2}`,
         l4 && `【与当前剧情相关的旧记忆】\n${l4}`,
@@ -955,9 +974,18 @@ function renderSettingsTab() {
             <section class="lm-settings-section">
                 <header><div><span class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></span><div><h4>记忆怎样自动整理</h4><p>这些选项决定保留多少最近对话，以及多久整理和检查一次。</p></div></div></header>
                 <div class="lm-settings-fields lm-field-grid">
-                    <label>保留最近几轮完整对话
-                        <small>推荐 3。数值越大，模型越容易保持最近的语气和细节，但会占用更多上下文。</small>
-                        <input type="number" id="lm-n" min="1" value="${s.recentPairs}"/>
+                    <label>希望保留多少最近剧情？
+                        <small>插件会先让预设和正则整理聊天，再按这里的目标精简更早内容。</small>
+                        <select id="lm-history-mode">
+                            <option value="compact" ${s.historyBudgetMode === 'compact' ? 'selected' : ''}>节省上下文</option>
+                            <option value="balanced" ${s.historyBudgetMode === 'balanced' ? 'selected' : ''}>平衡（推荐）</option>
+                            <option value="detailed" ${s.historyBudgetMode === 'detailed' ? 'selected' : ''}>尽量完整</option>
+                            <option value="custom" ${s.historyBudgetMode === 'custom' ? 'selected' : ''}>使用高级设置中的自定义容量</option>
+                        </select>
+                    </label>
+                    <label>至少保留最近几轮完整对话
+                        <small>推荐 6。即使空间紧张，这些对话也不会被插件精简。</small>
+                        <input type="number" id="lm-n" min="1" value="${s.minRecentPairs}"/>
                     </label>
                     <label>每多少轮整理一次剧情摘要
                         <small>推荐 25。数值越小，摘要更新越频繁，也会产生更多后台请求。</small>
@@ -992,6 +1020,7 @@ function renderSettingsTab() {
                     <p class="lm-security-note"><span class="fa-solid fa-shield-halved" aria-hidden="true"></span>访问密钥会保存在酒馆的设置文件中。插件不会在检查结果中显示它；部分服务商可能不允许浏览器直接连接。</p>
                 </div>
                 <div class="lm-settings-fields lm-field-grid lm-field-grid-three">
+                    <label>自定义聊天历史容量<small>仅在上方选择“自定义”时使用；这里只计算正则处理后的聊天。</small><input type="number" id="lm-history-budget" min="500" value="${s.historyTokenBudget}"/></label>
                     <label>当前事实容量<small>长期有效的人物状态、关系和约定。推荐 2000。</small><input type="number" id="lm-b1" min="200" value="${s.budgetL1}"/></label>
                     <label>剧情摘要容量<small>以前发生过的剧情。推荐 5000。</small><input type="number" id="lm-b2" min="500" value="${s.budgetL2}"/></label>
                     <label>相关旧记忆容量<small>临时找回的旧内容。推荐 1500。</small><input type="number" id="lm-b4" min="0" value="${s.budgetL4}"/></label>
@@ -1049,10 +1078,13 @@ function bindSettingsTab(body) {
             s.fallbackApiKey = nextKey;
         }
         s.fallbackModel = body.querySelector('#lm-fb-model').value.trim();
+        s.historyBudgetMode = body.querySelector('#lm-history-mode').value;
+        s.historyTokenBudget = readNumber('#lm-history-budget', 12000, 500);
         s.budgetL1 = readNumber('#lm-b1', 2000, 200);
         s.budgetL2 = readNumber('#lm-b2', 5000, 500);
         s.budgetL4 = readNumber('#lm-b4', 1500, 0);
-        s.recentPairs = readNumber('#lm-n', 3, 1);
+        s.minRecentPairs = readNumber('#lm-n', 6, 1);
+        s.recentPairs = s.minRecentPairs;
         s.chapterSize = readNumber('#lm-ch', 25, 5);
         s.proofreadEvery = readNumber('#lm-pr', 75, 5);
         s.depthL1 = readNumber('#lm-d1', 100, 0);

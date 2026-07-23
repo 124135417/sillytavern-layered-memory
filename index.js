@@ -72,8 +72,8 @@ globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, 
         }
         ensureMessageIds();
         void rebuildAndEnqueuePending();
-        updateInjection();
-        trimChatForGenerate(chat, type);
+        const handoff = await trimChatForGenerate(chat, type, contextSize);
+        updateInjection({ archiveEndPair: handoff?.removedThrough ?? -1 });
     } catch (err) {
         console.error(`[${MODULE}] interceptor error`, err);
     }
@@ -127,7 +127,7 @@ jQuery(async () => {
         });
     }
 
-    console.log(`[${MODULE}] 已加载 v0.2.0`);
+    console.log(`[${MODULE}] 已加载 v0.3.0`);
 });
 
 export async function onActivate() {

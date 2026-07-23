@@ -28,14 +28,47 @@ export function renderL1Block(data, budget = 2000) {
     return truncateToBudget(lines.join('\n').trim(), budget);
 }
 
-export function renderL2Block(data, { forBudget = false, budget = 5000 } = {}) {
+function getVolumeFloorRange(volume, chaptersById) {
+    const chapters = (volume.chapter_ids || []).map(id => chaptersById.get(id)).filter(Boolean);
+    if (!chapters.length || chapters.some(c => c.stale || !Array.isArray(c.floor_range))) {
+        return null;
+    }
+    const sorted = chapters.slice().sort((a, b) => a.floor_range[0] - b.floor_range[0]);
+    let expected = sorted[0].floor_range[0];
+    for (const chapter of sorted) {
+        if (chapter.floor_range[0] > expected) {
+            return null;
+        }
+        expected = Math.max(expected, chapter.floor_range[1] + 1);
+    }
+    return [sorted[0].floor_range[0], expected - 1];
+}
+
+/**
+ * Render archived plot summaries. When throughPair is provided, only summaries
+ * wholly contained in the request prefix that was actually removed are used.
+ */
+export function renderL2Block(data, { forBudget = false, budget = 5000, throughPair } = {}) {
     const parts = [];
-    const volumes = (data.volumes || []).filter(v => !v.stale || forBudget);
+    const chaptersById = new Map((data.chapters || []).map(c => [c.id, c]));
+    const bounded = Number.isInteger(throughPair);
+    const coveredChapterIds = new Set();
+    const volumes = (data.volumes || [])
+        .filter(v => bounded ? !v.stale : (!v.stale || forBudget))
+        .map(v => ({ ...v, floor_range: getVolumeFloorRange(v, chaptersById) }))
+        .filter(v => !bounded || (v.floor_range && v.floor_range[1] <= throughPair))
+        .sort((a, b) => (a.floor_range?.[0] ?? 0) - (b.floor_range?.[0] ?? 0));
     for (const v of volumes) {
         parts.push(`### 很久以前的剧情摘要\n${v.summary}`);
+        for (const id of v.chapter_ids || []) {
+            coveredChapterIds.add(id);
+        }
     }
     const chapters = (data.chapters || [])
-        .filter(c => !c.demoted && !c.stale)
+        .filter(c => !c.stale)
+        .filter(c => bounded
+            ? Array.isArray(c.floor_range) && c.floor_range[1] <= throughPair && !coveredChapterIds.has(c.id)
+            : !c.demoted)
         .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
     for (const c of chapters) {
         parts.push(`### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要\n${c.summary}`);

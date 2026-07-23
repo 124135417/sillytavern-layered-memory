@@ -317,6 +317,7 @@ body.lm-memory-center-open {
 .lm-body {
     min-height: 0;
     overflow: auto;
+    scroll-padding-bottom: 92px;
     scrollbar-color: var(--lm-border-strong) transparent;
     scrollbar-width: thin;
     overscroll-behavior: contain;

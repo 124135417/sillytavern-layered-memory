@@ -83,7 +83,7 @@
             name2: '北港旧灯塔 · 长档测试',
             characterId: 0,
             characters: [{ name: '北港旧灯塔' }],
-            extensionSettings: { layered_memory: { enabled: true, connectionProfile: 'writer-small', fallbackEnabled: false, fallbackBaseUrl: '', fallbackApiKey: '', fallbackModel: '', budgetL1: 2000, budgetL2: 5000, budgetL4: 1500, recentPairs: 3, chapterSize: 25, proofreadEvery: 75, depthL1: 100, depthL2: 100, depthL4: 4, volumeCompressConfirm: false, l4Enabled: false, mentionStatMode: 'summary_and_table', chapterInputTokenCap: 20000, migrationReviewMode: false, eval_cases: [] } },
+            extensionSettings: { layered_memory: { enabled: true, connectionProfile: 'writer-small', fallbackEnabled: false, fallbackBaseUrl: '', fallbackApiKey: '', fallbackModel: '', budgetL1: 2000, budgetL2: 5000, budgetL4: 1500, historyBudgetMode: 'balanced', historyTokenBudget: 12000, minRecentPairs: 6, recentPairs: 6, chapterSize: 25, proofreadEvery: 75, depthL1: 100, depthL2: 100, depthL4: 4, volumeCompressConfirm: false, l4Enabled: false, mentionStatMode: 'summary_and_table', chapterInputTokenCap: 20000, migrationReviewMode: false, eval_cases: [] } },
             chatMetadata: { layered_memory: memoryData },
             getConnectionProfiles: () => [{ id: 'writer-small', name: '记忆副模型' }],
             generateRaw: async () => '{"ok":true}',
