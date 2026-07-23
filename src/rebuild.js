@@ -21,7 +21,15 @@ function clone(value) {
 
 function rebuildState(data = getChatData()) {
     if (!data.history_rebuild || typeof data.history_rebuild !== 'object') return null;
-    return data.history_rebuild;
+    const state = data.history_rebuild;
+    if (!Array.isArray(state.turn_summaries) && state.status !== 'complete') state.turn_summaries = [];
+    if (!Array.isArray(state.entries) && state.status !== 'complete') state.entries = [];
+    if (!Array.isArray(state.fact_events) && state.status !== 'complete') state.fact_events = [];
+    if (!Array.isArray(state.chapters) && state.status !== 'complete') state.chapters = [];
+    if (!Array.isArray(state.extracted_keys) && state.status !== 'complete') state.extracted_keys = [];
+    if (!Array.isArray(state.unresolved_floors)) state.unresolved_floors = [];
+    if (!Array.isArray(state.warnings)) state.warnings = [];
+    return state;
 }
 
 function historyPairs(data = getChatData()) {
@@ -45,6 +53,8 @@ function createStaging(total, baseline) {
         fact_events: [],
         chapters: [],
         extracted_keys: [],
+        unresolved_floors: [],
+        warnings: [],
     };
 }
 
@@ -87,6 +97,70 @@ function segmentPrompt(sources, retryNote = '') {
     ].join('\n\n');
 }
 
+function stripWrappingQuotes(value) {
+    let text = String(value ?? '').trim();
+    const pairs = [['“', '”'], ['「', '」'], ['『', '』'], ['"', '"'], ["'", "'"]];
+    for (const [left, right] of pairs) {
+        if (text.startsWith(left) && text.endsWith(right) && text.length > left.length + right.length) {
+            text = text.slice(left.length, -right.length).trim();
+            break;
+        }
+    }
+    return text;
+}
+
+function canonicalEvidenceChars(value) {
+    const punctuation = new Map([
+        ['（', '('], ['）', ')'],
+    ]);
+    const separators = /[\s，。,:：;；!！?？—–…]/u;
+    const chars = [];
+    const sourceIndexes = [];
+    const original = [...String(value ?? '')];
+    for (let index = 0; index < original.length; index += 1) {
+        let char = original[index];
+        if (separators.test(char)) char = ' ';
+        else char = punctuation.get(char) || char;
+        if (char === ' ' && chars.at(-1) === ' ') continue;
+        chars.push(char);
+        sourceIndexes.push(index);
+    }
+    return { chars, sourceIndexes, original };
+}
+
+export function recoverEvidence(rawEvidence, sourceText) {
+    const candidate = stripWrappingQuotes(rawEvidence);
+    const source = String(sourceText ?? '');
+    if (!candidate || !source) return '';
+    let recovered = '';
+    if (source.includes(candidate)) {
+        recovered = candidate;
+    } else {
+        const haystack = canonicalEvidenceChars(source);
+        const needle = canonicalEvidenceChars(candidate).chars;
+        outer: for (let start = 0; start + needle.length <= haystack.chars.length; start += 1) {
+            for (let offset = 0; offset < needle.length; offset += 1) {
+                if (haystack.chars[start + offset] !== needle[offset]) continue outer;
+            }
+            const originalStart = haystack.sourceIndexes[start];
+            const originalEnd = haystack.sourceIndexes[start + needle.length - 1] + 1;
+            recovered = haystack.original.slice(originalStart, originalEnd).join('');
+            break;
+        }
+    }
+    return [...recovered].slice(0, 50).join('').trimEnd();
+}
+
+export function normalizeHistoryUserSummary(value, userName = '') {
+    const summary = String(value ?? '').trim();
+    if (summary.startsWith('<user>')) return summary;
+    const aliases = [String(userName || '').trim(), '用户', '你'].filter(Boolean);
+    for (const alias of aliases) {
+        if (summary.startsWith(alias)) return `<user>${summary.slice(alias.length)}`;
+    }
+    return summary;
+}
+
 function normalizeFact(raw, source, userName) {
     const slot = String(raw?.slot || '').trim();
     const value = slot === 'relationship' ? raw?.new_value : (raw?.value ?? raw?.new_value);
@@ -97,7 +171,7 @@ function normalizeFact(raw, source, userName) {
         value: String(value ?? '').trim(),
         old_value: String(raw?.old_value ?? '').trim(),
         new_value: String(raw?.new_value ?? '').trim(),
-        evidence: String(raw?.evidence ?? '').trim(),
+        evidence: recoverEvidence(raw?.evidence, source.sourceText),
         why_persistent: String(raw?.why_persistent ?? '').trim(),
         cause: String(raw?.cause ?? '').trim(),
         source: 'auto',
@@ -107,7 +181,7 @@ function normalizeFact(raw, source, userName) {
     if (slot === 'relationship' && (!fact.old_value || !fact.new_value)) errors.push('关系变化缺少旧状态或新状态');
     const shape = validateMemoryEntryShape(fact);
     errors.push(...shape.errors);
-    if (!fact.evidence || !evidenceInSource(fact.evidence, source.sourceText)) errors.push('证据不是该轮原文子串');
+    if (!fact.evidence || !evidenceInSource(fact.evidence, source.sourceText)) errors.push('证据无法恢复为该轮原文');
     if (slot === 'other' && !fact.why_persistent) errors.push('其他事实缺少持续原因');
     return { fact, errors };
 }
@@ -115,27 +189,49 @@ function normalizeFact(raw, source, userName) {
 export function validateHistorySegment(raw, sources, userName = '') {
     const expected = sources.map(item => item.pair.pairIndex);
     const floors = Array.isArray(raw?.floors) ? raw.floors : [];
-    const actual = floors.map(item => Number(item?.floor));
     const errors = [];
-    if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
-        errors.push(`轮数必须完整且顺序一致；需要 ${expected.join('、')}，实际 ${actual.join('、') || '为空'}`);
-    }
+    const warnings = [];
+    const failedFloors = [];
     const normalized = [];
-    for (let index = 0; index < Math.min(floors.length, sources.length); index += 1) {
-        const item = floors[index] || {};
-        const summary = String(item.summary || '').trim();
-        const source = sources[index];
-        if ([...summary].length < 10 || [...summary].length > 500) errors.push(`第 ${source.pair.pairIndex} 轮摘要为空或长度异常`);
-        if (summary && !summary.includes('<user>')) errors.push(`第 ${source.pair.pairIndex} 轮摘要没有从 <user> 的行为或话语开始`);
+    const expectedSet = new Set(expected);
+    for (const item of floors) {
+        const floor = Number(item?.floor);
+        if (!expectedSet.has(floor)) warnings.push(`忽略了未请求的第 ${Number.isFinite(floor) ? floor : '?'} 轮结果`);
+    }
+    for (const source of sources) {
+        const floor = source.pair.pairIndex;
+        const candidates = floors.filter(item => Number(item?.floor) === floor);
+        if (!candidates.length) {
+            const message = `第 ${floor} 轮缺少结果`;
+            errors.push(message);
+            failedFloors.push({ floor, errors: [message] });
+            continue;
+        }
+        if (candidates.length > 1) {
+            const message = `第 ${floor} 轮返回了重复结果`;
+            errors.push(message);
+            failedFloors.push({ floor, errors: [message] });
+            continue;
+        }
+        const item = candidates[0] || {};
+        const summary = normalizeHistoryUserSummary(item.summary, userName);
+        const floorErrors = [];
+        if ([...summary].length < 10 || [...summary].length > 500) floorErrors.push(`第 ${floor} 轮摘要为空或长度异常`);
+        if (summary && !summary.startsWith('<user>')) floorErrors.push(`第 ${floor} 轮摘要遗漏了用户本轮的行为或话语`);
         const facts = [];
         for (const rawFact of Array.isArray(item.facts) ? item.facts : []) {
             const checked = normalizeFact(rawFact, source, userName);
-            if (checked.errors.length) errors.push(`第 ${source.pair.pairIndex} 轮事实：${checked.errors.join('；')}`);
+            if (checked.errors.length) warnings.push(`第 ${floor} 轮已忽略一条不可靠事实：${checked.errors.join('；')}`);
             else facts.push(checked.fact);
         }
-        normalized.push({ floor: source.pair.pairIndex, summary, facts });
+        if (floorErrors.length) {
+            errors.push(...floorErrors);
+            failedFloors.push({ floor, errors: floorErrors });
+            continue;
+        }
+        normalized.push({ floor, summary, facts });
     }
-    return { ok: errors.length === 0, errors, floors: normalized };
+    return { ok: failedFloors.length === 0, errors, warnings, failedFloors, floors: normalized };
 }
 
 function upsertStagedFact(staging, fact, floor) {
@@ -196,33 +292,47 @@ export async function handleHistoryRebuildSegment(payload) {
     const data = getChatData();
     const staging = rebuildState(data);
     if (!staging || abortRequested || staging.status !== 'running') return;
+    const requestedFloors = Array.isArray(payload.pairIndexes) ? new Set(payload.pairIndexes.map(Number)) : null;
     const sources = getPairs()
-        .filter(pair => pair.sealed && pair.pairIndex >= payload.startPair && pair.pairIndex <= payload.endPair)
+        .filter(pair => pair.sealed && (requestedFloors
+            ? requestedFloors.has(pair.pairIndex)
+            : pair.pairIndex >= payload.startPair && pair.pairIndex <= payload.endPair))
         .map(pairSource);
-    const expectedCount = payload.endPair - payload.startPair + 1;
+    const expectedCount = requestedFloors?.size ?? (payload.endPair - payload.startPair + 1);
     if (sources.length !== expectedCount) throw nonRetryableError(`找不到完整对话：需要 ${expectedCount} 轮，实际 ${sources.length} 轮`);
     let retryNote = '';
+    let pendingSources = sources;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-        staging.phase = `正在逐轮核对第 ${payload.startPair}–${payload.endPair} 轮`;
+        staging.phase = `正在逐轮核对第 ${pendingSources.map(source => source.pair.pairIndex).join('、')} 轮`;
         await saveChatData(data);
         const { text } = await callAuxModel({
             purpose: 'history_rebuild_segment',
             systemPrompt: HISTORY_SEGMENT_SYSTEM,
-            userPrompt: segmentPrompt(sources, retryNote),
+            userPrompt: segmentPrompt(pendingSources, retryNote),
             jsonSchema: HISTORY_SEGMENT_JSON_SCHEMA,
             temperature: 0,
         });
         assertChatData(data);
         const raw = parseJsonFromModel(text);
-        const checked = validateHistorySegment(raw, sources, getContext().name1 || '');
-        if (checked.ok) {
-            applySegment(staging, checked, sources);
-            await saveChatData(data);
-            return;
+        const checked = validateHistorySegment(raw, pendingSources, getContext().name1 || '');
+        if (checked.floors.length) applySegment(staging, checked, pendingSources);
+        for (const warning of checked.warnings) {
+            if (!staging.warnings.includes(warning)) staging.warnings.push(warning);
         }
-        retryNote = checked.errors.slice(0, 8).join('；');
+        const accepted = new Set(checked.floors.map(item => item.floor));
+        staging.unresolved_floors = (staging.unresolved_floors || []).filter(item => !accepted.has(item.floor));
+        pendingSources = pendingSources.filter(source => !accepted.has(source.pair.pairIndex));
+        await saveChatData(data);
+        if (!pendingSources.length) return;
+        retryNote = `${checked.errors.join('；')}。本次只返回下方列出的失败轮次，不要返回其他轮次。`;
     }
-    throw nonRetryableError(`分段结果连续两次未通过校验：${retryNote}`);
+    const failedFloorSet = new Set(pendingSources.map(source => source.pair.pairIndex));
+    staging.unresolved_floors = (staging.unresolved_floors || []).filter(item => !failedFloorSet.has(item.floor));
+    for (const source of pendingSources) {
+        staging.unresolved_floors.push({ floor: source.pair.pairIndex, error: retryNote, attempts: 2 });
+    }
+    staging.phase = `第 ${[...failedFloorSet].join('、')} 轮需要单独重试`;
+    await saveChatData(data);
 }
 
 export async function handleHistoryRebuildChapter(payload) {
@@ -232,7 +342,11 @@ export async function handleHistoryRebuildChapter(payload) {
     const notes = staging.turn_summaries
         .filter(item => item.pairIndex >= payload.startPair && item.pairIndex <= payload.endPair)
         .sort((a, b) => a.pairIndex - b.pairIndex);
-    if (notes.length !== payload.endPair - payload.startPair + 1) throw new Error('章节依赖的逐轮记录尚未齐全');
+    if (notes.length !== payload.endPair - payload.startPair + 1) {
+        staging.phase = `第 ${payload.startPair}–${payload.endPair} 轮尚未齐全，暂不合并章节`;
+        await saveChatData(data);
+        return;
+    }
     staging.phase = `正在合并第 ${payload.startPair}–${payload.endPair} 轮剧情`;
     await saveChatData(data);
     const result = await summarizeChapterNotes(notes, payload.startPair, payload.endPair, () => assertChatData(data));
@@ -270,9 +384,25 @@ export async function handleHistoryRebuildCommit() {
     const staging = rebuildState(data);
     if (!staging || abortRequested || staging.status !== 'running') return;
     const pairs = historyPairs(data);
-    if (staging.turn_summaries.length !== pairs.length) throw nonRetryableError(`重建结果不完整：${staging.turn_summaries.length}/${pairs.length} 轮`);
+    if (staging.turn_summaries.length !== pairs.length) {
+        const done = new Set(staging.turn_summaries.map(item => item.pairIndex));
+        const missing = pairs.filter(pair => !done.has(pair.pairIndex)).map(pair => pair.pairIndex);
+        staging.status = 'error';
+        staging.error = `仍有 ${missing.length} 轮需要重试：第 ${missing.join('、')} 轮`;
+        staging.phase = '已保留合格结果，等待继续重建';
+        await saveChatData(data);
+        appendLog('warn', staging.error);
+        return;
+    }
     const fullChapterCount = Math.floor(pairs.length / (getSettings().chapterSize || 25));
-    if (staging.chapters.length !== fullChapterCount) throw nonRetryableError(`章节结果不完整：${staging.chapters.length}/${fullChapterCount} 章`);
+    if (staging.chapters.length !== fullChapterCount) {
+        staging.status = 'error';
+        staging.error = `逐轮记录已经齐全，仍有 ${fullChapterCount - staging.chapters.length} 章需要重新合并`;
+        staging.phase = '已保留合格结果，等待继续重建';
+        await saveChatData(data);
+        appendLog('warn', staging.error);
+        return;
+    }
 
     staging.phase = '正在安全替换旧结果';
     await saveChatData(data);
@@ -398,6 +528,16 @@ export function buildRebuildSegmentRanges(pairs, size = 25) {
     return ranges;
 }
 
+export function buildMissingRebuildSegmentPayloads(pairs, doneFloors, size = 25) {
+    const done = doneFloors instanceof Set ? doneFloors : new Set(doneFloors || []);
+    return buildRebuildSegmentRanges(pairs, size).flatMap(([startPair, endPair]) => {
+        const pairIndexes = pairs
+            .filter(pair => pair.pairIndex >= startPair && pair.pairIndex <= endPair && !done.has(pair.pairIndex))
+            .map(pair => pair.pairIndex);
+        return pairIndexes.length ? [{ startPair, endPair, pairIndexes }] : [];
+    });
+}
+
 export function getHistoryRebuildSnapshot() {
     const data = getChatData();
     const state = rebuildState(data);
@@ -406,6 +546,7 @@ export function getHistoryRebuildSnapshot() {
         return {
             status: 'idle', phase: '尚未开始', stage: '尚未开始', total, completed: 0,
             turnSummaryCount: (data.turn_summaries || []).length,
+            warningCount: 0,
             queued: 0, inFlight: null, failed: [], paused: false,
         };
     }
@@ -418,6 +559,7 @@ export function getHistoryRebuildSnapshot() {
         turnSummaryCount: state.status === 'complete'
             ? (data.turn_summaries || []).length
             : (state.turn_summaries || []).length,
+        warningCount: (state.warnings || []).length,
         queued: queued.length,
         inFlight,
         failed,
@@ -430,10 +572,8 @@ function enqueueMissingRebuildJobs(data, pairs) {
     const state = rebuildState(data);
     const doneFloors = new Set((state.turn_summaries || []).map(item => item.pairIndex));
     const size = getSettings().chapterSize || 25;
-    for (const [startPair, endPair] of buildRebuildSegmentRanges(pairs, size)) {
-        if (pairs.some(pair => pair.pairIndex >= startPair && pair.pairIndex <= endPair && !doneFloors.has(pair.pairIndex))) {
-            enqueue('history_rebuild_segment', { startPair, endPair }, QUEUE_PRIORITY.migrate);
-        }
+    for (const payload of buildMissingRebuildSegmentPayloads(pairs, doneFloors, size)) {
+        enqueue('history_rebuild_segment', payload, QUEUE_PRIORITY.migrate);
     }
     const existingRanges = new Set((state.chapters || []).map(chapter => JSON.stringify(chapter.floor_range)));
     for (let offset = 0; offset + size <= pairs.length; offset += size) {

@@ -89,7 +89,7 @@
             review_queue: [{ id: 'r1', kind: 'flag_conflict', entry_id: 'e_3', note: '新楼层暗示两人已经和解，但旧事实仍为“尚未完全和解”。', createdAt: now }],
             notices: [{ id: 'n1', kind: 'notice', note: '旧聊天安全重建完成：已核对 132 / 132 轮。', createdAt: now }],
             quarantined_entries: [{ id: 'bad1', slot: 'world', subject: '', value: 'undefined', quarantineReason: '缺少明确主体；缺少事实内容' }],
-            history_rebuild: { status: 'complete', total: 132, completed: 132, phase: '安全重建完成', startedAt: now - 100000, finishedAt: now },
+            history_rebuild: { status: 'complete', total: 132, completed: 132, phase: '安全重建完成', warnings: ['第 31 轮已忽略一条不可靠事实'], startedAt: now - 100000, finishedAt: now },
             rebuild_backup: { createdAt: now - 100000 },
             pending_floors: [], extracted_keys: extracted,
             job_queue: {

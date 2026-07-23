@@ -192,10 +192,11 @@ function renderHistoryBackfillStatus(snapshot = getHistoryRebuildSnapshot()) {
     const startLabel = ['stopped', 'error'].includes(snapshot.status) ? '继续安全重建' : snapshot.status === 'complete' ? '重新安全重建' : '安全重建旧结果';
     const waiting = snapshot.queued > 0 ? ` · 还有 ${snapshot.queued} 项等待处理` : '';
     const turnSummaryCount = Math.min(total, Number(snapshot.turnSummaryCount) || 0);
+    const warningCount = Number(snapshot.warningCount) || 0;
     return `<div class="lm-backfill-card" data-state="${escapeHtml(snapshot.status)}" aria-live="polite">
         <div class="lm-backfill-heading"><div><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${completed} / ${total} 轮</strong></div>
         <progress max="100" value="${percent}" aria-label="旧聊天安全重建进度：${percent}%">${percent}%</progress>
-        <div class="lm-backfill-meta"><span>${percent}% 已完成${escapeHtml(waiting)}</span><span>已生成 ${turnSummaryCount} / ${total} 条逐轮记录</span>${snapshot.inFlight ? '<span>当前有 1 项正在处理</span>' : ''}</div>
+        <div class="lm-backfill-meta"><span>${percent}% 已完成${escapeHtml(waiting)}</span><span>已生成 ${turnSummaryCount} / ${total} 条逐轮记录</span>${warningCount ? `<span>已忽略 ${warningCount} 条不可靠事实</span>` : ''}${snapshot.inFlight ? '<span>当前有 1 项正在处理</span>' : ''}</div>
         <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-migrate" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button><button type="button" class="lm-text-button" id="lm-migrate-abort" ${canStop ? '' : 'disabled'}>停止重建</button></div>
     </div>`;
 }
