@@ -6,6 +6,7 @@ import {
     getSettings,
     saveChatData,
 } from './settings.js';
+import { waitForBranchRecovery } from './branch.js';
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [2_000, 8_000];
@@ -261,6 +262,8 @@ async function pump() {
     if (pumping) return;
     pumping = true;
     try {
+        await waitForBranchRecovery();
+        if (getChatData().branch_origin?.status === 'failed') return;
         while (true) {
             const { chatData, state, scopeId } = activeScope();
             hydrateCurrentScope();
@@ -351,14 +354,16 @@ function isPairFloorKey(key) {
         && !key.startsWith('migrated:');
 }
 
-async function rollbackOrphanExtracts(getPairs) {
+async function rollbackOrphanExtracts(getPairs, expectedData) {
     const { rollbackFloor } = await import('./merge.js');
     const data = getChatData();
+    assertChatData(expectedData);
     const live = new Set(getPairs().filter(p => p.sealed).map(p => p.floorKey));
     const orphans = (data.extracted_keys || []).filter(k => isPairFloorKey(k) && !live.has(k));
     let rolled = 0;
     for (const key of orphans) {
-        const n = await rollbackFloor(key);
+        const n = await rollbackFloor(key, expectedData);
+        assertChatData(expectedData);
         if (n > 0) {
             rolled += 1;
             appendLog('info', `孤儿提取键已回滚: ${key}`);
@@ -400,10 +405,14 @@ function enqueueMissingChapters(getPairs, baseline) {
 
 export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {}) {
     hydrateCurrentScope();
+    const originData = getChatData();
     const { getFrozenPairs, getPairs, ensureActivationBaseline } = await import('./ids.js');
+    assertChatData(originData);
     const baseline = ensureActivationBaseline();
-    await rollbackOrphanExtracts(getPairs);
-    const data = getChatData();
+    if (originData.branch_origin?.status === 'failed') return 0;
+    await rollbackOrphanExtracts(getPairs, originData);
+    assertChatData(originData);
+    const data = originData;
     const extracted = new Set(data.extracted_keys || []);
     let candidates = getFrozenPairs().filter(p => p.pairIndex > baseline);
 
@@ -420,7 +429,8 @@ export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {})
         }
     }
     data.pending_floors = pending;
-    await saveChatData();
+    await saveChatData(data);
+    assertChatData(originData);
     for (const item of pending) enqueue('extract', item, QUEUE_PRIORITY.extract);
 
     const missingCh = enqueueMissingChapters(getPairs, baseline);

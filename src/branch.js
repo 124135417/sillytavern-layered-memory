@@ -1,0 +1,386 @@
+import { EMPTY_CHAT_DATA, MODULE_NAME } from './constants.js';
+import { getPairs } from './ids.js';
+import { appendLog, getChatData, getContext, saveChatData } from './settings.js';
+
+let recoveryBarrier = Promise.resolve({ status: 'idle' });
+let recoveryTarget = null;
+
+function clone(value) {
+    return structuredClone(value);
+}
+
+function currentAnchor() {
+    const pair = getPairs().filter(item => item.sealed).at(-1);
+    return pair
+        ? { floorKey: pair.floorKey, pairIndex: pair.pairIndex, contentFingerprint: pair.contentFingerprint }
+        : { floorKey: null, pairIndex: -1, contentFingerprint: null };
+}
+
+function lightweightStateTable(table) {
+    const snapshot = clone(table || EMPTY_CHAT_DATA().state_table);
+    snapshot.changelog = [];
+    return snapshot;
+}
+
+export function recordFloorEvent(data, event) {
+    if (!event?.floorKey || !event?.contentFingerprint) return;
+    data.floor_events = Array.isArray(data.floor_events) ? data.floor_events : [];
+    const normalized = {
+        floorKey: event.floorKey,
+        pairIndex: Number(event.pairIndex),
+        contentFingerprint: String(event.contentFingerprint),
+        turnSummary: String(event.turnSummary || ''),
+        entryChanges: clone(event.entryChanges || []),
+        recordedAt: Date.now(),
+    };
+    const index = data.floor_events.findIndex(item => item.floorKey === normalized.floorKey);
+    if (index >= 0) {
+        if (!normalized.entryChanges.length && data.floor_events[index].entryChanges?.length) {
+            normalized.entryChanges = clone(data.floor_events[index].entryChanges);
+        }
+        data.floor_events[index] = normalized;
+    } else data.floor_events.push(normalized);
+}
+
+export function recordManualEvent(data, { op, before = null, after = null, reason = 'manual' }) {
+    if (op !== 'upsert' && op !== 'delete') return null;
+    const anchor = currentAnchor();
+    const event = {
+        id: crypto.randomUUID(),
+        anchorFloorKey: anchor.floorKey,
+        anchorPairIndex: anchor.pairIndex,
+        anchorFingerprint: anchor.contentFingerprint,
+        op,
+        before: before ? clone(before) : null,
+        after: after ? clone(after) : null,
+        reason,
+        recordedAt: Date.now(),
+    };
+    data.manual_events = Array.isArray(data.manual_events) ? data.manual_events : [];
+    data.manual_events.push(event);
+    return event;
+}
+
+export function captureBranchCheckpoint(data = getChatData(), reason = 'automatic') {
+    const anchor = currentAnchor();
+    data.branch_checkpoints = Array.isArray(data.branch_checkpoints) ? data.branch_checkpoints : [];
+    const checkpoint = {
+        id: crypto.randomUUID(),
+        anchorFloorKey: anchor.floorKey,
+        anchorPairIndex: anchor.pairIndex,
+        anchorFingerprint: anchor.contentFingerprint,
+        stateTable: lightweightStateTable(data.state_table),
+        createdAt: Date.now(),
+        reason,
+    };
+    const sameAnchor = data.branch_checkpoints.findIndex(item =>
+        item.anchorFloorKey === anchor.floorKey && item.anchorFingerprint === anchor.contentFingerprint);
+    if (sameAnchor >= 0) data.branch_checkpoints[sameAnchor] = checkpoint;
+    else data.branch_checkpoints.push(checkpoint);
+    return checkpoint;
+}
+
+export async function ensureBranchCheckpoint() {
+    const data = getChatData();
+    if ((data.branch_checkpoints || []).length) return false;
+    captureBranchCheckpoint(data, 'upgrade_seed');
+    await saveChatData(data);
+    return true;
+}
+
+function applyEntryChanges(table, changes, event) {
+    table.entries = Array.isArray(table.entries) ? table.entries : [];
+    table.changelog = Array.isArray(table.changelog) ? table.changelog : [];
+    for (const change of changes || []) {
+        if (change.op === 'delete') {
+            const before = table.entries.find(entry => entry.id === change.id);
+            table.entries = table.entries.filter(entry => entry.id !== change.id);
+            if (before) table.changelog.push({ op: 'delete', id: change.id, floorKey: event.floorKey, floor: event.pairIndex, before: clone(before), at: event.recordedAt });
+            continue;
+        }
+        if (!change.after?.id) continue;
+        const index = table.entries.findIndex(entry => entry.id === change.after.id);
+        if (index >= 0) {
+            const before = clone(table.entries[index]);
+            table.entries[index] = clone(change.after);
+            table.changelog.push({ op: 'update', id: change.after.id, floorKey: event.floorKey, floor: event.pairIndex, before, after: clone(change.after), at: event.recordedAt });
+        } else {
+            table.entries.push(clone(change.after));
+            table.changelog.push({ op: 'add', id: change.after.id, floorKey: event.floorKey, floor: event.pairIndex, after: clone(change.after), at: event.recordedAt });
+        }
+    }
+    table.version = Number(table.version || 0) + 1;
+}
+
+function applyManualEvent(table, event) {
+    table.entries = Array.isArray(table.entries) ? table.entries : [];
+    if (event.op === 'delete') {
+        const id = event.before?.id || event.after?.id;
+        if (id) table.entries = table.entries.filter(entry => entry.id !== id);
+    } else if (event.after?.id) {
+        const index = table.entries.findIndex(entry => entry.id === event.after.id);
+        if (index >= 0) table.entries[index] = clone(event.after);
+        else table.entries.push(clone(event.after));
+    }
+    table.version = Number(table.version || 0) + 1;
+}
+
+function underlyingFloorKey(key) {
+    return String(key || '').replace(/^migrated:/, '');
+}
+
+function pairMap(livePairs) {
+    return new Map(livePairs.filter(pair => pair.sealed).map(pair => [pair.floorKey, pair]));
+}
+
+function matchesFloor(record, liveByKey, keyField = 'floorKey', fingerprintField = 'contentFingerprint') {
+    const key = record?.[keyField];
+    if (key == null) return true;
+    const pair = liveByKey.get(key);
+    const fingerprint = record?.[fingerprintField];
+    return Boolean(pair && fingerprint && fingerprint === pair.contentFingerprint);
+}
+
+function reconcileArchives(data, maxPair) {
+    data.chapters = (data.chapters || []).filter(chapter => {
+        const [start, end] = chapter.floor_range || [];
+        return Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end <= maxPair;
+    });
+    const chapterIds = new Set(data.chapters.map(chapter => chapter.id));
+    data.volumes = (data.volumes || []).filter(volume =>
+        Array.isArray(volume.chapter_ids) && volume.chapter_ids.length > 0
+        && volume.chapter_ids.every(id => chapterIds.has(id)));
+    const volumeIds = new Set(data.volumes.map(volume => volume.id));
+    for (const chapter of data.chapters) {
+        if (!chapter.volume_id || !volumeIds.has(chapter.volume_id)) {
+            chapter.volume_id = null;
+            chapter.demoted = false;
+        }
+    }
+    data.keyword_index = {};
+    for (const chapter of data.chapters) {
+        for (const keyword of chapter.keywords || []) {
+            const key = String(keyword).toLowerCase();
+            if (!key) continue;
+            data.keyword_index[key] = data.keyword_index[key] || [];
+            if (!data.keyword_index[key].includes(chapter.id)) data.keyword_index[key].push(chapter.id);
+        }
+    }
+}
+
+function finishBranchData(data, parentData, livePairs, parentChat, method, trustedMaxPair) {
+    const liveByKey = pairMap(livePairs);
+    const maxPair = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
+    const withinTrustedPrefix = item => Number(item.pairIndex ?? item.anchorPairIndex) <= trustedMaxPair;
+    data.turn_summaries = (parentData.turn_summaries || [])
+        .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
+    data.floor_events = (parentData.floor_events || [])
+        .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
+    data.manual_events = (parentData.manual_events || [])
+        .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')).map(clone);
+    const trustedKeys = new Set([
+        ...data.floor_events.map(item => item.floorKey),
+        ...data.turn_summaries.map(item => item.floorKey),
+    ]);
+    data.extracted_keys = (parentData.extracted_keys || []).filter(key => trustedKeys.has(underlyingFloorKey(key)));
+    data.pending_floors = [];
+    data.context_handoff = null;
+    data.review_queue = (parentData.review_queue || [])
+        .filter(item => !item.floorKey || trustedKeys.has(item.floorKey)).map(clone);
+    data.job_queue = EMPTY_CHAT_DATA().job_queue;
+    data.job_queue.scope_id = crypto.randomUUID();
+    data.progress = { ...EMPTY_CHAT_DATA().progress, ...(data.progress || {}) };
+    const parentBaseline = parentData.progress?.baseline_pair == null ? -1 : Number(parentData.progress.baseline_pair);
+    const parentChapterEnd = parentData.progress?.last_chapter_end_pair == null ? -1 : Number(parentData.progress.last_chapter_end_pair);
+    data.progress.baseline_pair = Math.min(Number.isFinite(parentBaseline) ? parentBaseline : -1, trustedMaxPair, maxPair);
+    data.progress.last_chapter_end_pair = Math.min(Number.isFinite(parentChapterEnd) ? parentChapterEnd : -1, trustedMaxPair, maxPair);
+    reconcileArchives(data, trustedMaxPair);
+    data.progress.next_entry_seq = Math.max(1, ...data.state_table.entries.map(entry => Number(String(entry.id || '').replace(/^e_/, '')) + 1).filter(Number.isFinite));
+    data.progress.next_chapter_seq = Math.max(1, ...data.chapters.map(chapter => Number(String(chapter.id || '').replace(/^ch_/, '')) + 1).filter(Number.isFinite));
+    data.branch_origin = {
+        parentChat,
+        forkFloorKey: livePairs.filter(pair => pair.sealed).at(-1)?.floorKey || null,
+        forkPairIndex: maxPair,
+        method,
+        status: 'ready',
+        recoveredAt: Date.now(),
+    };
+    data.logs = [];
+    return data;
+}
+
+export function buildLegacyRebuildData(livePairs, parentChat = '') {
+    const data = EMPTY_CHAT_DATA();
+    const maxPair = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
+    data.progress.baseline_pair = -1;
+    data.job_queue.scope_id = crypto.randomUUID();
+    data.branch_origin = {
+        parentChat,
+        forkFloorKey: livePairs.filter(pair => pair.sealed).at(-1)?.floorKey || null,
+        forkPairIndex: maxPair,
+        method: 'safe_rebuild',
+        status: 'ready',
+        recoveredAt: Date.now(),
+    };
+    data.review_queue.push({
+        id: crypto.randomUUID(),
+        kind: 'alert',
+        note: '这个分支来自旧版记录，无法证明旧记忆没有混入另一条剧情线。插件已停止继承旧表，并会从这个分支自己的聊天内容重新整理。',
+        createdAt: Date.now(),
+    });
+    data.branch_checkpoints.push({
+        id: crypto.randomUUID(),
+        anchorFloorKey: null,
+        anchorPairIndex: -1,
+        anchorFingerprint: null,
+        stateTable: lightweightStateTable(data.state_table),
+        createdAt: Date.now(),
+        reason: 'safe_rebuild_seed',
+    });
+    return data;
+}
+
+export function replayBranchData(parentData, livePairs, parentChat = '') {
+    const liveByKey = pairMap(livePairs);
+    const checkpoints = (parentData.branch_checkpoints || [])
+        .filter(point => point?.stateTable && matchesFloor(point, liveByKey, 'anchorFloorKey', 'anchorFingerprint'))
+        .sort((a, b) => Number(a.anchorPairIndex) - Number(b.anchorPairIndex) || Number(a.createdAt) - Number(b.createdAt));
+    const checkpoint = checkpoints.at(-1);
+    if (!checkpoint) return buildLegacyRebuildData(livePairs, parentChat);
+
+    const mismatchCandidates = [
+        ...(parentData.floor_events || []).map(item => ({ ...item, index: item.pairIndex, keyField: 'floorKey', fpField: 'contentFingerprint' })),
+        ...(parentData.turn_summaries || []).map(item => ({ ...item, index: item.pairIndex, keyField: 'floorKey', fpField: 'contentFingerprint' })),
+        ...(parentData.manual_events || []).map(item => ({ ...item, index: item.anchorPairIndex, keyField: 'anchorFloorKey', fpField: 'anchorFingerprint' })),
+    ].filter(item => Number(item.index) > Number(checkpoint.anchorPairIndex)
+        && liveByKey.has(item[item.keyField])
+        && !matchesFloor(item, liveByKey, item.keyField, item.fpField));
+    const firstMismatch = Math.min(Infinity, ...mismatchCandidates.map(item => Number(item.index)));
+    const branchHead = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
+    const trustedMaxPair = Math.min(branchHead, Number.isFinite(firstMismatch) ? firstMismatch - 1 : branchHead);
+
+    const data = EMPTY_CHAT_DATA();
+    data.state_table = lightweightStateTable(checkpoint.stateTable);
+    data.progress = clone(parentData.progress || data.progress);
+    data.chapters = clone(parentData.chapters || []);
+    data.volumes = clone(parentData.volumes || []);
+
+    const replayItems = [
+        ...(parentData.floor_events || [])
+            .filter(event => Number(event.recordedAt) > Number(checkpoint.createdAt)
+                && Number(event.pairIndex) <= trustedMaxPair && matchesFloor(event, liveByKey))
+            .map(event => ({ kind: 'floor', at: Number(event.recordedAt), event })),
+        ...(parentData.manual_events || [])
+            .filter(event => Number(event.recordedAt) > Number(checkpoint.createdAt)
+                && Number(event.anchorPairIndex) <= trustedMaxPair
+                && matchesFloor(event, liveByKey, 'anchorFloorKey', 'anchorFingerprint'))
+            .map(event => ({ kind: 'manual', at: Number(event.recordedAt), event })),
+    ].sort((a, b) => a.at - b.at);
+    for (const item of replayItems) {
+        if (item.kind === 'floor') applyEntryChanges(data.state_table, item.event.entryChanges, item.event);
+        else applyManualEvent(data.state_table, item.event);
+    }
+
+    finishBranchData(data, parentData, livePairs, parentChat, 'checkpoint_replay', trustedMaxPair);
+    const earliest = checkpoints[0];
+    data.branch_checkpoints = earliest ? [{ ...clone(earliest), stateTable: lightweightStateTable(earliest.stateTable) }] : [];
+    const recoveredCheckpoint = {
+        id: crypto.randomUUID(),
+        anchorFloorKey: data.branch_origin.forkFloorKey,
+        anchorPairIndex: branchHead,
+        anchorFingerprint: livePairs.filter(pair => pair.sealed).at(-1)?.contentFingerprint || null,
+        stateTable: lightweightStateTable(data.state_table),
+        createdAt: Date.now(),
+        reason: 'fork_recovery',
+    };
+    if (!data.branch_checkpoints.some(point => point.anchorFloorKey === recoveredCheckpoint.anchorFloorKey
+        && point.anchorFingerprint === recoveredCheckpoint.anchorFingerprint)) {
+        data.branch_checkpoints.push(recoveredCheckpoint);
+    }
+    return data;
+}
+
+/** Re-materialize the active chat after edit/swipe/delete, including facts inside old checkpoints. */
+export function reconcileCurrentHistory(data = getChatData(), livePairs = getPairs()) {
+    const previousOrigin = data.branch_origin ? clone(data.branch_origin) : null;
+    const rebuilt = replayBranchData(data, livePairs, previousOrigin?.parentChat || '');
+    if (!previousOrigin) rebuilt.branch_origin = null;
+    for (const key of Object.keys(data)) delete data[key];
+    Object.assign(data, rebuilt);
+    return data;
+}
+
+async function fetchParentChat(parentChat) {
+    const context = getContext();
+    const isGroup = context.groupId !== null && context.groupId !== undefined;
+    const endpoint = isGroup ? '/api/chats/group/get' : '/api/chats/get';
+    const character = context.characters?.[context.characterId];
+    const body = isGroup
+        ? { id: parentChat }
+        : { ch_name: character?.name || context.name2, file_name: parentChat, avatar_url: character?.avatar };
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        cache: 'no-cache',
+        body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`无法读取父聊天（HTTP ${response.status}）`);
+    const rows = await response.json();
+    if (!Array.isArray(rows) || !rows.length) throw new Error('父聊天文件为空或格式不正确');
+    return rows[0]?.chat_metadata?.[MODULE_NAME] || null;
+}
+
+async function recoverCurrentBranch() {
+    const context = getContext();
+    const metadata = context.chatMetadata;
+    const parentChat = String(metadata?.main_chat || '');
+    const existing = metadata?.[MODULE_NAME];
+    const verified = existing?.branch_origin?.status === 'ready'
+        && existing.branch_origin.parentChat === parentChat;
+    if (!parentChat || verified) return { status: 'not_needed' };
+    const livePairs = getPairs();
+    try {
+        const parentData = await fetchParentChat(parentChat);
+        if (getContext().chatMetadata !== metadata) return { status: 'superseded' };
+        if (!parentData) throw new Error('父聊天没有可继承的插件记忆');
+        const restored = replayBranchData(parentData, livePairs, parentChat);
+        metadata[MODULE_NAME] = restored;
+        await saveChatData(restored);
+        appendLog('info', `分支记忆恢复完成：${restored.branch_origin.method}`);
+        return { status: 'ready', method: restored.branch_origin.method };
+    } catch (error) {
+        if (getContext().chatMetadata !== metadata) return { status: 'superseded' };
+        const blank = EMPTY_CHAT_DATA();
+        blank.job_queue.scope_id = crypto.randomUUID();
+        blank.branch_origin = { parentChat, status: 'failed', error: String(error?.message || error), recoveredAt: Date.now() };
+        blank.review_queue.push({ id: crypto.randomUUID(), kind: 'alert', note: `分支记忆恢复失败：${error?.message || error}。为避免串线，本分支暂不注入旧记忆。`, createdAt: Date.now() });
+        metadata[MODULE_NAME] = blank;
+        await saveChatData(blank);
+        return { status: 'failed', error };
+    }
+}
+
+export function beginBranchRecovery() {
+    const target = getContext().chatMetadata;
+    if (recoveryTarget === target) return recoveryBarrier;
+    recoveryTarget = target;
+    const pending = recoverCurrentBranch();
+    recoveryBarrier = pending.finally(() => {
+        if (recoveryTarget === target) recoveryTarget = null;
+    });
+    return recoveryBarrier;
+}
+
+export async function waitForBranchRecovery() {
+    let observed;
+    do {
+        observed = recoveryBarrier;
+        await observed;
+    } while (observed !== recoveryBarrier);
+}
+
+export async function ensureCurrentBranchRecovery() {
+    const data = getContext().chatMetadata?.[MODULE_NAME];
+    if (data?.branch_origin?.status === 'failed') return beginBranchRecovery();
+    return waitForBranchRecovery();
+}

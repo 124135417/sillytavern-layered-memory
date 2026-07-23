@@ -1,4 +1,4 @@
-import { handleChapterSummaryJob, markChaptersStaleForPair } from './src/chapter.js';
+import { handleChapterSummaryJob } from './src/chapter.js';
 import { handleExtractJob } from './src/extract.js';
 import {
     handleMigrateChapterJob,
@@ -7,13 +7,13 @@ import {
 } from './src/eval/migrate.js';
 import { ensureMessageIds, getPairs } from './src/ids.js';
 import { trimChatForGenerate, updateInjection } from './src/inject.js';
-import { rollbackFloor } from './src/merge.js';
 import { handleProofreadJob } from './src/proofread.js';
 import { rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
 import { appendLog, getChatData, getSettings, saveChatData } from './src/settings.js';
 import { handleStateGcJob } from './src/state-gc.js';
 import { injectPanel, registerMessageMenu, renderActiveTab } from './src/ui/panel.js';
 import { handleVolumeCompressJob } from './src/volume.js';
+import { beginBranchRecovery, ensureBranchCheckpoint, ensureCurrentBranchRecovery, reconcileCurrentHistory, waitForBranchRecovery } from './src/branch.js';
 
 const MODULE = 'layered-memory';
 
@@ -34,31 +34,31 @@ function wireHandlers() {
 }
 
 async function onChatChanged() {
+    const originMetadata = ctx().chatMetadata;
+    const recovery = await beginBranchRecovery();
+    if (ctx().chatMetadata !== originMetadata) return;
     ensureMessageIds();
     await rebuildAndEnqueuePending({ forceLastSealed: true });
+    if (ctx().chatMetadata !== originMetadata) return;
+    if (recovery.status !== 'failed') await ensureBranchCheckpoint();
+    if (ctx().chatMetadata !== originMetadata) return;
     updateInjection();
     renderActiveTab();
 }
 
 async function onMessageEvents(mesId) {
+    const originMetadata = ctx().chatMetadata;
+    await waitForBranchRecovery();
+    if (ctx().chatMetadata !== originMetadata) return;
     ensureMessageIds();
     const data = getChatData();
     const pairs = getPairs();
-    const chat = ctx().chat;
-    const mes = typeof mesId === 'number' || /^\d+$/.test(String(mesId))
-        ? chat[Number(mesId)]
-        : null;
-
-    if (mes) {
-        const pair = pairs.find(p => p.user === mes || p.ai === mes);
-        if (pair?.floorKey && (data.extracted_keys || []).includes(pair.floorKey)) {
-            await rollbackFloor(pair.floorKey);
-            await markChaptersStaleForPair(pair.pairIndex);
-            appendLog('info', `已回滚并标记 stale：楼#${pair.pairIndex}`);
-        }
-    }
-    // Delete / missing mes: orphan keys rolled back inside rebuildAndEnqueuePending
+    reconcileCurrentHistory(data, pairs);
+    await saveChatData(data);
+    if (ctx().chatMetadata !== originMetadata) return;
+    appendLog('info', `聊天历史已改变，已按当前分支重新核对记忆${mesId == null ? '' : `（消息 #${mesId}）`}`);
     await rebuildAndEnqueuePending();
+    if (ctx().chatMetadata !== originMetadata) return;
     updateInjection();
 }
 
@@ -70,9 +70,13 @@ globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, 
         if (!getSettings().enabled) {
             return;
         }
+        const originMetadata = ctx().chatMetadata;
+        await ensureCurrentBranchRecovery();
+        if (ctx().chatMetadata !== originMetadata) return;
         ensureMessageIds();
         void rebuildAndEnqueuePending();
         const handoff = await trimChatForGenerate(chat, type, contextSize);
+        if (ctx().chatMetadata !== originMetadata) return;
         updateInjection({ archiveEndPair: handoff?.removedThrough ?? -1 });
     } catch (err) {
         console.error(`[${MODULE}] interceptor error`, err);
@@ -84,23 +88,29 @@ jQuery(async () => {
     getSettings();
     injectPanel();
     registerMessageMenu();
-    updateInjection();
-
     const { eventSource, event_types } = ctx();
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
         void onChatChanged();
     });
 
-    eventSource.on(event_types.MESSAGE_RECEIVED, () => {
+    eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
+        const originMetadata = ctx().chatMetadata;
+        await waitForBranchRecovery();
+        if (ctx().chatMetadata !== originMetadata) return;
         ensureMessageIds();
-        void rebuildAndEnqueuePending();
+        await rebuildAndEnqueuePending();
+        if (ctx().chatMetadata !== originMetadata) return;
         updateInjection();
     });
 
-    eventSource.on(event_types.MESSAGE_SENT, () => {
+    eventSource.on(event_types.MESSAGE_SENT, async () => {
+        const originMetadata = ctx().chatMetadata;
+        await waitForBranchRecovery();
+        if (ctx().chatMetadata !== originMetadata) return;
         ensureMessageIds();
-        void rebuildAndEnqueuePending();
+        await rebuildAndEnqueuePending();
+        if (ctx().chatMetadata !== originMetadata) return;
         updateInjection();
     });
 
@@ -116,18 +126,26 @@ jQuery(async () => {
     }
     if (event_types.MESSAGE_DELETED) {
         eventSource.on(event_types.MESSAGE_DELETED, async (mesId) => {
+            const originMetadata = ctx().chatMetadata;
             await onMessageEvents(typeof mesId === 'number' ? mesId : Number(mesId));
-            await saveChatData();
+            if (ctx().chatMetadata !== originMetadata) return;
+            await saveChatData(getChatData());
         });
     }
     if (event_types.GENERATION_STARTED) {
-        eventSource.on(event_types.GENERATION_STARTED, () => {
-            void rebuildAndEnqueuePending();
+        eventSource.on(event_types.GENERATION_STARTED, async () => {
+            const originMetadata = ctx().chatMetadata;
+            await waitForBranchRecovery();
+            if (ctx().chatMetadata !== originMetadata) return;
+            await rebuildAndEnqueuePending();
+            if (ctx().chatMetadata !== originMetadata) return;
             updateInjection();
         });
     }
 
-    console.log(`[${MODULE}] 已加载 v0.5.0`);
+    await onChatChanged();
+
+    console.log(`[${MODULE}] 已加载 v0.6.0`);
 });
 
 export async function onActivate() {

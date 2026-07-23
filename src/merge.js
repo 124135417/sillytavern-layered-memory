@@ -1,5 +1,6 @@
 import { appendLog, getChatData, saveChatData } from './settings.js';
 import { validateEntry, validateUpdateId } from './validate.js';
+import { recordFloorEvent } from './branch.js';
 
 function nextEntryId(data) {
     const seq = data.progress.next_entry_seq || 1;
@@ -21,7 +22,6 @@ function pushChangelog(data, record) {
         at: Date.now(),
     });
     if (data.state_table.changelog.length > 500) {
-        // Keep recent; prefer not folding segments referenced by eval (eval stores snapshots)
         data.state_table.changelog = data.state_table.changelog.slice(-500);
     }
 }
@@ -37,6 +37,7 @@ export async function mergeExtractResult(normalized, ctx) {
     let applied = 0;
     let discarded = 0;
     let conflicts = 0;
+    const entryChanges = [];
 
     const floorLabel = ctx.floorLabel ?? ctx.pairIndex ?? '?';
     const floorKey = ctx.floorKey ?? null;
@@ -47,6 +48,7 @@ export async function mergeExtractResult(normalized, ctx) {
         const next = {
             floorKey,
             pairIndex: Number(ctx.pairIndex ?? ctx.floorLabel),
+            contentFingerprint: ctx.contentFingerprint || '',
             summary: normalized.turnSummary,
             sourceMode: ctx.bodyMode || 'full',
             updatedAt: Date.now(),
@@ -99,6 +101,7 @@ export async function mergeExtractResult(normalized, ctx) {
             dup.updated_floor = floorLabel;
             dup.evidence = item.evidence || dup.evidence;
             table.version += 1;
+            entryChanges.push({ op: 'upsert', id: dup.id, after: structuredClone(dup) });
             applied += 1;
             continue;
         }
@@ -144,6 +147,7 @@ export async function mergeExtractResult(normalized, ctx) {
             after: { ...entry },
         });
         table.version += 1;
+        entryChanges.push({ op: 'upsert', id: entry.id, after: structuredClone(entry) });
         applied += 1;
     }
 
@@ -163,18 +167,28 @@ export async function mergeExtractResult(normalized, ctx) {
         conflicts += 1;
     }
 
-    await saveChatData();
+    if (ctx.pipeline === 'per_floor' && floorKey) {
+        recordFloorEvent(data, {
+            floorKey,
+            pairIndex: Number(ctx.pairIndex ?? ctx.floorLabel),
+            turnSummary: normalized.turnSummary,
+            entryChanges,
+            contentFingerprint: ctx.contentFingerprint || '',
+        });
+    }
+    await saveChatData(data);
     return { applied, discarded, conflicts };
 }
 
 /**
  * Roll back all changelog ops for a given floorKey.
  */
-export async function rollbackFloor(floorKey) {
+export async function rollbackFloor(floorKey, expectedData = null) {
     if (!floorKey) {
         return 0;
     }
     const data = getChatData();
+    if (expectedData && data !== expectedData) return 0;
     const table = data.state_table;
     const logs = (table.changelog || []).filter(c => c.floorKey === floorKey);
     const beforeSummaryCount = (data.turn_summaries || []).length;
@@ -190,15 +204,17 @@ export async function rollbackFloor(floorKey) {
         } else if (rec.op === 'update') {
             const e = table.entries.find(x => x.id === rec.id);
             if (e && rec.before) {
-                e.value = rec.before.value;
-                e.cause = rec.before.cause ?? e.cause;
+                Object.assign(e, structuredClone(rec.before));
             }
+        } else if (rec.op === 'delete' && rec.before) {
+            if (!table.entries.some(e => e.id === rec.id)) table.entries.push(structuredClone(rec.before));
         }
     }
     table.changelog = (table.changelog || []).filter(c => c.floorKey !== floorKey);
     data.extracted_keys = (data.extracted_keys || []).filter(k => k !== floorKey);
+    data.floor_events = (data.floor_events || []).filter(event => event.floorKey !== floorKey);
     if (logs.length) table.version += 1;
-    await saveChatData();
+    await saveChatData(data);
     return Math.max(logs.length, removedSummary ? 1 : 0);
 }
 

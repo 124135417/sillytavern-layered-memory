@@ -173,8 +173,9 @@ async function summarizeChunk(text) {
     };
 }
 
-export async function markChaptersStaleForPair(pairIndex) {
+export async function markChaptersStaleForPair(pairIndex, expectedData = null) {
     const data = getChatData();
+    if (expectedData && data !== expectedData) return false;
     let any = false;
     for (const ch of data.chapters || []) {
         const [a, b] = ch.floor_range || [];
@@ -190,9 +191,10 @@ export async function markChaptersStaleForPair(pairIndex) {
         }
     }
     if (any) {
-        await saveChatData();
+        await saveChatData(data);
         enqueue('chapter_summary', { regenStale: true }, QUEUE_PRIORITY.chapter_summary);
     }
+    return any;
 }
 
 export async function handleRegenStaleChapters() {

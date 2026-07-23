@@ -3,7 +3,7 @@ import { getPairs } from './ids.js';
 import { retrieveHits } from './retrieve.js';
 import { renderL1Block, renderL2Block, renderL4Block } from './render.js';
 import { enqueue } from './queue.js';
-import { getChatData, getSettings } from './settings.js';
+import { assertChatData, getChatData, getSettings } from './settings.js';
 import { estimateTokens } from './tokens.js';
 
 function extensionPromptApi() {
@@ -157,6 +157,7 @@ export async function trimChatForGenerate(chat, type, contextSize) {
     const settings = getSettings();
     const data = getChatData();
     const counted = await countChatTokens(chat);
+    assertChatData(data);
     const before = counted.total;
     const minRecentPairs = Math.max(1, Number(settings.minRecentPairs) || Number(settings.recentPairs) || 6);
     const budget = resolveHistoryBudget(settings, contextSize);

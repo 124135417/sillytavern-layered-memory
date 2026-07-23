@@ -77,6 +77,11 @@ await new Promise(resolve => setTimeout(resolve, 0));
 assert.equal(chatSaveCount, 1, '稳定消息 ID 应明确保存一次');
 assert.equal(ensureMessageIds(), false, '重复扫描不应再次改写 ID');
 assert.equal(getPairs().length, 6, '六对消息应正确配对');
+const originalFingerprint = getPairs()[0].contentFingerprint;
+context.chat[1].swipes = ['回复 0', '另一条回复'];
+context.chat[1].swipe_id = 1;
+assert.notEqual(getPairs()[0].contentFingerprint, originalFingerprint, '同一消息 ID 切换 swipe 后正文指纹必须变化');
+context.chat[1].swipe_id = 0;
 
 const raw = {
     turn_summary: '<user>请求周衡护送林晚，周衡答应将她送到北港。',
@@ -88,15 +93,19 @@ const merged = await mergeExtractResult(normalized, {
     sourceText: '周衡答应护送林晚到北港',
     stateTable: chatData.state_table,
     floorKey: 'floor-1',
+    contentFingerprint: 'floor-1-content',
+    pairIndex: 1,
     floorLabel: 1,
     source: 'auto',
 });
 assert.deepEqual(merged, { applied: 1, discarded: 0, conflicts: 0 });
 assert.match(renderL1Block(chatData), /护送她到北港/);
 assert.equal(chatData.turn_summaries.length, 1, '逐轮整理应同时保存剧情记录');
+assert.equal(chatData.floor_events.length, 1, '逐轮整理应保存可供 Fork 重放的楼层事件');
 assert.equal((await rollbackFloor('floor-1')), 1, '按楼回滚应移除变更');
 assert.equal(chatData.state_table.entries.length, 0);
 assert.equal(chatData.turn_summaries.length, 0, '按楼回滚必须同时移除剧情记录');
+assert.equal(chatData.floor_events.length, 0, '按楼回滚必须同时移除 Fork 楼层事件');
 
 const bodyMatch = extractAiBody('<thinking>忽略</thinking><content>真正正文</content><table>忽略</table>', '<content>([\\s\\S]*?)</content>');
 assert.equal(bodyMatch.text, '真正正文');
@@ -212,4 +221,4 @@ const blank = EMPTY_CHAT_DATA();
 assert.ok(blank.job_queue && Array.isArray(blank.job_queue.failed), '新聊天必须带持久队列结构');
 assert.ok(metadataSaveCount >= 2, '合并与回滚必须保存 metadata');
 
-console.log('core smoke: 33/33 passed');
+console.log('core smoke: 35/35 passed');

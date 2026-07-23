@@ -91,6 +91,7 @@ export async function handleExtractJob(payload) {
                 sourceText,
                 stateTable: getChatData().state_table,
                 floorKey: pair.floorKey,
+                contentFingerprint: pair.contentFingerprint,
                 pairIndex: pair.pairIndex,
                 floorLabel: pair.pairIndex,
                 source: 'auto',

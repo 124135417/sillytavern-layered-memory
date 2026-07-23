@@ -43,6 +43,27 @@ export function messageStableKey(mes) {
     return `${mes.send_date ?? 'nodate'}::${swipeId}::${mes.is_user ? 'u' : 'a'}`;
 }
 
+function fnv1a(value, seed = 0x811c9dc5) {
+    let hash = seed;
+    for (let i = 0; i < value.length; i++) {
+        hash ^= value.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/** Detect edits and non-current swipe Forks even when SillyTavern keeps message IDs. */
+export function pairContentFingerprint(pair) {
+    const { userText, aiText } = getPairTexts(pair);
+    const payload = [
+        pair?.userKey || messageStableKey(pair?.user),
+        pair?.aiKey || messageStableKey(pair?.ai),
+        userText,
+        aiText,
+    ].join('\0');
+    return `v1:${fnv1a(payload)}${fnv1a(payload, 0x9e3779b9)}:${payload.length}`;
+}
+
 /**
  * Walk chat as pairs: each pair = one user message + following non-user reply (if any).
  */
@@ -66,7 +87,7 @@ export function getPairs() {
         if (j < chat.length && !chat[j].is_user) {
             ai = chat[j];
         }
-        pairs.push({
+        const pair = {
             pairIndex: pairs.length,
             user,
             ai,
@@ -74,7 +95,9 @@ export function getPairs() {
             aiKey: ai ? messageStableKey(ai) : null,
             floorKey: ai ? `${messageStableKey(user)}+${messageStableKey(ai)}` : messageStableKey(user),
             sealed: Boolean(ai),
-        });
+        };
+        pair.contentFingerprint = pairContentFingerprint(pair);
+        pairs.push(pair);
         i = ai ? j + 1 : i + 1;
     }
     return pairs;
@@ -144,7 +167,7 @@ export function ensureActivationBaseline() {
     } else {
         appendLog('info', '激活基线：-1（新聊天，全部楼层走实时提取）');
     }
-    void saveChatData();
+    void saveChatData(data);
     return baseline;
 }
 

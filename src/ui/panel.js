@@ -25,6 +25,7 @@ import { renderL1Block, renderL2Block, renderL4Block } from '../render.js';
 import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
+import { recordManualEvent } from '../branch.js';
 
 const ROOT_ID = 'layered-memory-panel';
 const DRAWER_ID = 'layered-memory-drawer';
@@ -316,7 +317,8 @@ function renderShellStatus() {
     const reviews = data.review_queue || [];
     const failed = queue.failed || [];
     const pendingCount = queue.queued?.length || 0;
-    const status = failed.length ? { key: 'error', text: `${failed.length} 项整理工作需要处理` }
+    const status = data.branch_origin?.status === 'failed' ? { key: 'error', text: '分支记忆恢复失败' }
+        : failed.length ? { key: 'error', text: `${failed.length} 项整理工作需要处理` }
         : !settings.enabled ? { key: 'paused', text: '已停用' }
             : queue.paused ? { key: 'paused', text: '已暂停' }
             : queue.inFlight || pendingCount ? { key: 'working', text: queue.inFlight ? '正在处理' : '等待处理' }
@@ -624,7 +626,8 @@ function bindStateTab(body) {
         };
         data.state_table.entries.push(entry);
         data.state_table.version += 1;
-        await saveChatData();
+        recordManualEvent(data, { op: 'upsert', before, after: entry, reason: 'manual_add' });
+        await saveChatData(data);
         recordMigrationEdit({ beforeEntry: before, afterEntry: entry, op: 'add' });
         updateInjection();
         renderActiveTab();
@@ -676,8 +679,11 @@ function bindStateTab(body) {
         li.querySelector('[data-act="pin"]')?.addEventListener('click', async () => {
             const e = getChatData().state_table.entries.find(x => x.id === id);
             if (e) {
+                const data = getChatData();
+                const before = structuredClone(e);
                 e.pinned = !e.pinned;
-                await saveChatData();
+                recordManualEvent(data, { op: 'upsert', before, after: e, reason: 'manual_pin' });
+                await saveChatData(data);
                 renderActiveTab();
             }
         });
@@ -695,7 +701,8 @@ function bindStateTab(body) {
             Object.assign(e, draft);
             e.source = e.source === 'auto' ? 'manual' : e.source;
             data.state_table.version += 1;
-            await saveChatData();
+            recordManualEvent(data, { op: 'upsert', before, after: e, reason: 'manual_edit' });
+            await saveChatData(data);
             recordMigrationEdit({ beforeEntry: before, afterEntry: e, op: 'update' });
             updateInjection();
             renderActiveTab();
@@ -705,10 +712,13 @@ function bindStateTab(body) {
                 return;
             }
             const data = getChatData();
-            const before = data.state_table.entries.find(x => x.id === id);
+            const found = data.state_table.entries.find(x => x.id === id);
+            if (!found) return;
+            const before = structuredClone(found);
             data.state_table.entries = data.state_table.entries.filter(x => x.id !== id);
             data.state_table.version += 1;
-            await saveChatData();
+            recordManualEvent(data, { op: 'delete', before, after: null, reason: 'manual_delete' });
+            await saveChatData(data);
             recordMigrationEdit({ beforeEntry: before, afterEntry: null, op: 'delete' });
             updateInjection();
             renderActiveTab();
@@ -932,11 +942,12 @@ function bindReviewTab(body) {
                 };
                 data.state_table.entries.push(entry);
                 data.state_table.version += 1;
+                recordManualEvent(data, { op: 'upsert', after: entry, reason: 'proofread_approval' });
             } else if (item.entry_id && item.kind === 'flag_conflict') {
                 // approve conflict = no auto change; just dismiss (user may edit manually)
             }
             data.review_queue = data.review_queue.filter(x => x.id !== id);
-            await saveChatData();
+            await saveChatData(data);
             updateInjection();
             renderActiveTab();
         });

@@ -69,6 +69,7 @@ function getActiveChatData() {
             data[key] = blank[key];
         }
     }
+    data.version = Math.max(Number(data.version) || 1, blank.version);
     if (!data.state_table) {
         data.state_table = blank.state_table;
     }

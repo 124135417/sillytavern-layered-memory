@@ -79,13 +79,20 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const EMPTY_CHAT_DATA = () => ({
-    version: 1,
+    version: 2,
     state_table: {
         version: 1,
         entries: [],
         changelog: [],
     },
     turn_summaries: [],
+    /** Replayable per-floor materialized changes used to restore Fork branches. */
+    floor_events: [],
+    /** Compact user edits, anchored to the visible branch at the time of editing. */
+    manual_events: [],
+    /** State-table snapshots anchored to a stable floor key. */
+    branch_checkpoints: [],
+    branch_origin: null,
     chapters: [],
     volumes: [],
     keyword_index: {},

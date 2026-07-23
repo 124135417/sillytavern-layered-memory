@@ -1,4 +1,5 @@
 import { QUEUE_PRIORITY } from '../constants.js';
+import { captureBranchCheckpoint } from '../branch.js';
 import { handleChapterSummaryJob, buildKeywordIndex } from '../chapter.js';
 import { extractFromChapterSummary } from '../extract.js';
 import { addEvalCase } from './cases.js';
@@ -149,6 +150,7 @@ export async function handleMigrateFinalizeJob(payload = {}) {
             createdAt: Date.now(),
         });
     }
+    captureBranchCheckpoint(finalData, 'history_migration_complete');
     await saveChatData(finalData);
     appendLog('info', `迁移收尾：残楼补提 ×${pairs.length}`);
 }
