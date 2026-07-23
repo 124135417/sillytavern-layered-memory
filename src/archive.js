@@ -9,7 +9,7 @@ function promptForNotes(notes, retryNote = '') {
 }
 
 export function validateChapterArchive(raw, startPair, endPair) {
-    const summary = String(raw?.summary || '').trim();
+    const rawSummary = String(raw?.summary || '').trim();
     const keyEvents = Array.isArray(raw?.key_events) ? raw.key_events : [];
     const coverage = Array.isArray(raw?.coverage) ? raw.coverage : [];
     const keywords = Array.isArray(raw?.keywords)
@@ -20,12 +20,16 @@ export function validateChapterArchive(raw, startPair, endPair) {
     const errors = [];
     const warnings = [];
     const recommendedLength = Math.min(450, Math.max(180, expected.length * 18));
-    const hardMinimumLength = Math.min(220, Math.max(120, expected.length * 9));
-    const summaryLength = [...summary].length;
-    if (summaryLength < hardMinimumLength || summaryLength > 900) {
-        errors.push(`章节概述必须为 ${hardMinimumLength}–900 字`);
+    const summaryLength = [...rawSummary].length;
+    let summary = rawSummary;
+    if (!summaryLength) {
+        errors.push('章节概述为空');
     } else if (summaryLength < recommendedLength) {
         warnings.push(`章节概述较精简（${summaryLength} 字，建议至少 ${recommendedLength} 字）`);
+    }
+    if (summaryLength > 900) {
+        summary = [...rawSummary].slice(0, 900).join('').trimEnd();
+        warnings.push(`章节概述超过 900 字，已保留前 900 字`);
     }
     if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
         errors.push(`coverage 必须依次包含 ${expected.join('、')}`);

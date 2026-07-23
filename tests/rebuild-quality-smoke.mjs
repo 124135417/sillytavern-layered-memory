@@ -5,11 +5,12 @@ const {
     buildMissingRebuildSegmentPayloads,
     handleHistoryRebuildCommit,
     handleHistoryRebuildSegment,
+    getHistoryRebuildSnapshot,
     normalizeHistoryUserSummary,
     recoverEvidence,
     validateHistorySegment,
 } = await import('../src/rebuild.js');
-const { validateChapterArchive } = await import('../src/archive.js');
+const { summarizeChapterNotes, validateChapterArchive } = await import('../src/archive.js');
 const { formatRebuildFloorList, rebuildStage } = await import('../src/rebuild.js');
 const { handleChapterSummaryJob, markChapterStaleForTurnSummaryEdit } = await import('../src/chapter.js');
 const { displayNarrativeText, isUsableMemoryEntry } = await import('../src/quality.js');
@@ -166,8 +167,15 @@ const conciseCheck = validateChapterArchive(conciseChapter, 0, 24);
 assert.equal(conciseCheck.ok, true, 'a complete concise chapter must not be discarded only for missing the preferred length');
 assert.equal(conciseCheck.warnings.length, 1, 'a concise chapter should retain a visible quality warning');
 assert.deepEqual(conciseCheck.chapter.quality_warnings, conciseCheck.warnings);
-assert.equal(validateChapterArchive({ ...validChapter, summary: '过短。'.repeat(20) }, 0, 24).ok, false,
-    'a genuinely incomplete chapter must still be rejected');
+const veryShortCheck = validateChapterArchive({ ...validChapter, summary: '过短。'.repeat(20) }, 0, 24);
+assert.equal(veryShortCheck.ok, true, 'summary length alone must never discard structurally complete chapter coverage');
+assert.equal(veryShortCheck.warnings.length, 1);
+assert.equal(validateChapterArchive({ ...validChapter, summary: '' }, 0, 24).ok, false,
+    'an empty chapter summary must still be rejected');
+const oversizedCheck = validateChapterArchive({ ...validChapter, summary: '完整剧情。'.repeat(230) }, 0, 24);
+assert.equal(oversizedCheck.ok, true);
+assert.equal([...oversizedCheck.chapter.summary].length, 900, 'overlong chapter prose should be deterministically capped');
+assert.match(oversizedCheck.warnings.join('；'), /已保留前 900 字/u);
 assert.equal(formatRebuildFloorList([113, 114, 115, 117, 118, 124]), '113–115、117–118、124');
 assert.equal(rebuildStage({ type: 'history_rebuild_segment', payload: { startPair: 100, endPair: 124, pairIndexes: [113, 114, 115] } }, { phase: '旧进度' }),
     '正在逐轮核对第 113–115 轮', 'the active queue job must win over stale saved progress text');
@@ -335,5 +343,59 @@ assert.equal(targetedChapterData.chapters[0].stale, false);
 assert.equal(targetedChapterData.chapters[0].stale_reason, null);
 assert.equal(targetedChapterData.chapters[0].manual_override, false);
 assert.equal(targetedChapterData.chapters[1].summary, '绝不能改变的相邻章节');
+
+let shortChapterAttempts = 0;
+globalThis.SillyTavern = { getContext: () => ({
+    chat: [], name1: '伯滔', chatMetadata: { layered_memory: { state_table: { entries: [] } } },
+    extensionSettings: { layered_memory: { memoryModelSource: 'current' } },
+    generateRaw: async () => {
+        shortChapterAttempts += 1;
+        return JSON.stringify({ ...validChapter, summary: '很短但覆盖完整的章节概述。' });
+    },
+    saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
+}) };
+const acceptedShortChapter = await summarizeChapterNotes(
+    Array.from({ length: 25 }, (_, pairIndex) => ({ pairIndex, summary: `<user>推进第 ${pairIndex} 轮。` })),
+    0,
+    24,
+);
+assert.equal(shortChapterAttempts, 2, 'a short chapter should receive one quality retry');
+assert.match(acceptedShortChapter.quality_warnings.join('；'), /较精简/u,
+    'a second structurally complete short result must be saved with a quality warning');
+
+const progressChat = Array.from({ length: 132 }, (_, pairIndex) => [
+    { is_user: true, mes: `用户 ${pairIndex}`, extra: { layered_memory_id: `progress-u-${pairIndex}` } },
+    { is_user: false, mes: `角色 ${pairIndex}`, extra: { layered_memory_id: `progress-a-${pairIndex}` } },
+]).flat();
+const progressData = {
+    state_table: { version: 1, entries: [], changelog: [] },
+    turn_summaries: [], chapters: [], volumes: [], progress: { baseline_pair: 131 },
+    history_rebuild: {
+        status: 'error', stage_mode: 'chapters', total: 132, completed: 132, baseline: 131,
+        error: '章节概述较短', phase: '正在合并第 50–74 轮剧情',
+        turn_summaries: Array.from({ length: 132 }, (_, pairIndex) => ({ pairIndex, summary: `<user>推进第 ${pairIndex} 轮。` })),
+        entries: [], fact_events: [], extracted_keys: [], warnings: [], unresolved_floors: [],
+        chapters: [
+            { floor_range: [0, 24], summary: '第一章' },
+            { floor_range: [25, 49], summary: '第二章' },
+        ],
+    },
+    job_queue: {
+        scope_id: 'chapter-progress-test', paused: false, queued: [], running: null,
+        failed: [{ id: 'failed-chapter', type: 'history_rebuild_chapter', payload: { startPair: 50, endPair: 74 }, attempt: 1 }],
+    },
+};
+globalThis.SillyTavern = { getContext: () => ({
+    chat: progressChat, name1: '伯滔', chatMetadata: { layered_memory: progressData },
+    extensionSettings: { layered_memory: { chapterSize: 25 } },
+    saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
+}) };
+const progressSnapshot = getHistoryRebuildSnapshot();
+assert.deepEqual(progressSnapshot.turnProgress, { status: 'complete', completed: 132, total: 132 });
+assert.equal(progressSnapshot.chapterProgress.completed, 2);
+assert.equal(progressSnapshot.chapterProgress.total, 5);
+assert.equal(progressSnapshot.chapterProgress.remaining, 3);
+assert.deepEqual(progressSnapshot.chapterProgress.currentRange, [50, 74]);
+assert.deepEqual(progressSnapshot.chapterProgress.tailRange, [125, 131]);
 
 console.log('rebuild quality smoke: validation gates, visible turn records, and atomic replacement passed');

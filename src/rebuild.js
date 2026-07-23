@@ -595,17 +595,45 @@ export function getHistoryRebuildSnapshot() {
     const state = rebuildState(data);
     if (!state) {
         const total = historyPairs(data).length;
+        const size = getSettings().chapterSize || 25;
+        const fullChapterTotal = Math.floor(total / size);
+        const tailStart = fullChapterTotal * size;
         return {
             status: 'idle', phase: '尚未开始', stage: '尚未开始', total, completed: 0,
             turnSummaryCount: (data.turn_summaries || []).length,
             warningCount: 0,
             queued: 0, inFlight: null, failed: [], paused: false,
+            turnProgress: { status: 'idle', completed: (data.turn_summaries || []).length, total },
+            chapterProgress: {
+                status: 'locked',
+                completed: 0,
+                total: fullChapterTotal,
+                currentRange: null,
+                remaining: fullChapterTotal,
+                tailRange: total > tailStart ? [tailStart, total - 1] : null,
+            },
         };
     }
     const queue = getQueueSnapshot();
     const queued = queue.queued.filter(job => REBUILD_JOB_TYPES.includes(job.type));
     const inFlight = REBUILD_JOB_TYPES.includes(queue.inFlight?.type) ? queue.inFlight : null;
     const failed = queue.failed.filter(job => REBUILD_JOB_TYPES.includes(job.type));
+    const size = getSettings().chapterSize || 25;
+    const fullChapterTotal = Math.floor(state.total / size);
+    const expectedRanges = Array.from({ length: fullChapterTotal }, (_, index) => [index * size, index * size + size - 1]);
+    const chapterSource = state.status === 'complete' ? (data.chapters || []) : (state.chapters || []);
+    const completeRanges = new Set(chapterSource.map(chapter => JSON.stringify(chapter.floor_range)));
+    const chapterCompleted = expectedRanges.filter(range => completeRanges.has(JSON.stringify(range))).length;
+    const activeChapterJob = [inFlight, ...queued, ...failed].find(job => job?.type === 'history_rebuild_chapter');
+    const tailStart = fullChapterTotal * size;
+    const turnsComplete = (state.status === 'complete' ? (data.turn_summaries || []) : (state.turn_summaries || [])).length === state.total;
+    const turnStatus = turnsComplete ? 'complete'
+        : state.stage_mode === 'turns' ? state.status
+            : 'stopped';
+    const chapterStatus = state.status === 'complete' ? 'complete'
+        : !turnsComplete ? 'locked'
+            : state.stage_mode === 'chapters' ? state.status
+                : 'ready';
     return {
         ...state,
         turnSummaryCount: state.status === 'complete'
@@ -617,6 +645,19 @@ export function getHistoryRebuildSnapshot() {
         failed,
         paused: queue.paused,
         stage: rebuildStage(inFlight || queued[0], state),
+        turnProgress: {
+            status: turnStatus,
+            completed: state.status === 'complete' ? (data.turn_summaries || []).length : (state.turn_summaries || []).length,
+            total: state.total,
+        },
+        chapterProgress: {
+            status: chapterStatus,
+            completed: chapterCompleted,
+            total: fullChapterTotal,
+            currentRange: activeChapterJob ? [activeChapterJob.payload.startPair, activeChapterJob.payload.endPair] : null,
+            remaining: Math.max(0, fullChapterTotal - chapterCompleted),
+            tailRange: state.total > tailStart ? [tailStart, state.total - 1] : null,
+        },
     };
 }
 
@@ -656,7 +697,8 @@ export async function startHistoryRebuild() {
         && (running.inFlight || running.queued)) return running;
     await clearFailedJobs([...REBUILD_JOB_TYPES, 'migrate_chapter', 'migrate_extract_chapter', 'migrate_extract_floor', 'migrate_finalize', 'migrate_complete']);
     await cancelQueuedJobs(['migrate_chapter', 'migrate_extract_chapter', 'migrate_extract_floor', 'migrate_finalize', 'migrate_complete']);
-    const resumable = data.history_rebuild && ['stopped', 'error'].includes(data.history_rebuild.status)
+    const resumable = data.history_rebuild && data.history_rebuild.stage_mode === 'turns'
+        && ['stopped', 'error'].includes(data.history_rebuild.status)
         && data.history_rebuild.total === pairs.length;
     if (!resumable) {
         data.rebuild_backup = backupCurrent(data);
@@ -676,7 +718,8 @@ export async function startHistoryRebuildChapters() {
     const data = getChatData();
     const state = rebuildState(data);
     const pairs = historyPairs(data);
-    if (!state || state.status !== 'review' || state.turn_summaries.length !== pairs.length) {
+    const resumableChapterStage = state?.stage_mode === 'chapters' && ['stopped', 'error'].includes(state.status);
+    if (!state || (!resumableChapterStage && state.status !== 'review') || state.turn_summaries.length !== pairs.length) {
         throw new Error('逐轮记录尚未完整生成，暂时不能整理章节');
     }
     state.stage_mode = 'chapters';

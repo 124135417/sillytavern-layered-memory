@@ -14,6 +14,10 @@ assert.match(panel, /class="lm-task-disclosure" aria-expanded="false"/u,
     'mobile task status must expose an accessible disclosure control');
 assert.match(panel, /body\.classList\.toggle\('lm-state-body', tab === 'state'\)/u,
     'the state page must opt into the mobile fixed-rail layout');
+assert.match(panel, /id="lm-tab-turns"[^>]*data-tab="turns"[^>]*>逐轮记录</u,
+    'per-turn records need their own permanent navigation destination');
+assert.match(panel, /id="lm-tab-chapters"[^>]*data-tab="chapters"[^>]*>章节摘要</u,
+    'chapter summaries need a separate navigation destination');
 assert.match(panel, /document\.body\.appendChild\(panel\)/u,
     'the fixed panel must be portaled outside SillyTavern responsive menu hosts');
 assert.match(panel, /panel\?\.querySelectorAll\('\.lm-tab'\)/u,
@@ -61,6 +65,8 @@ assert.match(css, /\.lm-turn-records > summary \{[^}]*min-height: 44px[^}]*font-
     'per-turn disclosures must remain readable and touch-friendly');
 assert.match(css, /\.lm-turn-records li \{ grid-template-columns: 1fr; gap: 2px; \}/u,
     'per-turn records must collapse to one column on phones');
+assert.match(css, /@media \(max-width: 899px\)[\s\S]*\.lm-rebuild-workflows \{ grid-template-columns: 1fr; \}/u,
+    'the two independent workflow cards must stack on narrow screens');
 assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/u,
     'visible text must not use fixed pixel sizes below 14px');
 

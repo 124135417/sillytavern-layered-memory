@@ -92,14 +92,18 @@
             quarantined_entries: [{ id: 'bad1', slot: 'world', subject: '', value: 'undefined', quarantineReason: '缺少明确主体；缺少事实内容' }],
             history_rebuild: harnessMode === 'review'
                 ? { status: 'review', stage_mode: 'turns', total: 132, completed: 132, phase: '逐轮记录已经生成，等待检查和修改', turn_summaries: structuredClone(turnSummaries), entries: [], fact_events: [], chapters: [], extracted_keys: [], warnings: [], unresolved_floors: [], startedAt: now - 100000 }
-                : { status: 'complete', stage_mode: 'chapters', total: 132, completed: 132, phase: '安全重建完成', warnings: ['第 31 轮已忽略一条不可靠事实'], startedAt: now - 100000, finishedAt: now },
+                : harnessMode === 'chapter_error'
+                    ? { status: 'error', stage_mode: 'chapters', total: 132, completed: 132, phase: '正在合并第 50–74 轮剧情', error: '章节生成失败，可继续处理', turn_summaries: structuredClone(turnSummaries), entries: [], fact_events: [], chapters: [chapter(1, 0, 24), chapter(2, 25, 49)], extracted_keys: [], warnings: [], unresolved_floors: [], startedAt: now - 100000 }
+                    : { status: 'complete', stage_mode: 'chapters', total: 132, completed: 132, phase: '安全重建完成', warnings: ['第 31 轮已忽略一条不可靠事实'], startedAt: now - 100000, finishedAt: now },
             rebuild_backup: { createdAt: now - 100000 },
             pending_floors: [], extracted_keys: extracted,
             job_queue: {
                 scope_id: 'harness-chat', paused: false,
                 queued: [],
                 running: null,
-                failed: [],
+                failed: harnessMode === 'chapter_error'
+                    ? [{ id: 'failed-chapter', type: 'history_rebuild_chapter', payload: { startPair: 50, endPair: 74 }, attempt: 1, maxAttempts: 3, lastError: '章节生成失败，可继续处理' }]
+                    : [],
             },
             history_backfill: { status: 'complete', total: 132, completed: 132, startedAt: now - 100000, finishedAt: now },
             progress: { last_chapter_end_pair: 124, pairs_since_proofread: 2, next_entry_seq: 6, next_chapter_seq: 6, baseline_pair: 131 },

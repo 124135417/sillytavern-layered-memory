@@ -74,7 +74,8 @@ export function injectPanel() {
             </header>
             <nav class="lm-tabs" role="tablist" aria-label="记忆中心页面">
                 <button id="lm-tab-state" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="true" data-tab="state" class="lm-tab active">当前记忆</button>
-                <button id="lm-tab-chapters" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="chapters" class="lm-tab">剧情时间线</button>
+                <button id="lm-tab-turns" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="turns" class="lm-tab">逐轮记录</button>
+                <button id="lm-tab-chapters" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="chapters" class="lm-tab">章节摘要</button>
                 <button id="lm-tab-review" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="review" class="lm-tab">待确认 <span class="lm-tab-count" hidden></span></button>
                 <button id="lm-tab-settings" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="settings" class="lm-tab">设置</button>
             </nav>
@@ -161,6 +162,10 @@ function refreshQueueUi() {
         refreshHistoryBackfillUi(panel.querySelector('.lm-body'));
         return;
     }
+    if (['turns', 'chapters'].includes(activeTab())) {
+        renderActiveTab();
+        return;
+    }
     if (activeTab() !== 'state') {
         return;
     }
@@ -176,33 +181,67 @@ function refreshQueueUi() {
 }
 
 function renderHistoryBackfillStatus(snapshot = getHistoryRebuildSnapshot()) {
-    snapshot = snapshot || { status: 'idle', total: 0, completed: 0, queued: 0, failed: [] };
-    const total = Number(snapshot.total) || 0;
-    const completed = Math.min(total, Number(snapshot.completed) || 0);
-    const measuredPercent = total > 0 ? Math.round((completed / total) * 100) : 0;
-    const percent = ['complete', 'review'].includes(snapshot.status) ? 100 : Math.min(99, measuredPercent);
-    const statusCopy = {
-        idle: ['尚未开始安全重建', '点击后会先保留旧结果，再在后台逐轮重建；未完成前不会替换当前记忆。'],
-        running: ['正在安全重建旧聊天', snapshot.stage],
-        stopping: ['正在安全停止', '未开始的任务已经取消；正在请求模型的这一项结束后停止。'],
-        stopped: ['安全重建已停止', `已经保留前面完成的 ${completed} 轮，可以随时继续。`],
-        review: ['逐轮记录已经生成', '请在“剧情时间线”检查或修改；确认后再生成章节摘要。'],
-        complete: ['安全重建完成', '旧聊天已经逐轮核对，并一次性替换为通过校验的新结果。'],
-        error: ['安全重建遇到问题', snapshot.error || '旧结果仍然保留。处理失败项后可以继续重建。'],
-    };
-    const [title, detail] = statusCopy[snapshot.status] || statusCopy.idle;
-    const canStart = !['running', 'stopping', 'review'].includes(snapshot.status);
-    const canStop = snapshot.status === 'running';
-    const startLabel = ['stopped', 'error'].includes(snapshot.status) ? '继续安全重建' : snapshot.status === 'complete' ? '重新安全重建' : '生成逐轮剧情记录';
-    const waiting = snapshot.queued > 0 ? ` · 还有 ${snapshot.queued} 项等待处理` : '';
-    const turnSummaryCount = Math.min(total, Number(snapshot.turnSummaryCount) || 0);
-    const warningCount = Number(snapshot.warningCount) || 0;
-    return `<div class="lm-backfill-card" data-state="${escapeHtml(snapshot.status)}" aria-live="polite">
-        <div class="lm-backfill-heading"><div><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${completed} / ${total} 轮</strong></div>
-        <progress max="100" value="${percent}" aria-label="旧聊天安全重建进度：${percent}%">${percent}%</progress>
-        <div class="lm-backfill-meta"><span>${percent}% 已完成${escapeHtml(waiting)}</span><span>已生成 ${turnSummaryCount} / ${total} 条逐轮记录</span>${warningCount ? `<span>已忽略 ${warningCount} 条不可靠事实</span>` : ''}${snapshot.inFlight ? '<span>当前有 1 项正在处理</span>' : ''}</div>
-        <div class="lm-settings-actions">${snapshot.status === 'review' ? '<button type="button" class="lm-button lm-button-primary" id="lm-build-rebuild-chapters">根据逐轮记录生成章节摘要</button><button type="button" class="lm-text-button" id="lm-review-rebuild-turns">检查逐轮记录</button>' : `<button type="button" class="lm-button" id="lm-migrate" ${canStart ? '' : 'disabled'}>${escapeHtml(startLabel)}</button><button type="button" class="lm-text-button" id="lm-migrate-abort" ${canStop ? '' : 'disabled'}>停止重建</button>`}</div>
+    return `<div class="lm-rebuild-workflows" aria-live="polite">
+        ${renderTurnProgressCard(snapshot, { controls: true })}
+        ${renderChapterProgressCard(snapshot, { controls: true })}
     </div>`;
+}
+
+function workflowPercent(completed, total) {
+    return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+}
+
+function renderTurnProgressCard(snapshot, { controls = false, showOpen = true } = {}) {
+    const progress = snapshot.turnProgress || { status: 'idle', completed: 0, total: snapshot.total || 0 };
+    const percent = workflowPercent(progress.completed, progress.total);
+    const active = snapshot.stage_mode === 'turns' && ['running', 'stopping'].includes(snapshot.status);
+    const failed = snapshot.stage_mode === 'turns' && snapshot.status === 'error';
+    const title = progress.status === 'complete' ? '逐轮记录已经齐全'
+        : failed ? '逐轮记录生成遇到问题'
+            : active ? '正在生成逐轮记录'
+                : progress.completed ? '逐轮记录尚未完成' : '还没有生成逐轮记录';
+    const detail = failed ? snapshot.error
+        : active ? snapshot.stage
+            : progress.status === 'complete' ? '可以随时查看和修改；完成章节后这些记录也不会消失。'
+                : '先逐轮整理用户输入和角色回应，再决定是否生成章节摘要。';
+    const label = progress.status === 'complete' ? '重新生成全部逐轮记录'
+        : ['error', 'stopped'].includes(progress.status) ? '继续生成逐轮记录'
+            : '生成逐轮记录';
+    return `<section class="lm-backfill-card" data-workflow="turns" data-state="${escapeHtml(progress.status)}">
+        <div class="lm-backfill-heading"><div><span class="lm-kicker">第一步 · 可独立使用</span><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${progress.completed} / ${progress.total} 轮</strong></div>
+        <progress max="100" value="${percent}" aria-label="逐轮记录进度：${percent}%">${percent}%</progress>
+        <div class="lm-backfill-meta"><span>${percent}%</span><span>${Number(snapshot.warningCount) ? `已忽略 ${snapshot.warningCount} 条证据不可靠的事实` : '没有未解决的逐轮错误'}</span></div>
+        ${controls ? `<div class="lm-settings-actions"><button type="button" class="lm-button" data-rebuild-action="turns" ${active || snapshot.stage_mode === 'chapters' && snapshot.status === 'running' ? 'disabled' : ''}>${escapeHtml(label)}</button>${showOpen ? '<button type="button" class="lm-text-button" data-open-workflow="turns">查看逐轮记录</button>' : ''}${active ? '<button type="button" class="lm-text-button" data-rebuild-action="stop">停止</button>' : ''}</div>` : ''}
+    </section>`;
+}
+
+function renderChapterProgressCard(snapshot, { controls = false, showOpen = true } = {}) {
+    const progress = snapshot.chapterProgress || { status: 'locked', completed: 0, total: 0, remaining: 0, currentRange: null, tailRange: null };
+    const percent = workflowPercent(progress.completed, progress.total);
+    const current = progress.currentRange
+        ? `${progress.status === 'error' ? '上次失败于' : progress.status === 'stopped' ? '已停在' : '正在生成'}第 ${progress.currentRange[0]}–${progress.currentRange[1]} 轮`
+        : '';
+    const title = progress.status === 'complete' ? '章节摘要已经完成'
+        : progress.status === 'locked' ? '章节摘要等待逐轮记录'
+            : progress.status === 'error' ? '章节摘要生成遇到问题'
+                : progress.status === 'running' || progress.status === 'stopping' ? '正在生成章节摘要'
+                    : progress.completed ? '章节摘要可以继续生成' : '可以生成章节摘要';
+    const detail = progress.status === 'error' ? snapshot.error
+        : current || (progress.status === 'locked' ? '逐轮记录完整后才能合并章节。'
+            : progress.status === 'complete' ? '逐轮记录仍然保留，可随时单独查看和修改。'
+                : `剩余 ${progress.remaining} 章；已经完成的章节不会重复生成。`);
+    const actionLabel = ['error', 'stopped'].includes(progress.status) || progress.completed > 0
+        ? '继续生成章节摘要' : '生成章节摘要';
+    const tail = progress.tailRange
+        ? `<p class="lm-tail-note">第 ${progress.tailRange[0]}–${progress.tailRange[1]} 轮共 ${progress.tailRange[1] - progress.tailRange[0] + 1} 轮，不足一章，仅保留逐轮记录。</p>` : '';
+    const active = ['running', 'stopping'].includes(progress.status);
+    return `<section class="lm-backfill-card" data-workflow="chapters" data-state="${escapeHtml(progress.status)}">
+        <div class="lm-backfill-heading"><div><span class="lm-kicker">第二步 · 单独启动</span><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${progress.completed} / ${progress.total} 章</strong></div>
+        <progress max="100" value="${percent}" aria-label="章节摘要进度：${percent}%">${percent}%</progress>
+        <div class="lm-backfill-meta"><span>${percent}%</span><span>剩余 ${progress.remaining} 章</span>${current ? `<span>${escapeHtml(current)}</span>` : ''}</div>
+        ${tail}
+        ${controls ? `<div class="lm-settings-actions"><button type="button" class="lm-button ${progress.status === 'ready' ? 'lm-button-primary' : ''}" data-rebuild-action="chapters" ${['locked', 'complete', 'running', 'stopping'].includes(progress.status) ? 'disabled' : ''}>${escapeHtml(actionLabel)}</button>${showOpen ? '<button type="button" class="lm-text-button" data-open-workflow="chapters">查看章节摘要</button>' : ''}${active ? '<button type="button" class="lm-text-button" data-rebuild-action="stop">停止</button>' : ''}</div>` : ''}
+    </section>`;
 }
 
 function refreshHistoryBackfillUi(body) {
@@ -214,25 +253,28 @@ function refreshHistoryBackfillUi(body) {
 
 function bindHistoryBackfillControls(host, body) {
     if (!host) return;
-    host.querySelector('#lm-migrate')?.addEventListener('click', async () => {
-        if (!confirm('开始安全重建旧聊天？插件会保留现有结果，在后台逐轮核对；只有全部成功后才会一次性替换。')) return;
-        const button = host.querySelector('#lm-migrate');
+    host.querySelector('[data-rebuild-action="turns"]')?.addEventListener('click', async () => {
+        const snapshot = getHistoryRebuildSnapshot();
+        const replacing = snapshot.turnProgress?.status === 'complete';
+        if (!confirm(replacing
+            ? '重新生成全部逐轮记录？现有正式记忆仍会保留到新的逐轮记录和章节全部完成。'
+            : '开始生成逐轮记录？现有正式记忆会继续保留。')) return;
+        const button = host.querySelector('[data-rebuild-action="turns"]');
         if (button) button.disabled = true;
         await startHistoryRebuild();
         refreshHistoryBackfillUi(body);
-        toastr?.info?.('安全重建已经开始。旧结果会保留到新结果全部通过检查。');
+        toastr?.info?.('已经开始生成逐轮记录。');
     });
-    host.querySelector('#lm-migrate-abort')?.addEventListener('click', async () => {
-        const button = host.querySelector('#lm-migrate-abort');
+    host.querySelectorAll('[data-rebuild-action="stop"]').forEach(button => button.addEventListener('click', async () => {
         if (button) button.disabled = true;
         await requestHistoryRebuildAbort();
         refreshHistoryBackfillUi(body);
-        toastr?.info?.('停止请求已收到，已取消尚未开始的重建任务。');
-    });
-    host.querySelector('#lm-review-rebuild-turns')?.addEventListener('click', () => selectTab('chapters'));
-    host.querySelector('#lm-build-rebuild-chapters')?.addEventListener('click', async () => {
+        toastr?.info?.('停止请求已收到，已经完成的内容会保留。');
+    }));
+    host.querySelectorAll('[data-open-workflow]').forEach(button => button.addEventListener('click', () => selectTab(button.dataset.openWorkflow)));
+    host.querySelector('[data-rebuild-action="chapters"]')?.addEventListener('click', async () => {
         if (!confirm('根据当前逐轮记录生成章节摘要？人工修改会作为生成依据；只会处理完整章节。')) return;
-        const button = host.querySelector('#lm-build-rebuild-chapters');
+        const button = host.querySelector('[data-rebuild-action="chapters"]');
         if (button) button.disabled = true;
         await startHistoryRebuildChapters();
         refreshHistoryBackfillUi(body);
@@ -369,6 +411,9 @@ export function renderActiveTab() {
     if (tab === 'state') {
         body.innerHTML = renderStateTab();
         bindStateTab(body);
+    } else if (tab === 'turns') {
+        body.innerHTML = renderTurnsTab();
+        bindTurnsTab(body);
     } else if (tab === 'chapters') {
         body.innerHTML = renderChaptersTab();
         bindChaptersTab(body);
@@ -424,15 +469,22 @@ function renderShellStatus() {
     }
     const maxSealed = pairs.at(-1)?.pairIndex ?? -1;
     const rebuild = getHistoryRebuildSnapshot();
-    const syncLabel = rebuild?.status === 'complete'
-        ? `已安全重建 ${rebuild.completed} / ${rebuild.total} 轮`
-        : rebuild?.status === 'review'
-            ? `逐轮记录待检查 ${rebuild.completed} / ${rebuild.total} 轮`
-        : rebuild?.status === 'running' || rebuild?.status === 'stopping'
-            ? `正在安全重建 ${rebuild.completed} / ${rebuild.total} 轮`
-            : syncedThrough >= liveStart
-        ? (syncedThrough === maxSealed ? `已整理到第 ${syncedThrough} 轮` : `已整理到第 ${syncedThrough} 轮 · 后面有遗漏`)
-        : (maxSealed >= liveStart ? `第 ${liveStart} 轮起有内容尚未整理` : baseline >= 0 ? `从第 ${liveStart} 轮开始记录` : '新聊天');
+    let syncLabel;
+    if (rebuild?.status === 'complete') {
+        syncLabel = `已安全重建 ${rebuild.completed} / ${rebuild.total} 轮`;
+    } else if (rebuild?.status === 'review') {
+        syncLabel = `逐轮记录待检查 ${rebuild.completed} / ${rebuild.total} 轮`;
+    } else if (rebuild?.stage_mode === 'chapters' && ['running', 'stopping', 'stopped', 'error'].includes(rebuild.status)) {
+        const needsAttention = ['stopped', 'error'].includes(rebuild.status) ? ' · 需要继续' : '';
+        syncLabel = `章节摘要 ${rebuild.chapterProgress?.completed || 0} / ${rebuild.chapterProgress?.total || 0} 章${needsAttention}`;
+    } else if (rebuild?.stage_mode === 'turns' && ['running', 'stopping', 'stopped', 'error'].includes(rebuild.status)) {
+        const needsAttention = ['stopped', 'error'].includes(rebuild.status) ? ' · 需要继续' : '';
+        syncLabel = `逐轮记录 ${rebuild.turnProgress?.completed || 0} / ${rebuild.turnProgress?.total || 0} 轮${needsAttention}`;
+    } else if (syncedThrough >= liveStart) {
+        syncLabel = syncedThrough === maxSealed ? `已整理到第 ${syncedThrough} 轮` : `已整理到第 ${syncedThrough} 轮 · 后面有遗漏`;
+    } else {
+        syncLabel = maxSealed >= liveStart ? `第 ${liveStart} 轮起有内容尚未整理` : baseline >= 0 ? `从第 ${liveStart} 轮开始记录` : '新聊天';
+    }
     const configuredConnection = settings.memoryModelSource === 'direct'
         ? `自填 API · ${settings.directModel || '未选模型'}`
         : settings.memoryModelSource === 'profile'
@@ -470,8 +522,10 @@ function renderStateTab() {
     const notices = data.notices || [];
     const rebuild = data.history_rebuild;
     const rebuilding = rebuild && !['complete', 'idle'].includes(rebuild.status);
+    const stagedFactCount = Array.isArray(rebuild?.entries) ? rebuild.entries.length : 0;
+    const ignoredFactCount = Array.isArray(rebuild?.warnings) ? rebuild.warnings.length : 0;
     const statusBanners = [
-        rebuilding ? '<aside class="lm-quality-alert"><div><strong>当前显示的是重建前的正式记忆</strong><p>新的逐轮记录和章节仍在独立暂存区，不会发送给模型；全部确认并完成后才会一次性替换。</p></div></aside>' : '',
+        rebuilding ? `<aside class="lm-quality-alert"><div><strong>当前显示旧正式事实 ${entries.length} 条；新暂存事实 ${stagedFactCount} 条</strong><p>暂存结果尚未发送给模型；完成章节后才会一次性采用。${ignoredFactCount ? `另有 ${ignoredFactCount} 条因原文证据不可靠而被忽略。` : ''}</p></div></aside>` : '',
         quarantined.length ? `<aside class="lm-quality-alert"><div><strong>已隔离 ${quarantined.length} 条异常结果</strong><p>它们缺少主体、事实或原文证据，不会发送给模型。完成安全重建后会由新结果替换。</p></div></aside>` : '',
         notices.length ? `<section class="lm-notice-strip" aria-label="状态通知">${notices.slice(-3).map(item => `<article data-notice-id="${escapeHtml(item.id)}"><span>${escapeHtml(item.note || '')}</span><button type="button" class="lm-text-button" data-dismiss-notice>知道了</button></article>`).join('')}</section>` : '',
     ].filter(Boolean).join('');
@@ -936,44 +990,55 @@ function openReportDialog({ entryId = null, type = 'miss', pairIndex = null } = 
     alert('已保存这条纠错记录。以后可以在“设置 → 开发者工具”中查看。');
 }
 
+function turnSummaryDisplaySource(data) {
+    const rebuild = data.history_rebuild;
+    const staged = rebuild && rebuild.status !== 'complete' && Array.isArray(rebuild.turn_summaries);
+    return { items: staged ? rebuild.turn_summaries : (data.turn_summaries || []), staged };
+}
+
+function renderTurnsTab() {
+    const data = getChatData();
+    const snapshot = getHistoryRebuildSnapshot();
+    const source = turnSummaryDisplaySource(data);
+    const turns = normalizedTurnSummaries({ turn_summaries: source.items });
+    const size = getSettings().chapterSize || 25;
+    const groups = [];
+    for (let offset = 0; offset < turns.length; offset += size) {
+        const items = turns.slice(offset, offset + size);
+        groups.push({ items, partial: items.length < size });
+    }
+    const chapterRunning = snapshot.stage_mode === 'chapters' && ['running', 'stopping'].includes(snapshot.status);
+    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">每一轮都保留</span><h3>逐轮记录</h3><p>这里与章节摘要互相独立。完成章节后仍可查看和编辑每一轮。</p></div><div class="lm-page-count">${turns.length} / ${snapshot.turnProgress?.total || turns.length} 轮</div></div>`;
+    html += `<div class="lm-workflow-progress">${renderTurnProgressCard(snapshot, { controls: true, showOpen: false })}</div>`;
+    html += `<aside class="lm-quality-alert"><span class="fa-solid fa-pen" aria-hidden="true"></span><div><strong>${source.staged ? '当前显示重建暂存记录' : '编辑会保留为人工修改'}</strong><p>${chapterRunning ? '章节正在生成；为避免当前章节使用旧内容，请先停止章节任务再编辑。' : '编辑这里只改变剧情记录；人物身份、关系和其他结构化事实请到“当前记忆”修改。'}</p></div></aside>`;
+    for (const group of groups.reverse()) {
+        html += renderTurnSummaryDisclosure(group.items, {
+            draft: source.staged,
+            editable: !chapterRunning,
+            partial: group.partial,
+        });
+    }
+    if (!turns.length) {
+        html += '<div class="lm-empty-state"><span class="fa-solid fa-list-ol" aria-hidden="true"></span><h3>还没有逐轮记录</h3><p>点击上方按钮后，生成的记录会按轮数出现在这里。</p></div>';
+    }
+    return html;
+}
+
 function renderChaptersTab() {
     const data = getChatData();
-    const rebuild = data.history_rebuild;
-    const draftMode = rebuild?.stage_mode === 'turns'
-        && ['running', 'stopping', 'stopped', 'error', 'review'].includes(rebuild?.status)
-        && Array.isArray(rebuild.turn_summaries);
-    if (draftMode) {
-        const drafts = normalizedTurnSummaries({ turn_summaries: rebuild.turn_summaries });
-        const size = getSettings().chapterSize || 25;
-        const groups = [];
-        for (let offset = 0; offset < drafts.length; offset += size) {
-            const items = drafts.slice(offset, offset + size);
-            groups.push({ items, partial: items.length < size });
-        }
-        let draftHtml = `<div class="lm-page-heading"><div><span class="lm-kicker">重建草稿</span><h3>逐轮剧情记录</h3><p>这些内容还在独立暂存区，不会发送给模型。你可以先修改，确认后再生成章节摘要。</p></div><div class="lm-page-count">${drafts.length} / ${Number(rebuild.total) || 0} 条</div></div>`;
-        draftHtml += '<aside class="lm-quality-alert"><span class="fa-solid fa-pen" aria-hidden="true"></span><div><strong>编辑这里只改变剧情记录</strong><p>人物身份、关系和其他结构化事实仍请到“当前记忆”修改。</p></div></aside>';
-        for (const group of groups.reverse()) {
-            draftHtml += renderTurnSummaryDisclosure(group.items, { draft: true, editable: true, partial: group.partial });
-        }
-        if (!drafts.length) {
-            draftHtml += '<div class="lm-empty-state"><span class="fa-solid fa-spinner" aria-hidden="true"></span><h3>正在等待第一批逐轮记录</h3><p>生成后会自动出现在这里。</p></div>';
-        }
-        return draftHtml;
-    }
-    const chapters = [...(data.chapters || [])].sort((a, b) => (b.floor_range?.[1] || 0) - (a.floor_range?.[1] || 0));
-    const turnSummaries = normalizedTurnSummaries(data);
-    const looseGroups = uncoveredTurnSummaryGroups(turnSummaries, chapters);
-    const volumes = data.volumes || [];
-    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">剧情回顾</span><h3>剧情时间线</h3><p>插件会按时间整理较早的剧情。修改过原对话时，对应摘要会自动重新整理。</p></div><div class="lm-page-count">${chapters.length} 章 · ${volumes.length} 份长期摘要</div></div>`;
+    const snapshot = getHistoryRebuildSnapshot();
+    const staged = data.history_rebuild && data.history_rebuild.status !== 'complete' && Array.isArray(data.history_rebuild.chapters);
+    const chapters = [...(staged ? data.history_rebuild.chapters : (data.chapters || []))]
+        .sort((a, b) => (b.floor_range?.[1] || 0) - (a.floor_range?.[1] || 0));
+    const volumes = staged ? [] : (data.volumes || []);
+    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">按章节回顾</span><h3>章节摘要</h3><p>只根据已经确认的逐轮记录生成；它有自己的任务和进度。</p></div><div class="lm-page-count">${snapshot.chapterProgress?.completed || chapters.length} / ${snapshot.chapterProgress?.total || chapters.length} 章</div></div>`;
+    html += `<div class="lm-workflow-progress">${renderChapterProgressCard(snapshot, { controls: true, showOpen: false })}</div>`;
     if (volumes.length) {
         html += '<section class="lm-volume-strip"><h4>很久以前的剧情</h4><div>';
         for (const v of volumes) {
             html += `<article class="lm-volume-card"><header><b>${escapeHtml(formatArchiveLabel(v.id, '长期摘要'))}</b>${v.stale ? '<span class="lm-state-tag" data-state="error">等待重新整理</span>' : '<span class="lm-state-tag">已整理</span>'}</header><p>${escapeHtml(displayNarrativeText(v.summary))}</p></article>`;
         }
         html += '</div></section>';
-    }
-    for (const group of looseGroups) {
-        html += renderTurnSummaryDisclosure(group, { loose: true, editable: true });
     }
     html += '<section class="lm-timeline" aria-label="章节列表">';
     for (const c of chapters) {
@@ -985,24 +1050,22 @@ function renderChaptersTab() {
             ? '<span class="lm-state-tag">概述较精简 · 已完整覆盖</span>'
             : '';
         const events = Array.isArray(c.key_events) ? c.key_events.filter(event => event?.text) : [];
-        const chapterTurns = turnSummaries.filter(item => item.pairIndex >= c.floor_range?.[0] && item.pairIndex <= c.floor_range?.[1]);
-        html += `<article class="lm-chapter-card" data-cid="${escapeHtml(c.id)}">
+        html += `<article class="lm-chapter-card" data-cid="${escapeHtml(c.id)}" data-staged="${staged ? 'true' : 'false'}">
             <span class="lm-timeline-node" aria-hidden="true"></span>
             <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4></div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}${qualityState}</div></header>
             <p>${escapeHtml(displayNarrativeText(c.summary))}</p>
             ${events.length ? `<details class="lm-key-events"><summary>查看 ${events.length} 个关键事件</summary><ol>${events.map(event => `<li><span>第 ${event.floor_range?.[0]}–${event.floor_range?.[1]} 轮</span>${escapeHtml(displayNarrativeText(event.text))}</li>`).join('')}</ol></details>` : ''}
-            ${chapterTurns.length ? renderTurnSummaryDisclosure(chapterTurns, { editable: true }) : ''}
             ${c.keywords?.length ? `<div class="lm-keywords">${c.keywords.map(k => `<span>${escapeHtml(k)}</span>`).join('')}</div>` : ''}
-            <div class="lm-row-actions">
+            ${staged ? '' : `<div class="lm-row-actions">
                 <button type="button" data-act="edit" class="lm-text-button">编辑摘要</button>
                 ${c.stale_reason === 'turn_summary_edit' ? '<button type="button" data-act="regenerate" class="lm-button">根据修改后的记录重新生成本章</button>' : ''}
                 <button type="button" data-act="pin" class="lm-text-button">${c.pinned ? '恢复自动整理' : '始终保留本章'}</button>
-            </div>
+            </div>`}
         </article>`;
     }
     html += '</section>';
     if (!chapters.length) {
-        html += '<div class="lm-empty-state"><span class="fa-solid fa-book-open" aria-hidden="true"></span><h3>还没有可以回顾的章节</h3><p>聊天达到设定轮数后，插件会自动整理出第一段剧情摘要。</p></div>';
+        html += `<div class="lm-empty-state"><span class="fa-solid fa-book-open" aria-hidden="true"></span><h3>还没有章节摘要</h3><p>${snapshot.chapterProgress?.status === 'locked' ? '先生成完整的逐轮记录，再由你决定是否生成章节。' : '点击上方按钮后，只会处理已经凑满一章的轮数。'}</p></div>`;
     }
     return html;
 }
@@ -1046,7 +1109,8 @@ function renderTurnSummaryDisclosure(items, { loose = false, draft = false, edit
     </details>`;
 }
 
-function bindChaptersTab(body) {
+function bindTurnsTab(body) {
+    bindHistoryBackfillControls(body, body);
     body.querySelectorAll('[data-turn-edit]').forEach(button => {
         button.addEventListener('click', async () => {
             const data = getChatData();
@@ -1079,7 +1143,12 @@ function bindChaptersTab(body) {
             toastr?.success?.(draft ? '逐轮草稿已保存。生成章节时会使用修改后的内容。' : '逐轮记录已保存，只需重新生成它所属的章节。');
         });
     });
+}
+
+function bindChaptersTab(body) {
+    bindHistoryBackfillControls(body, body);
     body.querySelectorAll('article[data-cid]').forEach(card => {
+        if (card.dataset.staged === 'true') return;
         const id = card.dataset.cid;
         card.querySelector('[data-act="edit"]')?.addEventListener('click', async () => {
             const c = getChatData().chapters.find(x => x.id === id);
