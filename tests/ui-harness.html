@@ -14,14 +14,18 @@
             --mainFontFamily: "Avenir Next", "PingFang SC", sans-serif;
         }
         body { min-height: 100vh; margin: 0; color: var(--SmartThemeBodyColor); background: #10121a; font-family: var(--mainFontFamily); }
-        #top-bar { display: flex; gap: 8px; align-items: center; height: 44px; padding: 0 14px; background: #1b1d27; }
+        #top-settings-holder { position: fixed; top: 0; right: 0; left: 0; display: flex; z-index: 20; }
+        #top-bar { display: flex; gap: 8px; align-items: center; width: 100%; height: 44px; padding: 0 14px; background: #1b1d27; }
         #top-bar button { width: 32px; height: 32px; color: inherit; background: #292c38; border: 1px solid #464957; border-radius: 7px; }
         #extensionsMenu { display: none; }
         #extensions_settings { width: 320px; margin: 32px; }
+        @media (max-width: 599px) {
+            #top-settings-holder { display: none; }
+        }
     </style>
 </head>
 <body>
-    <div id="top-bar"><button id="extensions-settings-button" type="button">E</button></div>
+    <div id="top-settings-holder"><div id="top-bar"><button id="extensions-settings-button" type="button">E</button></div></div>
     <div id="extensionsMenu"></div>
     <div id="extensions_settings"></div>
     <script type="module">

@@ -14,14 +14,28 @@ assert.match(panel, /class="lm-task-disclosure" aria-expanded="false"/u,
     'mobile task status must expose an accessible disclosure control');
 assert.match(panel, /body\.classList\.toggle\('lm-state-body', tab === 'state'\)/u,
     'the state page must opt into the mobile fixed-rail layout');
+assert.match(panel, /document\.body\.appendChild\(panel\)/u,
+    'the fixed panel must be portaled outside SillyTavern responsive menu hosts');
+assert.match(panel, /panel\?\.querySelectorAll\('\.lm-tab'\)/u,
+    'tab listeners must bind to the portaled panel rather than the launcher host');
+assert.match(panel, /document\.getElementById\(ROOT_ID\)[\s\S]*openMemoryCenter\(memoryPanel\?\.hasAttribute\('hidden'\)\)/u,
+    'the launcher must resolve the portaled panel by id');
+assert.match(panel, /phoneLauncherQuery\?\.matches[\s\S]*document\.body\.appendChild\(drawer\)/u,
+    'the launcher must leave SillyTavern hidden phone hosts and remain reachable');
 
 assert.match(css, /\.lm-task-rail:not\(\.lm-mobile-expanded\) \.lm-task-list \{ display: none; \}/u,
     'mobile tasks should default to a compact status bar');
 assert.match(css, /@media \(max-height: 520px\) and \(max-width: 899px\)/u,
     'short landscape viewports need a dedicated layout');
-assert.match(css, /\.lm-header-metrics \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u,
-    'phone metrics should reflow instead of relying on horizontal scrolling');
+assert.match(css, /\.lm-header-metrics \{ display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/u,
+    'phone metrics should fit in one compact row');
 assert.match(css, /\.lm-icon-button \{ width: 44px !important; height: 44px !important;/u,
     'coarse pointers must override the host-enforced icon button size');
+assert.match(css, /\.lm-button-primary \{ color: var\(--lm-on-accent\)/u,
+    'primary actions must use the audited high-contrast foreground');
+assert.match(css, /\.lm-dialog input,[\s\S]*\.lm-dialog textarea \{/u,
+    'body-level dialogs must own their form foreground and background styles');
+assert.match(css, /height: calc\(100dvh - 58px\)/u,
+    'tablet and narrow desktop panels need a definite height, not only a max-height');
 
-console.log('mobile UI smoke: 8/8 passed');
+console.log('mobile UI smoke: 16/16 passed');

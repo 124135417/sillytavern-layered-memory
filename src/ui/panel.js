@@ -76,6 +76,26 @@ export function injectPanel() {
         drawer.classList.add('lm-floating-trigger');
     }
 
+    // SillyTavern hides and constrains the top settings host at several
+    // responsive breakpoints. Portal the fixed panel to <body>, and move the
+    // launcher there too while the host is hidden on phone-sized viewports.
+    const panel = drawer.querySelector(`#${ROOT_ID}`);
+    if (panel) {
+        document.body.appendChild(panel);
+    }
+    const phoneLauncherQuery = globalThis.matchMedia?.('(max-width: 599px)');
+    const placeLauncher = () => {
+        if (phoneLauncherQuery?.matches || !anchor?.parentNode) {
+            document.body.appendChild(drawer);
+            drawer.classList.add('lm-floating-trigger');
+            return;
+        }
+        anchor.insertAdjacentElement('afterend', drawer);
+        drawer.classList.remove('lm-floating-trigger');
+    };
+    placeLauncher();
+    phoneLauncherQuery?.addEventListener?.('change', placeLauncher);
+
     injectSettingsEntry();
     injectExtensionsMenuEntry();
     if (!document.getElementById(SETTINGS_CARD_ID) || !document.getElementById(MENU_ENTRY_ID)) {
@@ -93,12 +113,12 @@ export function injectPanel() {
     drawer.querySelector('.lm-drawer-trigger')?.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        const panel = drawer.querySelector(`#${ROOT_ID}`);
-        openMemoryCenter(panel?.hasAttribute('hidden'));
+        const memoryPanel = document.getElementById(ROOT_ID);
+        openMemoryCenter(memoryPanel?.hasAttribute('hidden'));
     });
-    drawer.querySelector('.lm-close')?.addEventListener('click', () => openMemoryCenter(false));
+    panel?.querySelector('.lm-close')?.addEventListener('click', () => openMemoryCenter(false));
 
-    drawer.querySelectorAll('.lm-tab').forEach(btn => {
+    panel?.querySelectorAll('.lm-tab').forEach(btn => {
         btn.addEventListener('click', () => selectTab(btn.dataset.tab));
         btn.addEventListener('keydown', onTabKeydown);
     });
