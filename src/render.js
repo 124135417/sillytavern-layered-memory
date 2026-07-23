@@ -32,13 +32,13 @@ export function renderL2Block(data, { forBudget = false, budget = 5000 } = {}) {
     const parts = [];
     const volumes = (data.volumes || []).filter(v => !v.stale || forBudget);
     for (const v of volumes) {
-        parts.push(`### 卷摘要 ${v.id}\n${v.summary}`);
+        parts.push(`### 很久以前的剧情摘要\n${v.summary}`);
     }
     const chapters = (data.chapters || [])
         .filter(c => !c.demoted && !c.stale)
         .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
     for (const c of chapters) {
-        parts.push(`### 章节 ${c.id}（第${c.floor_range[0]}–${c.floor_range[1]}对）\n${c.summary}`);
+        parts.push(`### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要\n${c.summary}`);
     }
     const text = parts.join('\n\n').trim();
     if (!text) {
@@ -60,17 +60,23 @@ export function renderL4Block(hits, budget = 1500) {
         '',
     ];
     for (const h of hits) {
-        lines.push(`- [第${h.floor_range[0]}–${h.floor_range[1]}对] ${h.summary}`);
+        lines.push(`- [第 ${h.floor_range[0]}–${h.floor_range[1]} 轮对话] ${h.summary}`);
     }
     return truncateToBudget(lines.join('\n'), budget);
 }
 
 function formatFloor(floor) {
     if (typeof floor === 'number') {
-        return `第${floor}对起`;
+        return `第 ${floor} 轮对话起`;
     }
     if (typeof floor === 'string') {
-        return floor.includes('ch_') ? `约${floor}` : String(floor);
+        if (floor === 'manual') {
+            return '手动添加';
+        }
+        if (floor === 'proofread') {
+            return '自动检查建议';
+        }
+        return floor.includes('ch_') ? '来自较早的剧情摘要' : String(floor);
     }
     return '';
 }

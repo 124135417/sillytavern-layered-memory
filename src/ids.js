@@ -129,9 +129,9 @@ export function ensureActivationBaseline() {
     const baseline = sealed.length ? Math.max(...sealed.map(p => p.pairIndex)) : -1;
     data.progress.baseline_pair = baseline;
     if (baseline >= 0) {
-        const note = `已记录激活基线：第 ${baseline} 对。此前历史不会自动提取，请用设置中的「存量迁移」。基线之后的新楼走实时延迟提取。`;
+        const note = `插件将从第 ${baseline + 1} 轮对话开始自动记录。更早的聊天不会自动补记；如果需要，请前往“设置 → 补记以前的聊天”。`;
         const q = data.review_queue || [];
-        if (!q.some(x => x.kind === 'alert' && String(x.note || '').includes('激活基线'))) {
+        if (!q.some(x => x.kind === 'alert' && String(x.note || '').includes('开始自动记录'))) {
             q.push({
                 id: crypto.randomUUID(),
                 kind: 'alert',

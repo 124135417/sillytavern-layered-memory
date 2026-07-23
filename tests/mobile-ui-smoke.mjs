@@ -8,7 +8,7 @@ const [panel, css] = await Promise.all([
 
 assert.match(panel, /value="cancel" formnovalidate[^>]*aria-label="关闭"/u,
     'the entry dialog close button must bypass required-field validation');
-assert.match(panel, /value="cancel" formnovalidate[^>]*>取消</u,
+assert.match(panel, /value="cancel" formnovalidate[^>]*>不保存</u,
     'the entry dialog cancel button must bypass required-field validation');
 assert.match(panel, /class="lm-task-disclosure" aria-expanded="false"/u,
     'mobile task status must expose an accessible disclosure control');
@@ -22,6 +22,10 @@ assert.match(panel, /document\.getElementById\(ROOT_ID\)[\s\S]*openMemoryCenter\
     'the launcher must resolve the portaled panel by id');
 assert.match(panel, /phoneLauncherQuery\?\.matches[\s\S]*document\.body\.appendChild\(drawer\)/u,
     'the launcher must leave SillyTavern hidden phone hosts and remain reachable');
+assert.match(panel, /backdrop\.removeAttribute\('hidden'\)[\s\S]*document\.body\.classList\.add\('lm-memory-center-open'\)/u,
+    'opening the memory center must activate a viewport-blocking modal layer');
+assert.match(panel, /backdrop\.setAttribute\('hidden', ''\)[\s\S]*document\.body\.classList\.remove\('lm-memory-center-open'\)/u,
+    'closing the memory center must restore the host page');
 
 assert.match(css, /\.lm-task-rail:not\(\.lm-mobile-expanded\) \.lm-task-list \{ display: none; \}/u,
     'mobile tasks should default to a compact status bar');
@@ -37,5 +41,9 @@ assert.match(css, /\.lm-dialog input,[\s\S]*\.lm-dialog textarea \{/u,
     'body-level dialogs must own their form foreground and background styles');
 assert.match(css, /height: calc\(100dvh - 58px\)/u,
     'tablet and narrow desktop panels need a definite height, not only a max-height');
+assert.match(css, /\.lm-memory-backdrop \{[\s\S]*z-index: 2147483000/u,
+    'the modal backdrop must sit above hostile host controls');
+assert.match(css, /\.layered-memory-root \{[\s\S]*z-index: 2147483001/u,
+    'the memory center must sit above its modal backdrop');
 
-console.log('mobile UI smoke: 16/16 passed');
+console.log('mobile UI smoke: 19/19 passed');

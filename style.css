@@ -37,13 +37,28 @@
     z-index: 200;
 }
 
+.lm-memory-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483000;
+    background: #0d0d0d;
+}
+
+.lm-memory-backdrop[hidden] {
+    display: none !important;
+}
+
+body.lm-memory-center-open {
+    overflow: hidden !important;
+}
+
 .layered-memory-root {
     position: fixed;
     top: clamp(44px, 6vh, 72px);
     right: clamp(12px, 2vw, 32px);
     bottom: auto;
     left: auto;
-    z-index: 310;
+    z-index: 2147483001;
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr);
     width: min(1120px, calc(100% - clamp(24px, 4vw, 64px)));
@@ -518,11 +533,23 @@
 .lm-settings-section > header { padding: 14px 16px; background: var(--lm-surface-raised); border-bottom: 1px solid var(--lm-border); }
 .lm-settings-section > header > div { display: grid; grid-template-columns: 22px 1fr; gap: 9px; align-items: start; }
 .lm-settings-section > header > div > span { margin-top: 2px; color: var(--lm-accent); }
+.lm-settings-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; cursor: pointer; background: var(--lm-surface-raised); list-style: none; }
+.lm-settings-disclosure > summary::-webkit-details-marker { display: none; }
+.lm-settings-disclosure > summary > div { display: grid; grid-template-columns: 22px 1fr; gap: 9px; align-items: start; }
+.lm-settings-disclosure > summary > div > span { margin-top: 2px; color: var(--lm-accent); }
+.lm-settings-disclosure > summary p { margin-top: 3px; color: var(--lm-muted); font-size: 11px; }
+.lm-disclosure-label { flex: 0 0 auto; color: var(--lm-text); font-size: 11px; font-weight: 650; }
+.lm-settings-disclosure[open] > summary { border-bottom: 1px solid var(--lm-border); }
+.lm-settings-disclosure[open] .lm-disclosure-label::before { content: "收起"; }
+.lm-settings-disclosure[open] .lm-disclosure-label { font-size: 0; }
+.lm-settings-disclosure[open] .lm-disclosure-label::before { font-size: 11px; }
 .lm-settings-section h4 { font-size: 13px; }
 .lm-settings-section header p { margin-top: 3px; color: var(--lm-muted); font-size: 11px; }
 .lm-settings-fields { display: grid; gap: 12px; padding: 15px 16px; }
 .lm-settings-fields > label:not(.lm-switch-row):not(.lm-compact-check),
 .lm-field-grid > label { display: grid; gap: 6px; color: var(--lm-muted); font-size: 11px; font-weight: 650; }
+.lm-settings-fields > label:not(.lm-switch-row):not(.lm-compact-check) > small,
+.lm-field-grid > label > small { color: var(--lm-faint); font-weight: 550; line-height: 1.45; }
 .lm-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .lm-field-grid-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .lm-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }

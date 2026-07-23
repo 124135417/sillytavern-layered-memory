@@ -12,8 +12,8 @@ export const SLOT_LABELS = {
     relationship: '关系',
     identity: '身份与秘密',
     possession: '持有物',
-    world: '世界事实',
-    other: '其它持久事实',
+    world: '世界设定与变化',
+    other: '其他重要内容',
 };
 
 export const SLOTS = Object.keys(SLOT_LABELS);

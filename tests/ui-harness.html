@@ -19,8 +19,24 @@
         #top-bar button { width: 32px; height: 32px; color: inherit; background: #292c38; border: 1px solid #464957; border-radius: 7px; }
         #extensionsMenu { display: none; }
         #extensions_settings { width: 320px; margin: 32px; }
+        #hostile-mobile-controls { display: none; }
         @media (max-width: 599px) {
             #top-settings-holder { display: none; }
+            #hostile-mobile-controls {
+                position: fixed;
+                top: 8px;
+                right: 8px;
+                z-index: 999999;
+                display: flex;
+                gap: 6px;
+            }
+            #hostile-mobile-controls button {
+                width: 46px;
+                height: 46px;
+                color: white;
+                background: #5d6675;
+                border: 0;
+            }
         }
     </style>
 </head>
@@ -28,6 +44,10 @@
     <div id="top-settings-holder"><div id="top-bar"><button id="extensions-settings-button" type="button">E</button></div></div>
     <div id="extensionsMenu"></div>
     <div id="extensions_settings"></div>
+    <div id="hostile-mobile-controls" aria-label="模拟酒馆手机浮动控件">
+        <button type="button">菜单</button>
+        <button type="button">阅读</button>
+    </div>
     <script type="module">
         const now = Date.now();
         const chat = [];

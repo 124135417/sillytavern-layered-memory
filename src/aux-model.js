@@ -90,7 +90,7 @@ export async function testAuxModelConnection({ timeoutMs = CONNECTION_TEST_TIMEO
             'unavailable',
             startedAt,
             'unavailable',
-            '未找到可用的副模型连接，请选择 Connection Profile 或配置 Fallback API',
+            '没有找到可用的记忆模型。请选择酒馆中的模型连接，或在高级设置中填写备用模型。',
         );
     }
 
@@ -168,7 +168,7 @@ export async function callAuxModel({ purpose, systemPrompt, userPrompt, jsonSche
         return { text, via: 'fallback_fetch' };
     }
 
-    throw new Error('副模型不可用：请配置 Connection Profile，或启用 fallback API');
+    throw new Error('记忆模型暂时不可用。请在插件设置中选择模型连接，或配置备用模型。');
 }
 
 function extractTextFromCms(result) {
@@ -312,33 +312,33 @@ function classifyConnectionTestError(error) {
     const diagnostic = String(error?.message || '').toLowerCase();
 
     if (code === 'empty_response') {
-        return { category: 'empty_response', message: '连接已响应，但没有返回可用内容' };
+        return { category: 'empty_response', message: '模型已经连接，但没有返回内容。请检查模型名称后再试一次。' };
     }
     if (code === 'timeout' || name === 'aborterror' || /timeout|timed out/.test(diagnostic)) {
-        return { category: 'timeout', message: '连接超时，请检查服务状态或稍后重试' };
+        return { category: 'timeout', message: '模型等待太久仍未回复。请检查网络和服务状态，然后再试一次。' };
     }
     if (status === 401 || status === 403 || /unauthorized|forbidden|invalid api.?key|authentication/.test(diagnostic)) {
-        return { category: 'auth', message: '认证失败，请检查 API Key 或连接权限' };
+        return { category: 'auth', message: '服务商拒绝了连接。请检查访问密钥和账户权限。' };
     }
     if (status === 429 || /rate.?limit|too many requests/.test(diagnostic)) {
-        return { category: 'rate_limit', message: '请求过于频繁或额度不足，请稍后重试' };
+        return { category: 'rate_limit', message: '请求过于频繁，或者账户额度不足。请稍后再试。' };
     }
     if (status === 404) {
-        return { category: 'not_found', message: '接口或模型不存在，请检查 URL 和模型名' };
+        return { category: 'not_found', message: '找不到这个模型或服务地址。请检查模型名称和模型服务地址。' };
     }
     if (status === 400 || status === 422) {
-        return { category: 'bad_request', message: '服务拒绝了测试请求，请检查模型名和接口兼容性' };
+        return { category: 'bad_request', message: '模型服务无法处理这次检查。请确认模型名称正确，并且服务支持常见的 OpenAI 请求格式。' };
     }
     if (status >= 500 && status < 600) {
-        return { category: 'server_error', message: '模型服务暂时异常，请稍后重试' };
+        return { category: 'server_error', message: '模型服务暂时出了问题。请稍后再试。' };
     }
     if (
         name === 'typeerror'
         || /failed to fetch|network|cors|connection refused|econnrefused|enotfound/.test(diagnostic)
     ) {
-        return { category: 'network', message: '无法访问模型服务，请检查网络、URL 或 CORS 设置' };
+        return { category: 'network', message: '浏览器无法连接模型服务。请检查网络和服务地址；如果仍然失败，服务商可能不允许浏览器直接连接。' };
     }
-    return { category: 'request_failed', message: '连接测试失败，请检查连接配置后重试' };
+    return { category: 'request_failed', message: '这次没有连接成功。请检查模型连接设置后再试一次。' };
 }
 
 function connectionTestResult(ok, route, startedAt, category, message) {

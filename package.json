@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/core-smoke.mjs && node tests/queue-smoke.mjs && node tests/mobile-ui-smoke.mjs"
+    "test": "node tests/core-smoke.mjs && node tests/queue-smoke.mjs && node tests/mobile-ui-smoke.mjs && node tests/ui-copy-smoke.mjs"
   }
 }

@@ -143,12 +143,12 @@ export async function handleMigrateFinalizeJob(payload = {}) {
     assertChatData(originData);
     buildKeywordIndex(originData);
     const data = originData;
-    const already = (data.review_queue || []).some(x => x.kind === 'alert' && String(x.note || '').includes('存量迁移'));
+    const already = (data.review_queue || []).some(x => x.kind === 'alert' && String(x.note || '').includes('旧聊天'));
     if (!already) {
         data.review_queue.push({
             id: crypto.randomUUID(),
             kind: 'alert',
-            note: `存量迁移收尾：完整章已回填；尾部残楼 ${pairs.length} 对已入队 per-floor 补提。当前为「迁移校对模式」。`,
+            note: `旧聊天的大段剧情已经补记完成，剩余 ${pairs.length} 轮零散对话正在等待整理。完成后建议检查“当前记忆”。`,
             createdAt: Date.now(),
         });
     }

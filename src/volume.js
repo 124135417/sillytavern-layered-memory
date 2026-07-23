@@ -80,7 +80,7 @@ export async function handleVolumeCompressJob(payload = {}) {
             data.review_queue.push({
                 id: crypto.randomUUID(),
                 kind: 'volume_compress_ask',
-                note: 'L2 已超预算，是否执行卷压缩？',
+                note: '较早的剧情摘要已经接近容量上限。是否把最早的几章精简成一份长期摘要？',
                 createdAt: Date.now(),
             });
             await saveChatData(data);
@@ -127,7 +127,7 @@ export async function handleVolumeCompressJob(payload = {}) {
             data.review_queue.push({
                 id: crypto.randomUUID(),
                 kind: 'alert',
-                note: `卷压缩验收失败，缺失：${missing.join('、')}。已允许暂时超预算。`,
+                note: `精简旧剧情时漏掉了这些重要名称：${missing.join('、')}。原摘要已保留，请稍后重新处理。`,
                 createdAt: Date.now(),
             });
             await saveChatData(data);
