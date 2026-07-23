@@ -18,9 +18,14 @@ export function validateChapterArchive(raw, startPair, endPair) {
     const expected = Array.from({ length: endPair - startPair + 1 }, (_, index) => startPair + index);
     const actual = coverage.map(item => Number(item?.floor));
     const errors = [];
-    const minimumLength = Math.min(450, Math.max(180, expected.length * 18));
-    if ([...summary].length < minimumLength || [...summary].length > 900) {
-        errors.push(`章节概述必须为 ${minimumLength}–900 字`);
+    const warnings = [];
+    const recommendedLength = Math.min(450, Math.max(180, expected.length * 18));
+    const hardMinimumLength = Math.min(220, Math.max(120, expected.length * 9));
+    const summaryLength = [...summary].length;
+    if (summaryLength < hardMinimumLength || summaryLength > 900) {
+        errors.push(`章节概述必须为 ${hardMinimumLength}–900 字`);
+    } else if (summaryLength < recommendedLength) {
+        warnings.push(`章节概述较精简（${summaryLength} 字，建议至少 ${recommendedLength} 字）`);
     }
     if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
         errors.push(`coverage 必须依次包含 ${expected.join('、')}`);
@@ -57,11 +62,13 @@ export function validateChapterArchive(raw, startPair, endPair) {
     return {
         ok: errors.length === 0,
         errors,
+        warnings,
         chapter: {
             summary,
             key_events: normalizedEvents,
             coverage: coverage.map(item => ({ floor: Number(item.floor), event_index: Number(item.event_index) })),
             keywords,
+            quality_warnings: warnings,
         },
     };
 }
@@ -80,8 +87,10 @@ export async function summarizeChapterNotes(notes, startPair, endPair, assertCur
         });
         assertCurrent();
         const checked = validateChapterArchive(parseJsonFromModel(text), startPair, endPair);
-        if (checked.ok) return checked.chapter;
-        retryNote = checked.errors.join('；');
+        if (checked.ok && (!checked.warnings.length || attempt === 1)) return checked.chapter;
+        retryNote = checked.errors.length
+            ? checked.errors.join('；')
+            : `${checked.warnings.join('；')}。请在不编造、不重复和不灌水的前提下，补充遗漏的因果、角色决定、关系变化与未解决事项，使概述达到建议长度`;
     }
     throw nonRetryable(`章节连续两次未通过覆盖校验：${retryNote}`);
 }

@@ -468,7 +468,10 @@ function renderStateTab() {
     const entries = usableMemoryEntries(data);
     const quarantined = data.quarantined_entries || [];
     const notices = data.notices || [];
+    const rebuild = data.history_rebuild;
+    const rebuilding = rebuild && !['complete', 'idle'].includes(rebuild.status);
     const statusBanners = [
+        rebuilding ? '<aside class="lm-quality-alert"><div><strong>当前显示的是重建前的正式记忆</strong><p>新的逐轮记录和章节仍在独立暂存区，不会发送给模型；全部确认并完成后才会一次性替换。</p></div></aside>' : '',
         quarantined.length ? `<aside class="lm-quality-alert"><div><strong>已隔离 ${quarantined.length} 条异常结果</strong><p>它们缺少主体、事实或原文证据，不会发送给模型。完成安全重建后会由新结果替换。</p></div></aside>` : '',
         notices.length ? `<section class="lm-notice-strip" aria-label="状态通知">${notices.slice(-3).map(item => `<article data-notice-id="${escapeHtml(item.id)}"><span>${escapeHtml(item.note || '')}</span><button type="button" class="lm-text-button" data-dismiss-notice>知道了</button></article>`).join('')}</section>` : '',
     ].filter(Boolean).join('');
@@ -609,7 +612,7 @@ function renderTask(job, state) {
     const stateLabel = state === 'running' ? '正在处理' : state === 'failed' ? '需要处理' : '等待处理';
     const attempt = job.attempt ? ` · 已尝试 ${job.attempt}/${job.maxAttempts || job.attempt} 次` : '';
     return `
-        <div class="lm-task" data-state="${state}" data-job-id="${escapeHtml(job.id || '')}">
+        <div class="lm-task" data-state="${state}" data-job-id="${escapeHtml(job.id || '')}" data-job-type="${escapeHtml(job.type || '')}">
             <span class="lm-task-dot" aria-hidden="true"></span>
             <div class="lm-task-copy">
                 <b>${escapeHtml(labels[job.type] || '整理记忆')}</b>
@@ -635,14 +638,21 @@ function bindQueueControls(body) {
         setQueuePaused(!getQueueSnapshot().paused);
     });
     body?.querySelectorAll('[data-queue-act]').forEach(button => {
-        button.addEventListener('click', () => {
-            const jobId = button.closest('[data-job-id]')?.dataset.jobId;
+        button.addEventListener('click', async () => {
+            const task = button.closest('[data-job-id]');
+            const jobId = task?.dataset.jobId;
+            const jobType = task?.dataset.jobType || '';
             if (!jobId) {
                 return;
             }
             button.disabled = true;
             if (button.dataset.queueAct === 'retry') {
-                retryFailedJob(jobId);
+                if (jobType.startsWith('history_rebuild_')) {
+                    await startHistoryRebuild();
+                    toastr?.info?.('安全重建已经继续，只会补上尚未完成的内容。');
+                } else {
+                    retryFailedJob(jobId);
+                }
             } else {
                 dismissFailedJob(jobId);
             }
@@ -936,11 +946,14 @@ function renderChaptersTab() {
         const drafts = normalizedTurnSummaries({ turn_summaries: rebuild.turn_summaries });
         const size = getSettings().chapterSize || 25;
         const groups = [];
-        for (let offset = 0; offset < drafts.length; offset += size) groups.push(drafts.slice(offset, offset + size));
+        for (let offset = 0; offset < drafts.length; offset += size) {
+            const items = drafts.slice(offset, offset + size);
+            groups.push({ items, partial: items.length < size });
+        }
         let draftHtml = `<div class="lm-page-heading"><div><span class="lm-kicker">重建草稿</span><h3>逐轮剧情记录</h3><p>这些内容还在独立暂存区，不会发送给模型。你可以先修改，确认后再生成章节摘要。</p></div><div class="lm-page-count">${drafts.length} / ${Number(rebuild.total) || 0} 条</div></div>`;
         draftHtml += '<aside class="lm-quality-alert"><span class="fa-solid fa-pen" aria-hidden="true"></span><div><strong>编辑这里只改变剧情记录</strong><p>人物身份、关系和其他结构化事实仍请到“当前记忆”修改。</p></div></aside>';
         for (const group of groups.reverse()) {
-            draftHtml += renderTurnSummaryDisclosure(group, { draft: true, editable: true });
+            draftHtml += renderTurnSummaryDisclosure(group.items, { draft: true, editable: true, partial: group.partial });
         }
         if (!drafts.length) {
             draftHtml += '<div class="lm-empty-state"><span class="fa-solid fa-spinner" aria-hidden="true"></span><h3>正在等待第一批逐轮记录</h3><p>生成后会自动出现在这里。</p></div>';
@@ -968,11 +981,14 @@ function renderChaptersTab() {
             : c.stale ? '<span class="lm-state-tag" data-state="error">原对话已修改 · 等待重新整理</span>'
             : c.demoted ? '<span class="lm-state-tag">已整理进长期摘要</span>'
                 : '<span class="lm-state-tag" data-state="success">摘要已保存</span>';
+        const qualityState = Array.isArray(c.quality_warnings) && c.quality_warnings.length
+            ? '<span class="lm-state-tag">概述较精简 · 已完整覆盖</span>'
+            : '';
         const events = Array.isArray(c.key_events) ? c.key_events.filter(event => event?.text) : [];
         const chapterTurns = turnSummaries.filter(item => item.pairIndex >= c.floor_range?.[0] && item.pairIndex <= c.floor_range?.[1]);
         html += `<article class="lm-chapter-card" data-cid="${escapeHtml(c.id)}">
             <span class="lm-timeline-node" aria-hidden="true"></span>
-            <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4></div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}</div></header>
+            <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 轮对话</h4></div><div class="lm-chapter-state">${c.pinned ? '<span title="始终保留">📌</span>' : ''}${state}${qualityState}</div></header>
             <p>${escapeHtml(displayNarrativeText(c.summary))}</p>
             ${events.length ? `<details class="lm-key-events"><summary>查看 ${events.length} 个关键事件</summary><ol>${events.map(event => `<li><span>第 ${event.floor_range?.[0]}–${event.floor_range?.[1]} 轮</span>${escapeHtml(displayNarrativeText(event.text))}</li>`).join('')}</ol></details>` : ''}
             ${chapterTurns.length ? renderTurnSummaryDisclosure(chapterTurns, { editable: true }) : ''}
@@ -1013,18 +1029,19 @@ export function uncoveredTurnSummaryGroups(turnSummaries, chapters) {
     return groups.reverse();
 }
 
-function renderTurnSummaryDisclosure(items, { loose = false, draft = false, editable = false } = {}) {
+function renderTurnSummaryDisclosure(items, { loose = false, draft = false, editable = false, partial = false } = {}) {
     if (!items.length) return '';
     const start = items[0].pairIndex;
     const end = items.at(-1).pairIndex;
     const label = draft
-        ? `第 ${start}–${end} 轮 · ${items.length} 条逐轮草稿`
+        ? `${partial ? '尚未凑满一章 · ' : ''}第 ${start}–${end} 轮 · ${items.length} 条逐轮草稿`
         : loose
         ? `尚未合并的剧情记录 · 第 ${start}–${end} 轮 · ${items.length} 条`
         : `查看本章 ${items.length} 条逐轮记录`;
     return `<details class="lm-turn-records ${loose || draft ? 'lm-turn-records-loose' : ''}">
         <summary>${escapeHtml(label)}</summary>
         ${loose ? '<p>这些记录还没有凑满一章；Fork 或精简到这里时，插件会直接使用它们。</p>' : ''}
+        ${draft && partial ? '<p>这部分会保留为逐轮记录，不会因为不足一章而丢失；以后聊满设定轮数后再合并成章节。</p>' : ''}
         <ol>${items.map(item => `<li><span>第 ${item.pairIndex} 轮${item.manual_override ? '<em>人工修改</em>' : ''}</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p>${editable ? `<button type="button" class="lm-text-button" data-turn-edit="${item.pairIndex}" data-draft="${draft ? 'true' : 'false'}">编辑</button>` : ''}</li>`).join('')}</ol>
     </details>`;
 }

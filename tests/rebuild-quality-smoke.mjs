@@ -10,6 +10,7 @@ const {
     validateHistorySegment,
 } = await import('../src/rebuild.js');
 const { validateChapterArchive } = await import('../src/archive.js');
+const { formatRebuildFloorList, rebuildStage } = await import('../src/rebuild.js');
 const { handleChapterSummaryJob, markChapterStaleForTurnSummaryEdit } = await import('../src/chapter.js');
 const { displayNarrativeText, isUsableMemoryEntry } = await import('../src/quality.js');
 const { normalizedTurnSummaries, uncoveredTurnSummaryGroups } = await import('../src/ui/panel.js');
@@ -160,6 +161,16 @@ assert.equal(validateChapterArchive({ ...validChapter, coverage: coverage.slice(
     'chapter coverage must include every floor');
 assert.equal(validateChapterArchive({ ...validChapter, key_events: [validChapter.key_events[0]] }, 0, 24).ok, false,
     'chapter events must cover the second half');
+const conciseChapter = { ...validChapter, summary: '用户明确提出要求，林许据此调整行动，并确认了接下来的安排和仍待解决的问题。'.repeat(9) };
+const conciseCheck = validateChapterArchive(conciseChapter, 0, 24);
+assert.equal(conciseCheck.ok, true, 'a complete concise chapter must not be discarded only for missing the preferred length');
+assert.equal(conciseCheck.warnings.length, 1, 'a concise chapter should retain a visible quality warning');
+assert.deepEqual(conciseCheck.chapter.quality_warnings, conciseCheck.warnings);
+assert.equal(validateChapterArchive({ ...validChapter, summary: '过短。'.repeat(20) }, 0, 24).ok, false,
+    'a genuinely incomplete chapter must still be rejected');
+assert.equal(formatRebuildFloorList([113, 114, 115, 117, 118, 124]), '113–115、117–118、124');
+assert.equal(rebuildStage({ type: 'history_rebuild_segment', payload: { startPair: 100, endPair: 124, pairIndexes: [113, 114, 115] } }, { phase: '旧进度' }),
+    '正在逐轮核对第 113–115 轮', 'the active queue job must win over stale saved progress text');
 
 const usable = { slot: 'identity', subject: '<user>', object: '', value: '是诡秘之神', evidence: '你就是诡秘之神', source: 'auto' };
 for (const entry of [

@@ -305,8 +305,9 @@ export async function handleHistoryRebuildSegment(payload) {
     let retryNote = '';
     let pendingSources = sources;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-        staging.phase = `正在逐轮核对第 ${pendingSources.map(source => source.pair.pairIndex).join('、')} 轮`;
+        staging.phase = `正在逐轮核对第 ${formatRebuildFloorList(pendingSources.map(source => source.pair.pairIndex))} 轮`;
         await saveChatData(data);
+        notifyRebuildProgress();
         const { text } = await callAuxModel({
             purpose: 'history_rebuild_segment',
             systemPrompt: HISTORY_SEGMENT_SYSTEM,
@@ -325,6 +326,7 @@ export async function handleHistoryRebuildSegment(payload) {
         staging.unresolved_floors = (staging.unresolved_floors || []).filter(item => !accepted.has(item.floor));
         pendingSources = pendingSources.filter(source => !accepted.has(source.pair.pairIndex));
         await saveChatData(data);
+        notifyRebuildProgress();
         if (!pendingSources.length) return;
         retryNote = `${checked.errors.join('；')}。本次只返回下方列出的失败轮次，不要返回其他轮次。`;
     }
@@ -335,6 +337,7 @@ export async function handleHistoryRebuildSegment(payload) {
     }
     staging.phase = `第 ${[...failedFloorSet].join('、')} 轮需要单独重试`;
     await saveChatData(data);
+    notifyRebuildProgress();
 }
 
 export async function handleHistoryRebuildChapter(payload) {
@@ -351,6 +354,7 @@ export async function handleHistoryRebuildChapter(payload) {
     }
     staging.phase = `正在合并第 ${payload.startPair}–${payload.endPair} 轮剧情`;
     await saveChatData(data);
+    notifyRebuildProgress();
     const result = await summarizeChapterNotes(notes, payload.startPair, payload.endPair, () => assertChatData(data));
     const existing = staging.chapters.find(chapter => chapter.floor_range?.[0] === payload.startPair);
     const chapter = {
@@ -521,11 +525,40 @@ function nonRetryableError(message) {
     return error;
 }
 
-function rebuildStage(job, state) {
-    if (state?.phase) return state.phase;
-    if (job?.type === 'history_rebuild_segment') return `正在逐轮核对第 ${job.payload.startPair}–${job.payload.endPair} 轮`;
+export function formatRebuildFloorList(values) {
+    const floors = [...new Set((values || []).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+    if (!floors.length) return '';
+    const parts = [];
+    let start = floors[0];
+    let end = start;
+    for (const floor of floors.slice(1)) {
+        if (floor === end + 1) {
+            end = floor;
+            continue;
+        }
+        parts.push(start === end ? String(start) : `${start}–${end}`);
+        start = floor;
+        end = floor;
+    }
+    parts.push(start === end ? String(start) : `${start}–${end}`);
+    return parts.join('、');
+}
+
+function notifyRebuildProgress() {
+    if (typeof globalThis.dispatchEvent !== 'function' || typeof globalThis.CustomEvent !== 'function') return;
+    globalThis.dispatchEvent(new globalThis.CustomEvent('layered-memory:queue-changed'));
+}
+
+export function rebuildStage(job, state) {
+    if (job?.type === 'history_rebuild_segment') {
+        const floors = job.payload.pairIndexes?.length
+            ? formatRebuildFloorList(job.payload.pairIndexes)
+            : `${job.payload.startPair}–${job.payload.endPair}`;
+        return `正在逐轮核对第 ${floors} 轮`;
+    }
     if (job?.type === 'history_rebuild_chapter') return `正在合并第 ${job.payload.startPair}–${job.payload.endPair} 轮剧情`;
-    if (job?.type === 'history_rebuild_commit') return '正在安全替换旧结果';
+    if (job?.type === 'history_rebuild_commit') return job.payload?.reviewOnly ? '正在完成逐轮记录草稿' : '正在安全替换旧结果';
+    if (state?.phase) return state.phase;
     return '等待后台开始';
 }
 

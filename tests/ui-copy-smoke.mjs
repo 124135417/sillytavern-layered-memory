@@ -46,6 +46,10 @@ const requiredCopy = [
     '编辑这里只改变剧情记录',
     '根据修改后的记录重新生成本章',
     '准备检查逐轮记录',
+    '当前显示的是重建前的正式记忆',
+    '尚未凑满一章',
+    '不会因为不足一章而丢失',
+    '概述较精简 · 已完整覆盖',
 ];
 for (const copy of requiredCopy) {
     assert.ok(panel.includes(copy), `missing plain-language UI copy: ${copy}`);
@@ -78,6 +82,8 @@ assert.ok(auxiliaryModel.includes('A failure never silently switches models'),
     'the selected memory-model source must be exclusive');
 assert.ok(auxiliaryModel.includes('listDirectModels'),
     'direct API users should be able to fetch a provider model list');
+assert.ok(panel.includes("jobType.startsWith('history_rebuild_')") && panel.includes('await startHistoryRebuild()'),
+    'retrying a failed rebuild task must resume rebuild state instead of only requeueing a no-op job');
 assert.ok(!auxiliaryModel.includes('请配置 Connection Profile'),
     'connection errors should not require SillyTavern connection-manager jargon');
 
