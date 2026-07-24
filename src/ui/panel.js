@@ -1184,7 +1184,10 @@ function openReportDialog({ entryId = null, type = 'miss', pairIndex = null } = 
 
 export function turnSummaryDisplaySource(data) {
     const rebuild = data.history_rebuild;
-    const rebuilding = rebuild && rebuild.status !== 'complete' && Array.isArray(rebuild.turn_summaries);
+    const currentTotal = getPairs().filter(pair => pair.sealed).length;
+    const stalePausedState = rebuild && ['stopped', 'error', 'review'].includes(rebuild.status)
+        && Number(rebuild.total) !== currentTotal;
+    const rebuilding = rebuild && rebuild.status !== 'complete' && !stalePausedState && Array.isArray(rebuild.turn_summaries);
     const stagedItems = rebuilding ? normalizedTurnSummaries({ turn_summaries: rebuild.turn_summaries }) : [];
     if (stagedItems.length) return { items: rebuild.turn_summaries, staged: true, source: 'staged' };
 

@@ -481,10 +481,19 @@ assert.equal(grownMissing[0].pairIndexes[0], 132);
 
 const stoppedEmptyDraft = {
     ...grownData,
-    history_rebuild: { status: 'stopped', stage_mode: 'turns', total: 300, completed: 0, turn_summaries: [] },
+    history_rebuild: { status: 'stopped', stage_mode: 'turns', total: 132, completed: 0, turn_summaries: [] },
 };
+globalThis.SillyTavern = { getContext: () => ({
+    chat: grownChat, name1: '伯滔', chatMetadata: { layered_memory: stoppedEmptyDraft },
+    extensionSettings: { layered_memory: { chapterSize: 25 } },
+    saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
+}) };
+const staleStoppedSnapshot = getHistoryRebuildSnapshot();
+assert.deepEqual(staleStoppedSnapshot.turnProgress, { status: 'partial', completed: 132, total: 300 },
+    'a paused rebuild must discard its stale historical total and count the current chat');
+assert.equal(staleStoppedSnapshot.staleScope, true);
 const preservedDisplay = turnSummaryDisplaySource(stoppedEmptyDraft);
-assert.equal(preservedDisplay.source, 'formal_during_rebuild');
+assert.equal(preservedDisplay.source, 'formal');
 assert.equal(preservedDisplay.items.length, 132,
     'an empty or paused rebuild draft must not hide the previously saved formal turn records');
 

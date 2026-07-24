@@ -58,8 +58,8 @@
         const now = Date.now();
         const harnessMode = new URLSearchParams(location.search).get('mode') || 'complete';
         if (harnessMode === 'stale-css') document.body.classList.add('simulate-stale-layout');
-        const chatPairCount = harnessMode === 'grown' ? 300 : 132;
-        const recordedPairCount = harnessMode === 'grown' ? 132 : chatPairCount;
+        const chatPairCount = ['grown', 'empty-draft'].includes(harnessMode) ? 300 : 132;
+        const recordedPairCount = harnessMode === 'grown' ? 132 : harnessMode === 'empty-draft' ? 140 : chatPairCount;
         const chat = [];
         for (let i = 0; i < chatPairCount; i += 1) {
             chat.push({ is_user: true, mes: `用户消息 ${i}`, send_date: `${i}-u`, extra: { layered_memory_id: `${i}-u` } });

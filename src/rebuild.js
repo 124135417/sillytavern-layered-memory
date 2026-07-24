@@ -121,7 +121,7 @@ export function currentMatchingTurnSummaries(data = getChatData()) {
 
 function pairsForActiveRebuild(data, state) {
     const pairs = historyPairs(data);
-    if (!state || state.status === 'complete') return pairs;
+    if (!state || !['running', 'stopping'].includes(state.status)) return pairs;
     return pairs.slice(0, Math.max(0, Number(state.total) || 0));
 }
 
@@ -713,21 +713,24 @@ export function getHistoryRebuildSnapshot() {
     const queued = queue.queued.filter(job => REBUILD_JOB_TYPES.includes(job.type));
     const inFlight = REBUILD_JOB_TYPES.includes(queue.inFlight?.type) ? queue.inFlight : null;
     const failed = queue.failed.filter(job => REBUILD_JOB_TYPES.includes(job.type));
-    const activeState = state.status !== 'complete';
+    const stalePausedState = ['stopped', 'error', 'review'].includes(state.status)
+        && Number(state.total) !== currentPairs.length;
+    const activeState = state.status !== 'complete' && !stalePausedState;
     const scopedPairs = activeState ? currentPairs.slice(0, Math.max(0, Number(state.total) || 0)) : currentPairs;
     const total = scopedPairs.length;
     const size = getSettings().chapterSize || 25;
     const fullChapterTotal = Math.floor(total / size);
     const expectedRanges = Array.from({ length: fullChapterTotal }, (_, index) => [index * size, index * size + size - 1]);
-    const chapterSource = state.status === 'complete' ? (data.chapters || []) : (state.chapters || []);
+    const chapterSource = state.status === 'complete' || stalePausedState ? (data.chapters || []) : (state.chapters || []);
     const completeRanges = new Set(chapterSource.map(chapter => JSON.stringify(chapter.floor_range)));
     const chapterCompleted = expectedRanges.filter(range => completeRanges.has(JSON.stringify(range))).length;
     const activeChapterJob = [inFlight, ...queued, ...failed].find(job => job?.type === 'history_rebuild_chapter');
     const tailStart = fullChapterTotal * size;
-    const turnSource = state.status === 'complete' ? (data.turn_summaries || []) : (state.turn_summaries || []);
+    const turnSource = state.status === 'complete' || stalePausedState ? (data.turn_summaries || []) : (state.turn_summaries || []);
     const completedTurns = matchingTurnSummaries(scopedPairs, turnSource).length;
     const turnsComplete = completedTurns === total;
     const turnStatus = turnsComplete ? 'complete'
+        : stalePausedState ? (completedTurns ? 'partial' : 'idle')
         : state.status === 'complete' ? (completedTurns ? 'partial' : 'idle')
             : state.stage_mode === 'turns' ? state.status
                 : completedTurns ? 'partial' : 'stopped';
@@ -737,6 +740,7 @@ export function getHistoryRebuildSnapshot() {
                 : 'ready';
     return {
         ...state,
+        staleScope: stalePausedState,
         total,
         completed: completedTurns,
         turnSummaryCount: completedTurns,
