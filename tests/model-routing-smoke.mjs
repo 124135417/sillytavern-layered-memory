@@ -36,7 +36,7 @@ globalThis.fetch = async (url, init = {}) => {
     return { ok: true, json: async () => ({ choices: [{ message: { content: 'DIRECT' } }] }) };
 };
 
-const { callAuxModel, listDirectModels } = await import('../src/aux-model.js');
+const { callAuxModel, listDirectModels, testAuxModelConnection } = await import('../src/aux-model.js');
 
 const prompt = { purpose: 'test', systemPrompt: 'system', userPrompt: 'user' };
 const profileResult = await callAuxModel(prompt);
@@ -83,4 +83,17 @@ const models = await listDirectModels({ baseUrl: settings.directBaseUrl, apiKey:
 assert.deepEqual(models, ['model-a', 'model-b']);
 assert.equal(fetchRequest.url, 'https://api.deepseek.com/models');
 
-console.log('model routing smoke: 20/20 passed');
+const savedSnapshot = structuredClone(settings);
+const temporarySettings = {
+    ...savedSnapshot,
+    memoryModelSource: 'direct',
+    directBaseUrl: 'https://temporary.example/v1',
+    directApiKey: 'temporary-key',
+    directModel: 'temporary-model',
+};
+const temporaryTest = await testAuxModelConnection({ settings: temporarySettings, timeoutMs: 1000 });
+assert.equal(temporaryTest.ok, true, 'temporary form settings should be testable');
+assert.equal(fetchRequest.url, 'https://temporary.example/v1/chat/completions');
+assert.deepEqual(settings, savedSnapshot, 'testing temporary settings must not modify saved settings');
+
+console.log('model routing smoke: temporary settings are isolated from saved settings');

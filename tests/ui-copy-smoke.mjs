@@ -1,102 +1,84 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [panel, auxiliaryModel, renderedMemory] = await Promise.all([
+const [panel, dialogs, presentation, facts, auxiliaryModel, renderedMemory] = await Promise.all([
     readFile(new URL('../src/ui/panel.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/ui/dialogs.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/ui/presentation.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/facts.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/aux-model.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/render.js', import.meta.url), 'utf8'),
 ]);
 
 const requiredCopy = [
-    '记忆模型从哪里连接？',
-    '自己填写 API、密钥和模型',
-    '使用 SillyTavern 已保存的连接',
-    '跟随当前聊天模型',
-    '临时改用另一个模型（可选）',
-    '获取模型列表',
-    '希望保留多少最近剧情？',
-    'AI 正文提取规则',
-    '用最近一条回复测试',
-    '节省上下文',
-    '平衡（推荐）',
-    '尽量完整',
-    '保留最近几轮完整对话',
-    '每多少轮整理一次剧情摘要',
-    '每多少轮自动检查一次记忆',
-    '需要时找回相关的旧记忆',
-    '安全重建以前的聊天',
-    '已整理',
-    '上一次真实请求使用的记忆',
-    '下一次请求的预计记忆',
-    '已隔离',
+    '当前记忆',
+    '发现历史',
+    '待处理',
+    '已加入当前记忆',
+    '尚未加入',
+    '已被新事实替代',
+    '需要核对',
+    '已忽略',
+    '当前记忆会随你之后发出的聊天请求一起提供给模型；发现历史只用于查看和追溯。',
+    '加入当前记忆',
+    '核对并加入',
+    '检查记忆',
+    '添加记忆',
+    '对话记录',
+    '一轮记录包含一条用户消息和紧随其后的角色回复',
+    '章节',
+    '查看完整摘要',
+    '模型连接待检查',
+    '测试连接',
+    '记忆模型连接',
+    '自动整理',
+    '发送范围',
+    '兼容性',
+    '历史与恢复',
     '高级设置',
     '开发者工具',
-    '查看发送给模型的内容',
-    '这次出了什么问题？',
-    '查看本章',
-    '条逐条记录',
-    '逐条记录已经齐全',
-    '重新生成全部记录',
-    '补齐缺少的记录',
-    '放弃旧结果，全部重新生成',
-    '查看逐条记录',
-    '章节摘要等待逐条记录',
-    '继续生成章节摘要',
-    '查看章节摘要',
-    '不足一章，仅保留逐条记录',
-    '每条记录覆盖一条用户消息和紧接着的角色回复',
-    '已总结到第',
-    '最新第',
-    '剩余 ${remaining} 条对话',
-    '编辑这里只改变剧情记录',
-    '根据修改后的记录重新生成本章',
-    '准备检查逐条记录',
-    '当前显示旧正式事实',
-    '条对话待整理',
-    '条仍可查看',
-    '条对话未整理',
-    '尚未凑满一章',
-    '不会因为不足一章而丢失',
-    '概述较精简 · 已完整覆盖',
+    '恢复重建前结果',
+    '重建工具',
+    '查看上次使用内容',
+    '预览下次记忆内容',
 ];
 for (const copy of requiredCopy) {
-    assert.ok(panel.includes(copy), `missing plain-language UI copy: ${copy}`);
+    assert.ok(panel.includes(copy) || dialogs.includes(copy) || presentation.includes(copy), `missing UI copy: ${copy}`);
 }
 
 const retiredCopy = [
+    '这条内容已经发送给模型',
+    '正在作为当前事实发送给模型',
+    '保存并检查模型连接',
+    '待你确认',
+    '需要你决定',
+    '逐条记录',
     'Connection Profile（优先）',
     '启用 Fallback API',
-    'L1 事实预算',
-    'L2 摘要预算',
-    'L4 检索预算',
-    'L1 depth',
-    'L2 depth',
-    'L4 depth',
-    '近楼原文（对）',
-    '诊断与错例',
     'CONTROL ROOM',
     'HUMAN REVIEW',
-    'NEXT GENERATION',
-    '推荐 3。',
 ];
 for (const copy of retiredCopy) {
-    assert.ok(!panel.includes(copy), `retired technical UI copy returned: ${copy}`);
+    assert.ok(!panel.includes(copy) && !facts.includes(copy), `retired or misleading UI copy returned: ${copy}`);
 }
 
+assert.doesNotMatch(panel, /\b(?:prompt|alert|confirm)\s*\(/u,
+    'panel.js must not use browser-native blocking dialogs');
+for (const button of panel.matchAll(/<button\b[^>]*class="[^"]*lm-icon-button[^"]*"[^>]*>/gu)) {
+    assert.match(button[0], /aria-label="[^"]+"/u, `icon button needs an accessible name: ${button[0]}`);
+}
 assert.ok(!renderedMemory.includes('卷摘要'), 'model preview should not expose the old volume-summary term');
-assert.ok(!renderedMemory.includes('第${c.floor_range[0]}–${c.floor_range[1]}对'),
-    'model preview should describe ranges as conversation rounds');
 assert.ok(auxiliaryModel.includes('A failure never silently switches models'),
-    'the selected memory-model source must be exclusive');
-assert.ok(auxiliaryModel.includes('listDirectModels'),
-    'direct API users should be able to fetch a provider model list');
+    'the selected memory-model source must remain exclusive');
+assert.ok(auxiliaryModel.includes('settings: settingsOverride = null'),
+    'connection tests must accept temporary form settings');
+assert.ok(panel.includes('testAuxModelConnection({ settings: readFormDraft() })'),
+    'connection testing must use the unsaved form draft');
 assert.ok(panel.includes("jobType.startsWith('history_rebuild_')") && panel.includes('await startHistoryRebuild'),
-    'retrying a failed rebuild task must resume rebuild state instead of only requeueing a no-op job');
-assert.ok(!auxiliaryModel.includes('请配置 Connection Profile'),
-    'connection errors should not require SillyTavern connection-manager jargon');
+    'retrying a failed rebuild task must resume rebuild state');
 assert.ok(!panel.includes('第 ${item.pairIndex} 轮'),
-    'zero-based pair indexes must never be exposed as human-facing round numbers');
+    'zero-based pair indexes must never be exposed');
 assert.ok(panel.includes('pairFloorRangeLabel(item.pairIndex)'),
-    'each generated record must display its real SillyTavern message-floor range');
+    'each generated record must display its real SillyTavern floor range');
 
-console.log('UI copy smoke: plain-language timeline and settings copy passed');
+console.log('UI copy smoke: status semantics, dialogs, and accessible actions passed');
