@@ -17,10 +17,13 @@ const { summarizeChapterNotes, validateChapterArchive } = await import('../src/a
 const { formatRebuildFloorList, rebuildStage } = await import('../src/rebuild.js');
 const { handleChapterSummaryJob, markChapterStaleForTurnSummaryEdit } = await import('../src/chapter.js');
 const { displayNarrativeText, isUsableMemoryEntry } = await import('../src/quality.js');
-const { normalizedTurnSummaries, turnSummaryDisplaySource, uncoveredTurnSummaryGroups } = await import('../src/ui/panel.js');
+const { displayRound, normalizedTurnSummaries, turnSummaryDisplaySource, uncoveredTurnSummaryGroups } = await import('../src/ui/panel.js');
 const { renderL1Block } = await import('../src/render.js');
 const { validateVolumeResult } = await import('../src/volume.js');
 const { getPairs } = await import('../src/ids.js');
+
+assert.equal(displayRound(0), 1, 'the first internal pair must be displayed as round 1');
+assert.equal(displayRound(145), 146, '146 zero-based records must end at the human-facing round 146');
 
 const sources = Array.from({ length: 25 }, (_, floor) => ({
     pair: { pairIndex: floor, floorKey: `floor-${floor}`, contentFingerprint: `fp-${floor}` },

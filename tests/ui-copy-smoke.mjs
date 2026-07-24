@@ -92,5 +92,7 @@ assert.ok(panel.includes("jobType.startsWith('history_rebuild_')") && panel.incl
     'retrying a failed rebuild task must resume rebuild state instead of only requeueing a no-op job');
 assert.ok(!auxiliaryModel.includes('请配置 Connection Profile'),
     'connection errors should not require SillyTavern connection-manager jargon');
+assert.ok(!panel.includes('第 ${item.pairIndex} 轮'),
+    'zero-based pair indexes must never be exposed as human-facing round numbers');
 
 console.log('UI copy smoke: plain-language timeline and settings copy passed');
