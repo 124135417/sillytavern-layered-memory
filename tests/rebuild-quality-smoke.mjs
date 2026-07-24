@@ -6,8 +6,11 @@ const {
     handleHistoryRebuildCommit,
     handleHistoryRebuildSegment,
     getHistoryRebuildSnapshot,
+    currentMatchingTurnSummaries,
+    matchingTurnSummaries,
     normalizeHistoryUserSummary,
     recoverEvidence,
+    seedStagingFromCurrent,
     validateHistorySegment,
 } = await import('../src/rebuild.js');
 const { summarizeChapterNotes, validateChapterArchive } = await import('../src/archive.js');
@@ -17,6 +20,7 @@ const { displayNarrativeText, isUsableMemoryEntry } = await import('../src/quali
 const { normalizedTurnSummaries, uncoveredTurnSummaryGroups } = await import('../src/ui/panel.js');
 const { renderL1Block } = await import('../src/render.js');
 const { validateVolumeResult } = await import('../src/volume.js');
+const { getPairs } = await import('../src/ids.js');
 
 const sources = Array.from({ length: 25 }, (_, floor) => ({
     pair: { pairIndex: floor, floorKey: `floor-${floor}`, contentFingerprint: `fp-${floor}` },
@@ -412,6 +416,12 @@ globalThis.SillyTavern = { getContext: () => ({
     extensionSettings: { layered_memory: { chapterSize: 25 } },
     saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
 }) };
+progressData.history_rebuild.turn_summaries = getPairs().filter(pair => pair.sealed).map(pair => ({
+    floorKey: pair.floorKey,
+    pairIndex: pair.pairIndex,
+    contentFingerprint: pair.contentFingerprint,
+    summary: `<user>推进第 ${pair.pairIndex} 轮。`,
+}));
 const progressSnapshot = getHistoryRebuildSnapshot();
 assert.deepEqual(progressSnapshot.turnProgress, { status: 'complete', completed: 132, total: 132 });
 assert.equal(progressSnapshot.chapterProgress.completed, 2);
@@ -419,5 +429,54 @@ assert.equal(progressSnapshot.chapterProgress.total, 5);
 assert.equal(progressSnapshot.chapterProgress.remaining, 3);
 assert.deepEqual(progressSnapshot.chapterProgress.currentRange, [50, 74]);
 assert.deepEqual(progressSnapshot.chapterProgress.tailRange, [125, 131]);
+
+const grownChat = Array.from({ length: 300 }, (_, pairIndex) => [
+    { is_user: true, mes: `用户 ${pairIndex}`, extra: { layered_memory_id: `grown-u-${pairIndex}` } },
+    { is_user: false, mes: `角色 ${pairIndex}`, extra: { layered_memory_id: `grown-a-${pairIndex}` } },
+]).flat();
+const grownData = {
+    state_table: { version: 1, entries: [], changelog: [] },
+    turn_summaries: [], floor_events: [], fact_ledger: [], fact_decisions: [],
+    chapters: Array.from({ length: 5 }, (_, index) => ({
+        id: `old-${index}`, floor_range: [index * 25, index * 25 + 24], summary: `旧章节 ${index}`,
+        keywords: [], key_events: [], coverage: [], stale: false,
+    })),
+    volumes: [], progress: { baseline_pair: 131 },
+    history_rebuild: { status: 'complete', stage_mode: 'chapters', total: 132, completed: 132, warnings: [] },
+    job_queue: { scope_id: 'grown-chat', paused: false, queued: [], running: null, failed: [] },
+};
+globalThis.SillyTavern = { getContext: () => ({
+    chat: grownChat, name1: '伯滔', chatMetadata: { layered_memory: grownData },
+    extensionSettings: { layered_memory: { chapterSize: 25 } },
+    saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
+}) };
+const grownPairs = getPairs().filter(pair => pair.sealed);
+grownData.turn_summaries = grownPairs.slice(0, 132).map(pair => ({
+    floorKey: pair.floorKey, pairIndex: pair.pairIndex, contentFingerprint: pair.contentFingerprint,
+    summary: `<user>推进第 ${pair.pairIndex} 轮，角色回应。`,
+}));
+grownData.floor_events = [{
+    floorKey: grownPairs[3].floorKey, pairIndex: 3, contentFingerprint: grownPairs[3].contentFingerprint,
+    entryChanges: [{ op: 'upsert', after: { slot: 'other', topic: '饮食偏好', subject: '<user>', object: '', value: '不吃熟鱼', evidence: '用户 3', source: 'auto' } }],
+}];
+const grownSnapshot = getHistoryRebuildSnapshot();
+assert.deepEqual(grownSnapshot.turnProgress, { status: 'partial', completed: 132, total: 300 },
+    'a completed old rebuild must not freeze the live total at its historical 132-floor baseline');
+assert.equal(grownSnapshot.chapterProgress.total, 12, 'chapter totals must follow the current full chat');
+assert.equal(currentMatchingTurnSummaries(grownData).length, 132);
+assert.equal(matchingTurnSummaries(grownPairs, [...grownData.turn_summaries, grownData.turn_summaries[0]]).length, 132,
+    'duplicate stored summaries must not inflate progress');
+const reusedStaging = {
+    turn_summaries: [], entries: [], fact_events: [], fact_candidates: [], chapters: [], extracted_keys: [],
+    completed: 0,
+};
+seedStagingFromCurrent(grownData, reusedStaging, grownPairs);
+assert.equal(reusedStaging.turn_summaries.length, 132, 'fill-missing mode must reuse grounded existing summaries');
+assert.equal(reusedStaging.fact_events.length, 1, 'reused summaries must retain their grounded existing facts');
+assert.equal(reusedStaging.chapters.length, 5, 'aligned complete chapters should be reused without another model call');
+const grownMissing = buildMissingRebuildSegmentPayloads(grownPairs, new Set(reusedStaging.turn_summaries.map(item => item.pairIndex)), 25);
+assert.equal(grownMissing.flatMap(item => item.pairIndexes).length, 168,
+    'fill-missing mode should enqueue only floors 132 through 299');
+assert.equal(grownMissing[0].pairIndexes[0], 132);
 
 console.log('rebuild quality smoke: validation gates, visible turn records, and atomic replacement passed');

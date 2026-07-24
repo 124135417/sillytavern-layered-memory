@@ -37,11 +37,22 @@ function rebuildState(data = getChatData()) {
 }
 
 function historyPairs(data = getChatData()) {
-    const baseline = Number(data.progress?.baseline_pair ?? -1);
-    return getPairs().filter(pair => pair.sealed && pair.pairIndex <= baseline);
+    return getPairs().filter(pair => pair.sealed);
 }
 
-function createStaging(total, baseline) {
+export function matchingTurnSummaries(pairs, summaries) {
+    const summariesByFloor = new Map();
+    for (const summary of summaries || []) {
+        if (Number.isInteger(summary?.pairIndex)) summariesByFloor.set(summary.pairIndex, summary);
+    }
+    return (pairs || []).flatMap(pair => {
+        const summary = summariesByFloor.get(pair.pairIndex);
+        return summary?.summary && summary.floorKey === pair.floorKey
+            && summary.contentFingerprint === pair.contentFingerprint ? [summary] : [];
+    });
+}
+
+function createStaging(total, baseline, reuseExisting = false) {
     return {
         status: 'running',
         phase: '正在准备安全重建',
@@ -61,7 +72,57 @@ function createStaging(total, baseline) {
         unresolved_floors: [],
         warnings: [],
         stage_mode: 'turns',
+        reuse_existing: reuseExisting,
     };
+}
+
+export function seedStagingFromCurrent(data, staging, pairs) {
+    const reusedSummaries = matchingTurnSummaries(pairs, data.turn_summaries);
+    const reusedFloors = new Set(reusedSummaries.map(item => item.pairIndex));
+    const pairByFloor = new Map(pairs.map(pair => [pair.pairIndex, pair]));
+    staging.turn_summaries = clone(reusedSummaries);
+    staging.extracted_keys = reusedSummaries.map(summary => `migrated:${summary.floorKey}`);
+    staging.fact_events = [];
+    for (const event of data.floor_events || []) {
+        const pair = pairByFloor.get(event.pairIndex);
+        if (!reusedFloors.has(event.pairIndex) || !pair
+            || event.floorKey !== pair.floorKey || event.contentFingerprint !== pair.contentFingerprint) continue;
+        for (const change of event.entryChanges || []) {
+            if (change?.op === 'upsert' && change.after) {
+                staging.fact_events.push({ floor: event.pairIndex, fact: clone(change.after) });
+            }
+        }
+    }
+    staging.entries = [];
+    for (const event of staging.fact_events.slice().sort((a, b) => a.floor - b.floor)) {
+        upsertStagedFact(staging, event.fact, event.floor);
+    }
+    staging.fact_candidates = (data.fact_ledger || []).filter(candidate => {
+        const pair = pairByFloor.get(candidate.floor);
+        return reusedFloors.has(candidate.floor) && pair
+            && candidate.floorKey === pair.floorKey
+            && candidate.contentFingerprint === pair.contentFingerprint;
+    }).map(clone);
+    const size = getSettings().chapterSize || 25;
+    staging.chapters = (data.chapters || []).filter(chapter => {
+        const [start, end] = chapter.floor_range || [];
+        return !chapter.stale && Number.isInteger(start) && Number.isInteger(end)
+            && start % size === 0
+            && end - start + 1 === size
+            && Array.from({ length: size }, (_, offset) => start + offset).every(floor => reusedFloors.has(floor));
+    }).map(clone);
+    staging.completed = staging.turn_summaries.length;
+    return staging;
+}
+
+export function currentMatchingTurnSummaries(data = getChatData()) {
+    return matchingTurnSummaries(historyPairs(data), data.turn_summaries);
+}
+
+function pairsForActiveRebuild(data, state) {
+    const pairs = historyPairs(data);
+    if (!state || state.status === 'complete') return pairs;
+    return pairs.slice(0, Math.max(0, Number(state.total) || 0));
 }
 
 function backupCurrent(data) {
@@ -413,7 +474,7 @@ export async function handleHistoryRebuildCommit() {
     const data = getChatData();
     const staging = rebuildState(data);
     if (!staging || abortRequested || staging.status !== 'running') return;
-    const pairs = historyPairs(data);
+    const pairs = pairsForActiveRebuild(data, staging);
     if (staging.turn_summaries.length !== pairs.length) {
         const done = new Set(staging.turn_summaries.map(item => item.pairIndex));
         const missing = pairs.filter(pair => !done.has(pair.pairIndex)).map(pair => pair.pairIndex);
@@ -625,17 +686,19 @@ export function buildMissingRebuildSegmentPayloads(pairs, doneFloors, size = 25)
 export function getHistoryRebuildSnapshot() {
     const data = getChatData();
     const state = rebuildState(data);
+    const currentPairs = historyPairs(data);
     if (!state) {
-        const total = historyPairs(data).length;
+        const total = currentPairs.length;
+        const completed = matchingTurnSummaries(currentPairs, data.turn_summaries).length;
         const size = getSettings().chapterSize || 25;
         const fullChapterTotal = Math.floor(total / size);
         const tailStart = fullChapterTotal * size;
         return {
             status: 'idle', phase: '尚未开始', stage: '尚未开始', total, completed: 0,
-            turnSummaryCount: (data.turn_summaries || []).length,
+            turnSummaryCount: completed,
             warningCount: 0,
             queued: 0, inFlight: null, failed: [], paused: false,
-            turnProgress: { status: 'idle', completed: (data.turn_summaries || []).length, total },
+            turnProgress: { status: completed === total && total > 0 ? 'complete' : completed ? 'partial' : 'idle', completed, total },
             chapterProgress: {
                 status: 'locked',
                 completed: 0,
@@ -650,27 +713,33 @@ export function getHistoryRebuildSnapshot() {
     const queued = queue.queued.filter(job => REBUILD_JOB_TYPES.includes(job.type));
     const inFlight = REBUILD_JOB_TYPES.includes(queue.inFlight?.type) ? queue.inFlight : null;
     const failed = queue.failed.filter(job => REBUILD_JOB_TYPES.includes(job.type));
+    const activeState = state.status !== 'complete';
+    const scopedPairs = activeState ? currentPairs.slice(0, Math.max(0, Number(state.total) || 0)) : currentPairs;
+    const total = scopedPairs.length;
     const size = getSettings().chapterSize || 25;
-    const fullChapterTotal = Math.floor(state.total / size);
+    const fullChapterTotal = Math.floor(total / size);
     const expectedRanges = Array.from({ length: fullChapterTotal }, (_, index) => [index * size, index * size + size - 1]);
     const chapterSource = state.status === 'complete' ? (data.chapters || []) : (state.chapters || []);
     const completeRanges = new Set(chapterSource.map(chapter => JSON.stringify(chapter.floor_range)));
     const chapterCompleted = expectedRanges.filter(range => completeRanges.has(JSON.stringify(range))).length;
     const activeChapterJob = [inFlight, ...queued, ...failed].find(job => job?.type === 'history_rebuild_chapter');
     const tailStart = fullChapterTotal * size;
-    const turnsComplete = (state.status === 'complete' ? (data.turn_summaries || []) : (state.turn_summaries || [])).length === state.total;
+    const turnSource = state.status === 'complete' ? (data.turn_summaries || []) : (state.turn_summaries || []);
+    const completedTurns = matchingTurnSummaries(scopedPairs, turnSource).length;
+    const turnsComplete = completedTurns === total;
     const turnStatus = turnsComplete ? 'complete'
-        : state.stage_mode === 'turns' ? state.status
-            : 'stopped';
-    const chapterStatus = state.status === 'complete' ? 'complete'
+        : state.status === 'complete' ? (completedTurns ? 'partial' : 'idle')
+            : state.stage_mode === 'turns' ? state.status
+                : completedTurns ? 'partial' : 'stopped';
+    const chapterStatus = state.status === 'complete' && turnsComplete && chapterCompleted === fullChapterTotal ? 'complete'
         : !turnsComplete ? 'locked'
             : state.stage_mode === 'chapters' ? state.status
                 : 'ready';
     return {
         ...state,
-        turnSummaryCount: state.status === 'complete'
-            ? (data.turn_summaries || []).length
-            : (state.turn_summaries || []).length,
+        total,
+        completed: completedTurns,
+        turnSummaryCount: completedTurns,
         warningCount: (state.warnings || []).length,
         queued: queued.length,
         inFlight,
@@ -679,8 +748,8 @@ export function getHistoryRebuildSnapshot() {
         stage: rebuildStage(inFlight || queued[0], state),
         turnProgress: {
             status: turnStatus,
-            completed: state.status === 'complete' ? (data.turn_summaries || []).length : (state.turn_summaries || []).length,
-            total: state.total,
+            completed: completedTurns,
+            total,
         },
         chapterProgress: {
             status: chapterStatus,
@@ -688,7 +757,7 @@ export function getHistoryRebuildSnapshot() {
             total: fullChapterTotal,
             currentRange: activeChapterJob ? [activeChapterJob.payload.startPair, activeChapterJob.payload.endPair] : null,
             remaining: Math.max(0, fullChapterTotal - chapterCompleted),
-            tailRange: state.total > tailStart ? [tailStart, state.total - 1] : null,
+            tailRange: total > tailStart ? [tailStart, total - 1] : null,
         },
     };
 }
@@ -713,12 +782,12 @@ function enqueueMissingRebuildJobs(data, pairs) {
     enqueue('history_rebuild_commit', { reviewOnly: state.stage_mode !== 'chapters' }, QUEUE_PRIORITY.migrate - 2);
 }
 
-export async function startHistoryRebuild() {
+export async function startHistoryRebuild({ reuseExisting = false } = {}) {
     abortRequested = false;
     const data = getChatData();
     const pairs = historyPairs(data);
     if (!pairs.length) {
-        data.history_rebuild = createStaging(0, data.progress?.baseline_pair ?? -1);
+        data.history_rebuild = createStaging(0, data.progress?.baseline_pair ?? -1, reuseExisting);
         data.history_rebuild.status = 'complete';
         data.history_rebuild.finishedAt = Date.now();
         await saveChatData(data);
@@ -734,7 +803,8 @@ export async function startHistoryRebuild() {
         && data.history_rebuild.total === pairs.length;
     if (!resumable) {
         data.rebuild_backup = backupCurrent(data);
-        data.history_rebuild = createStaging(pairs.length, data.progress?.baseline_pair ?? -1);
+        data.history_rebuild = createStaging(pairs.length, data.progress?.baseline_pair ?? -1, reuseExisting);
+        if (reuseExisting) seedStagingFromCurrent(data, data.history_rebuild, pairs);
     } else {
         data.history_rebuild.status = 'running';
         data.history_rebuild.error = null;
@@ -749,7 +819,7 @@ export async function startHistoryRebuildChapters() {
     abortRequested = false;
     const data = getChatData();
     const state = rebuildState(data);
-    const pairs = historyPairs(data);
+    const pairs = pairsForActiveRebuild(data, state);
     const resumableChapterStage = state?.stage_mode === 'chapters' && ['stopped', 'error'].includes(state.status);
     if (!state || (!resumableChapterStage && state.status !== 'review') || state.turn_summaries.length !== pairs.length) {
         throw new Error('逐轮记录尚未完整生成，暂时不能整理章节');

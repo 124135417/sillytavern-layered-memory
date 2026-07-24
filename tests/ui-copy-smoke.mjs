@@ -37,6 +37,8 @@ const requiredCopy = [
     '条逐轮记录',
     '逐轮记录已经齐全',
     '重新生成全部逐轮记录',
+    '补齐缺少的逐轮记录',
+    '放弃旧结果，全部重新生成',
     '查看逐轮记录',
     '章节摘要等待逐轮记录',
     '继续生成章节摘要',
@@ -82,7 +84,7 @@ assert.ok(auxiliaryModel.includes('A failure never silently switches models'),
     'the selected memory-model source must be exclusive');
 assert.ok(auxiliaryModel.includes('listDirectModels'),
     'direct API users should be able to fetch a provider model list');
-assert.ok(panel.includes("jobType.startsWith('history_rebuild_')") && panel.includes('await startHistoryRebuild()'),
+assert.ok(panel.includes("jobType.startsWith('history_rebuild_')") && panel.includes('await startHistoryRebuild'),
     'retrying a failed rebuild task must resume rebuild state instead of only requeueing a no-op job');
 assert.ok(!auxiliaryModel.includes('请配置 Connection Profile'),
     'connection errors should not require SillyTavern connection-manager jargon');

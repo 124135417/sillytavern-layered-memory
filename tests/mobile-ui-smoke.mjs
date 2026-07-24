@@ -49,6 +49,10 @@ assert.match(css, /\.lm-dialog input,[\s\S]*\.lm-dialog textarea \{/u,
     'body-level dialogs must own their form foreground and background styles');
 assert.match(css, /height: calc\(100dvh - 58px\)/u,
     'tablet and narrow desktop panels need a definite height, not only a max-height');
+assert.match(css, /\.layered-memory-root \{[\s\S]*right: 0;[\s\S]*left: 0;[\s\S]*margin-inline: auto;/u,
+    'the desktop memory center must be centered instead of anchored to the right edge');
+assert.match(css, /@media \(max-width: 899px\)[\s\S]*\.layered-memory-root \{[^}]*margin-inline: 0;/u,
+    'narrow layouts must reset desktop centering margins and continue filling the viewport');
 assert.match(css, /\.lm-body \{[\s\S]*scroll-padding-bottom: 92px/u,
     'focused phone settings must scroll clear of the sticky save bar');
 assert.match(css, /\.lm-memory-backdrop \{[\s\S]*z-index: 2147483000/u,

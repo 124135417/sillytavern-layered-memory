@@ -51,8 +51,10 @@
     <script type="module">
         const now = Date.now();
         const harnessMode = new URLSearchParams(location.search).get('mode') || 'complete';
+        const chatPairCount = harnessMode === 'grown' ? 300 : 132;
+        const recordedPairCount = harnessMode === 'grown' ? 132 : chatPairCount;
         const chat = [];
-        for (let i = 0; i < 132; i += 1) {
+        for (let i = 0; i < chatPairCount; i += 1) {
             chat.push({ is_user: true, mes: `用户消息 ${i}`, send_date: `${i}-u`, extra: { layered_memory_id: `${i}-u` } });
             chat.push({ is_user: false, mes: `AI 回复 ${i}`, send_date: `${i}-a`, extra: { layered_memory_id: `${i}-a` } });
         }
@@ -63,8 +65,8 @@
             { id: 'e_4', slot: 'possession', subject: '林晚', object: '', value: '保管刻有鸦纹的铜钥匙', cause: '', updated_floor: 118, evidence: '她收起那枚刻着鸦纹的铜钥匙。', pinned: false },
             { id: 'e_5', slot: 'identity', subject: '<user>', object: '', value: '是诡秘之神', cause: '', updated_floor: 92, evidence: '你就是诡秘之神。', pinned: false, source: 'auto' },
         ];
-        const extracted = chat.filter(x => !x.is_user).map((_, i) => `${i}-u+${i}-a`);
-        const turnSummaries = Array.from({ length: 132 }, (_, pairIndex) => ({
+        const extracted = chat.filter(x => !x.is_user).slice(0, recordedPairCount).map((_, i) => `${i}-u+${i}-a`);
+        const turnSummaries = Array.from({ length: recordedPairCount }, (_, pairIndex) => ({
             floorKey: `${pairIndex}-u+${pairIndex}-a`,
             pairIndex,
             contentFingerprint: `fp-${pairIndex}`,
@@ -138,6 +140,18 @@
         window.alert = console.log;
         window.confirm = () => true;
         window.prompt = (_message, current) => harnessMode === 'review' ? `${current}（人工修正）` : null;
+        const { getPairs } = await import('../src/ids.js');
+        const actualPairs = getPairs().filter(pair => pair.sealed);
+        for (const summary of turnSummaries) {
+            const pair = actualPairs[summary.pairIndex];
+            summary.floorKey = pair.floorKey;
+            summary.contentFingerprint = pair.contentFingerprint;
+        }
+        for (const event of memoryData.floor_events) {
+            const pair = actualPairs[event.pairIndex];
+            event.floorKey = pair.floorKey;
+            event.contentFingerprint = pair.contentFingerprint;
+        }
         const { injectPanel, openMemoryCenter } = await import('../src/ui/panel.js');
         injectPanel();
         openMemoryCenter(true);

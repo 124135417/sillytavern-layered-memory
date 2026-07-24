@@ -12,6 +12,7 @@ import {
 import { recordMigrationEdit } from '../eval/migrate.js';
 import {
     getHistoryRebuildSnapshot,
+    currentMatchingTurnSummaries,
     normalizeHistoryUserSummary,
     requestHistoryRebuildAbort,
     restoreRebuildBackup,
@@ -199,21 +200,24 @@ function renderTurnProgressCard(snapshot, { controls = false, showOpen = true } 
     const active = snapshot.stage_mode === 'turns' && ['running', 'stopping'].includes(snapshot.status);
     const failed = snapshot.stage_mode === 'turns' && snapshot.status === 'error';
     const title = progress.status === 'complete' ? '逐轮记录已经齐全'
+        : progress.status === 'partial' ? '逐轮记录还有遗漏'
         : failed ? '逐轮记录生成遇到问题'
             : active ? '正在生成逐轮记录'
                 : progress.completed ? '逐轮记录尚未完成' : '还没有生成逐轮记录';
     const detail = failed ? snapshot.error
         : active ? snapshot.stage
             : progress.status === 'complete' ? '可以随时查看和修改；完成章节后这些记录也不会消失。'
+                : progress.status === 'partial' ? `当前聊天共有 ${progress.total} 轮，已有 ${progress.completed} 轮记录仍与原文一致；可以只补缺少部分。`
                 : '先逐轮整理用户输入和角色回应，再决定是否生成章节摘要。';
     const label = progress.status === 'complete' ? '重新生成全部逐轮记录'
+        : progress.status === 'partial' ? '补齐缺少的逐轮记录'
         : ['error', 'stopped'].includes(progress.status) ? '继续生成逐轮记录'
             : '生成逐轮记录';
     return `<section class="lm-backfill-card" data-workflow="turns" data-state="${escapeHtml(progress.status)}">
         <div class="lm-backfill-heading"><div><span class="lm-kicker">第一步 · 可独立使用</span><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${progress.completed} / ${progress.total} 轮</strong></div>
         <progress max="100" value="${percent}" aria-label="逐轮记录进度：${percent}%">${percent}%</progress>
         <div class="lm-backfill-meta"><span>${percent}%</span><span>${Number(snapshot.warningCount) ? `已忽略 ${snapshot.warningCount} 条证据不可靠的事实` : '没有未解决的逐轮错误'}</span></div>
-        ${controls ? `<div class="lm-settings-actions"><button type="button" class="lm-button" data-rebuild-action="turns" ${active || snapshot.stage_mode === 'chapters' && snapshot.status === 'running' ? 'disabled' : ''}>${escapeHtml(label)}</button>${showOpen ? '<button type="button" class="lm-text-button" data-open-workflow="turns">查看逐轮记录</button>' : ''}${active ? '<button type="button" class="lm-text-button" data-rebuild-action="stop">停止</button>' : ''}</div>` : ''}
+        ${controls ? `<div class="lm-settings-actions"><button type="button" class="lm-button" data-rebuild-action="turns" data-rebuild-mode="${progress.status === 'partial' ? 'reuse' : 'full'}" ${active || snapshot.stage_mode === 'chapters' && snapshot.status === 'running' ? 'disabled' : ''}>${escapeHtml(label)}</button>${progress.status === 'partial' ? '<button type="button" class="lm-text-button" data-rebuild-action="turns" data-rebuild-mode="full">放弃旧结果，全部重新生成</button>' : ''}${showOpen ? '<button type="button" class="lm-text-button" data-open-workflow="turns">查看逐轮记录</button>' : ''}${active ? '<button type="button" class="lm-text-button" data-rebuild-action="stop">停止</button>' : ''}</div>` : ''}
     </section>`;
 }
 
@@ -255,18 +259,16 @@ function refreshHistoryBackfillUi(body) {
 
 function bindHistoryBackfillControls(host, body) {
     if (!host) return;
-    host.querySelector('[data-rebuild-action="turns"]')?.addEventListener('click', async () => {
-        const snapshot = getHistoryRebuildSnapshot();
-        const replacing = snapshot.turnProgress?.status === 'complete';
-        if (!confirm(replacing
-            ? '重新生成全部逐轮记录？现有正式记忆仍会保留到新的逐轮记录和章节全部完成。'
-            : '开始生成逐轮记录？现有正式记忆会继续保留。')) return;
-        const button = host.querySelector('[data-rebuild-action="turns"]');
-        if (button) button.disabled = true;
-        await startHistoryRebuild();
+    host.querySelectorAll('[data-rebuild-action="turns"]').forEach(button => button.addEventListener('click', async () => {
+        const reuseExisting = button.dataset.rebuildMode === 'reuse';
+        if (!confirm(reuseExisting
+            ? '只生成缺少的逐轮记录？已经存在且仍对应当前原文的记录会直接复用，不会重复调用模型。'
+            : '重新生成当前聊天的全部逐轮记录？现有正式记忆仍会保留到新的逐轮记录和章节全部完成。')) return;
+        host.querySelectorAll('[data-rebuild-action="turns"]').forEach(candidate => { candidate.disabled = true; });
+        await startHistoryRebuild({ reuseExisting });
         refreshHistoryBackfillUi(body);
-        toastr?.info?.('已经开始生成逐轮记录。');
-    });
+        toastr?.info?.(reuseExisting ? '已经开始补齐缺少的逐轮记录。' : '已经开始重新生成全部逐轮记录。');
+    }));
     host.querySelectorAll('[data-rebuild-action="stop"]').forEach(button => button.addEventListener('click', async () => {
         if (button) button.disabled = true;
         await requestHistoryRebuildAbort();
@@ -472,8 +474,10 @@ function renderShellStatus() {
     const maxSealed = pairs.at(-1)?.pairIndex ?? -1;
     const rebuild = getHistoryRebuildSnapshot();
     let syncLabel;
-    if (rebuild?.status === 'complete') {
-        syncLabel = `已安全重建 ${rebuild.completed} / ${rebuild.total} 轮`;
+    if (rebuild?.turnProgress?.status === 'complete') {
+        syncLabel = `已整理 ${rebuild.turnProgress.completed} / ${rebuild.turnProgress.total} 轮`;
+    } else if (rebuild?.status === 'complete' && rebuild?.turnProgress?.completed < rebuild?.turnProgress?.total) {
+        syncLabel = `已整理 ${rebuild.turnProgress.completed} / ${rebuild.turnProgress.total} 轮 · 还有遗漏`;
     } else if (rebuild?.status === 'review') {
         syncLabel = `逐轮记录待检查 ${rebuild.completed} / ${rebuild.total} 轮`;
     } else if (rebuild?.stage_mode === 'chapters' && ['running', 'stopping', 'stopped', 'error'].includes(rebuild.status)) {
@@ -519,11 +523,15 @@ function renderShellStatus() {
 
 function renderStateTab() {
     const data = getChatData();
+    const rebuildSnapshot = getHistoryRebuildSnapshot();
     const entries = usableMemoryEntries(data);
     const candidates = factCandidateView(data);
     const inactiveCandidates = candidates.filter(item => !['active', 'dismissed'].includes(item.status));
     const quarantined = data.quarantined_entries || [];
-    const notices = data.notices || [];
+    const notices = (data.notices || []).filter(item => {
+        if (rebuildSnapshot.turnProgress?.status !== 'partial') return true;
+        return !/安全重建完成|已核对\s*\d+\s*\/\s*\d+/.test(item.note || '');
+    });
     const rebuild = data.history_rebuild;
     const rebuilding = rebuild && !['complete', 'idle'].includes(rebuild.status);
     const stagedFactCount = Array.isArray(rebuild?.entries) ? rebuild.entries.length : 0;
@@ -670,6 +678,10 @@ function renderTaskRail() {
     const failed = q.failed || [];
     const queued = q.queued || [];
     const data = getChatData();
+    const rebuild = getHistoryRebuildSnapshot();
+    const missingTurns = rebuild.turnProgress?.status === 'partial'
+        ? Math.max(0, rebuild.turnProgress.total - rebuild.turnProgress.completed)
+        : 0;
     const recent = [...(data.logs || [])].reverse().filter(x => /完成|更新|回滚/.test(x.message || '')).slice(0, 4);
     const inFlight = q.inFlight;
     const activeCount = Number(Boolean(inFlight)) + queued.length + failed.length;
@@ -677,8 +689,11 @@ function renderTaskRail() {
         ? `${activeCount} 项工作 · ${failed.length} 项需要处理`
         : activeCount
             ? `正在处理 ${activeCount} 项工作`
-            : '已全部处理完成';
-    const summaryState = failed.length ? 'error' : activeCount ? 'working' : 'idle';
+            : missingTurns ? `还有 ${missingTurns} 轮尚未整理` : '已全部处理完成';
+    const summaryState = failed.length ? 'error' : activeCount ? 'working' : missingTurns ? 'attention' : 'idle';
+    const idleTask = missingTurns
+        ? `<div class="lm-task lm-task-idle"><span class="fa-solid fa-circle-exclamation" aria-hidden="true"></span><div><b>逐轮记录还不完整</b><small>当前聊天共 ${rebuild.turnProgress.total} 轮，已整理 ${rebuild.turnProgress.completed} 轮；前往“逐轮记录”补齐缺少的 ${missingTurns} 轮。</small></div></div>`
+        : '<div class="lm-task lm-task-idle"><span class="fa-solid fa-check" aria-hidden="true"></span><div><b>已经整理完毕</b><small>目前没有等待处理的内容</small></div></div>';
     return `
         <aside class="lm-task-rail" aria-label="记忆整理进度" data-summary-state="${summaryState}">
             <header>
@@ -689,7 +704,7 @@ function renderTaskRail() {
                 </div>
             </header>
             <div class="lm-task-list" id="lm-task-list">
-                ${inFlight ? renderTask(inFlight, 'running') : (!queued.length && !failed.length ? '<div class="lm-task lm-task-idle"><span class="fa-solid fa-check" aria-hidden="true"></span><div><b>已经整理完毕</b><small>目前没有等待处理的内容</small></div></div>' : '')}
+                ${inFlight ? renderTask(inFlight, 'running') : (!queued.length && !failed.length ? idleTask : '')}
                 ${queued.slice(0, 4).map(job => renderTask(job, 'queued')).join('')}
                 ${queued.length > 4 ? `<p class="lm-task-overflow">另有 ${queued.length - 4} 个任务等待</p>` : ''}
                 ${failed.map(job => renderTask(job, 'failed')).join('')}
@@ -1110,7 +1125,7 @@ function openReportDialog({ entryId = null, type = 'miss', pairIndex = null } = 
 function turnSummaryDisplaySource(data) {
     const rebuild = data.history_rebuild;
     const staged = rebuild && rebuild.status !== 'complete' && Array.isArray(rebuild.turn_summaries);
-    return { items: staged ? rebuild.turn_summaries : (data.turn_summaries || []), staged };
+    return { items: staged ? rebuild.turn_summaries : currentMatchingTurnSummaries(data), staged };
 }
 
 function renderTurnsTab() {
