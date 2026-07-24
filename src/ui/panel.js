@@ -1227,7 +1227,7 @@ function renderTurnsTab() {
         ? `原来的 ${formalCount} 条记录没有被删除；本次重建还有 ${remaining} 轮未整理。`
         : chapterRunning ? '章节正在生成；为避免当前章节使用旧内容，请先停止章节任务再编辑。'
             : '编辑这里只改变剧情记录；人物身份、关系和其他结构化事实请到“当前记忆”修改。';
-    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">每一轮都保留</span><h3>逐轮记录</h3><p>这里与章节摘要互相独立。完成章节后仍可查看和编辑每一轮。</p></div><div class="lm-page-count">${escapeHtml(countLabel)}</div></div>`;
+    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">每一轮都保留</span><h3>逐轮记录</h3><p>这里与章节摘要互相独立。完成章节后仍可查看和编辑每一轮。</p><small>这里的 1 轮 = 你的 1 条消息 + 角色紧接着的 1 条回复；酒馆显示的消息楼数通常约为这里的两倍。</small></div><div class="lm-page-count">${escapeHtml(countLabel)}</div></div>`;
     html += `<div class="lm-workflow-progress">${renderTurnProgressCard(snapshot, { controls: true, showOpen: false, preservedCount: formalCount })}</div>`;
     html += `<aside class="lm-quality-alert"><span class="fa-solid fa-pen" aria-hidden="true"></span><div><strong>${escapeHtml(sourceTitle)}</strong><p>${escapeHtml(sourceDetail)}</p></div></aside>`;
     for (const group of groups.reverse()) {
