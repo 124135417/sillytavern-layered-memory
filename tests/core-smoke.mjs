@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 let chatSaveCount = 0;
 let metadataSaveCount = 0;
+const extensionPromptCalls = [];
 
 const settings = {
     enabled: true,
@@ -48,7 +49,9 @@ const context = {
     saveChat: async () => { chatSaveCount += 1; },
     saveSettingsDebounced: () => {},
     generateRaw: async () => 'OK',
-    setExtensionPrompt: () => {},
+    setExtensionPrompt: (...args) => { extensionPromptCalls.push(args); },
+    extension_prompt_types: { IN_PROMPT: 0, IN_CHAT: 1, NONE: -1 },
+    extension_prompt_roles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
 };
 
 globalThis.SillyTavern = { getContext: () => context, libs: {} };
@@ -59,9 +62,20 @@ const { getSettings } = await import('../src/settings.js');
 const { normalizeExtractOutput, validateEntry } = await import('../src/validate.js');
 const { mergeExtractResult, rollbackFloor } = await import('../src/merge.js');
 const { renderL1Block, renderL2Block } = await import('../src/render.js');
-const { trimChatForGenerate } = await import('../src/inject.js');
+const { trimChatForGenerate, updateInjection } = await import('../src/inject.js');
 const { testAuxModelConnection } = await import('../src/aux-model.js');
 const { extractAiBody } = await import('../src/body.js');
+
+settings.depthL1 = 7;
+settings.depthL2 = 9;
+settings.depthL4 = 3;
+updateInjection();
+const l1Injection = extensionPromptCalls.find(([key]) => key === 'layered_memory_l1');
+const l2Injection = extensionPromptCalls.find(([key]) => key === 'layered_memory_l2');
+const l4Injection = extensionPromptCalls.find(([key]) => key === 'layered_memory_l4');
+assert.deepEqual(l1Injection?.slice(2), [0, 0, false, 0], 'L1 必须作为 IN_PROMPT system 提示发送，旧 depth 设置不得生效');
+assert.deepEqual(l2Injection?.slice(2), [0, 0, false, 0], 'L2 必须作为 IN_PROMPT system 提示发送，旧 depth 设置不得生效');
+assert.deepEqual(l4Injection?.slice(2), [1, 3, false, 0], 'L4 仍应使用 IN_CHAT 和可配置 depth');
 
 function setPairs(count) {
     context.chat = [];

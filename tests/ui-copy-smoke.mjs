@@ -57,6 +57,8 @@ const retiredCopy = [
     '启用 Fallback API',
     'CONTROL ROOM',
     'HUMAN REVIEW',
+    '当前事实的发送位置',
+    '剧情摘要的发送位置',
 ];
 for (const copy of retiredCopy) {
     assert.ok(!panel.includes(copy) && !facts.includes(copy), `retired or misleading UI copy returned: ${copy}`);
@@ -82,5 +84,9 @@ assert.ok(!panel.includes('第 ${item.pairIndex} 轮'),
     'zero-based pair indexes must never be exposed');
 assert.ok(panel.includes('pairFloorRangeLabel(item.pairIndex)'),
     'each generated record must display its real SillyTavern floor range');
+assert.ok(!panel.includes('id="lm-d1"') && !panel.includes('id="lm-d2"'),
+    'mandatory L1/L2 prompts must not expose ineffective depth controls');
+assert.ok(panel.includes('id="lm-d4"'),
+    'optional L4 retrieval must keep its in-chat depth control');
 
 console.log('UI copy smoke: status semantics, dialogs, and accessible actions passed');

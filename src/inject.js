@@ -57,11 +57,14 @@ export function updateInjection({ archiveEndPair } = {}) {
         l4 = renderL4Block(hits, settings.budgetL4);
     }
 
+    const IN_PROMPT = extension_prompt_types.IN_PROMPT;
     const IN_CHAT = extension_prompt_types.IN_CHAT;
     const SYSTEM = extension_prompt_roles.SYSTEM;
 
-    setExtensionPrompt(PROMPT_KEYS.L1, l1, IN_CHAT, settings.depthL1 ?? 100, false, SYSTEM);
-    setExtensionPrompt(PROMPT_KEYS.L2, l2, IN_CHAT, settings.depthL2 ?? 100, false, SYSTEM);
+    // Core memory must consume mandatory prompt budget before SillyTavern fills
+    // chat history. The depth argument is ignored for IN_PROMPT prompts.
+    setExtensionPrompt(PROMPT_KEYS.L1, l1, IN_PROMPT, 0, false, SYSTEM);
+    setExtensionPrompt(PROMPT_KEYS.L2, l2, IN_PROMPT, 0, false, SYSTEM);
     setExtensionPrompt(PROMPT_KEYS.L4, l4, IN_CHAT, settings.depthL4 ?? 4, false, SYSTEM);
 }
 

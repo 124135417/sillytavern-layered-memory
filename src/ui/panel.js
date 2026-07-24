@@ -2030,14 +2030,12 @@ function renderSettingsTab() {
             </section>
 
             <details class="lm-settings-section lm-settings-disclosure">
-                <summary><div><span class="fa-solid fa-sliders" aria-hidden="true"></span><div><h4>高级设置</h4><p>记忆容量和发送位置。不了解这些选项时，请保持默认。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
+                <summary><div><span class="fa-solid fa-sliders" aria-hidden="true"></span><div><h4>高级设置</h4><p>记忆容量和相关旧记忆的发送位置。不了解这些选项时，请保持默认。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
                 <div class="lm-settings-fields lm-field-grid lm-field-grid-three">
                     <label>自定义聊天历史容量<small>仅在上方选择“自定义”时使用；这里只计算正则处理后的聊天。</small><input type="number" id="lm-history-budget" min="500" value="${s.historyTokenBudget}"/></label>
                     <label>当前事实容量<small>长期有效的人物状态、关系和约定。推荐 2000。</small><input type="number" id="lm-b1" min="200" value="${s.budgetL1}"/></label>
                     <label>剧情摘要容量<small>以前发生过的剧情。推荐 5000。</small><input type="number" id="lm-b2" min="500" value="${s.budgetL2}"/></label>
                     <label>相关旧记忆容量<small>临时找回的旧内容。推荐 1500。</small><input type="number" id="lm-b4" min="0" value="${s.budgetL4}"/></label>
-                    <label>当前事实的发送位置<small>数字越大越靠前。推荐 100。</small><input type="number" id="lm-d1" min="0" value="${s.depthL1}"/></label>
-                    <label>剧情摘要的发送位置<small>数字越大越靠前。推荐 100。</small><input type="number" id="lm-d2" min="0" value="${s.depthL2}"/></label>
                     <label>相关旧记忆的发送位置<small>推荐 4，让临时找回的内容靠近最近对话。</small><input type="number" id="lm-d4" min="0" value="${s.depthL4}"/></label>
                 </div>
             </details>
@@ -2126,8 +2124,6 @@ function bindSettingsTab(body) {
             minRecentPairs: readNumber('#lm-n', 6, 1),
             chapterSize: readNumber('#lm-ch', 25, 5),
             proofreadEvery: readNumber('#lm-pr', 75, 5),
-            depthL1: readNumber('#lm-d1', 100, 0),
-            depthL2: readNumber('#lm-d2', 100, 0),
             depthL4: readNumber('#lm-d4', 4, 0),
             l4Enabled: body.querySelector('#lm-l4').checked,
             volumeCompressConfirm: body.querySelector('#lm-vc').checked,

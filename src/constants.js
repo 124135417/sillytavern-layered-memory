@@ -70,7 +70,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     recentPairs: 3,
     chapterSize: 25,
     proofreadEvery: 75,
+    /** @deprecated L1 is a mandatory IN_PROMPT block; retained for settings compatibility. */
     depthL1: 100,
+    /** @deprecated L2 is a mandatory IN_PROMPT block; retained for settings compatibility. */
     depthL2: 100,
     depthL4: 4,
     volumeCompressConfirm: false,
