@@ -74,8 +74,10 @@ assert.ok(auxiliaryModel.includes('settings: settingsOverride = null'),
     'connection tests must accept temporary form settings');
 assert.ok(panel.includes('testAuxModelConnection({ settings: readFormDraft() })'),
     'connection testing must use the unsaved form draft');
-assert.ok(panel.includes("jobType.startsWith('history_rebuild_')") && panel.includes('await startHistoryRebuild'),
-    'retrying a failed rebuild task must resume rebuild state');
+assert.ok(panel.includes("jobType.startsWith('history_rebuild_')") && panel.includes('await retryHistoryRebuildJob(jobId)'),
+    'retrying a failed rebuild task must requeue only that exact task');
+assert.ok(!panel.includes("jobType.startsWith('history_rebuild_')) {\n                    await startHistoryRebuild()"),
+    'retrying one failed rebuild task must never restart the whole rebuild');
 assert.ok(!panel.includes('第 ${item.pairIndex} 轮'),
     'zero-based pair indexes must never be exposed');
 assert.ok(panel.includes('pairFloorRangeLabel(item.pairIndex)'),

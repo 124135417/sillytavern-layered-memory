@@ -16,6 +16,7 @@ import {
     normalizeHistoryUserSummary,
     requestHistoryRebuildAbort,
     restoreRebuildBackup,
+    retryHistoryRebuildJob,
     startHistoryRebuild,
     startHistoryRebuildChapters,
 } from '../rebuild.js';
@@ -1003,8 +1004,8 @@ function bindQueueControls(body) {
             button.disabled = true;
             if (button.dataset.queueAct === 'retry') {
                 if (jobType.startsWith('history_rebuild_')) {
-                    await startHistoryRebuild();
-                    toastr?.info?.('安全重建已经继续，只会补上尚未完成的内容。');
+                    const retried = await retryHistoryRebuildJob(jobId);
+                    if (retried) toastr?.info?.('已经从这个失败点继续，不会重做已完成的内容。');
                 } else {
                     retryFailedJob(jobId);
                 }

@@ -11,6 +11,7 @@ const {
     normalizeHistoryUserSummary,
     recoverEvidence,
     seedStagingFromCurrent,
+    mergeStagingFromCurrent,
     validateHistorySegment,
 } = await import('../src/rebuild.js');
 const { summarizeChapterNotes, validateChapterArchive } = await import('../src/archive.js');
@@ -512,6 +513,18 @@ const grownMissing = buildMissingRebuildSegmentPayloads(grownPairs, new Set(reus
 assert.equal(grownMissing.flatMap(item => item.pairIndexes).length, 168,
     'fill-missing mode should enqueue only floors 132 through 299');
 assert.equal(grownMissing[0].pairIndexes[0], 132);
+
+const partialDraft = {
+    baseline: 131, turn_summaries: grownData.turn_summaries.slice(0, 13),
+    entries: [], fact_events: [], fact_candidates: [], chapters: [], extracted_keys: [], completed: 13,
+};
+mergeStagingFromCurrent(grownData, partialDraft, grownPairs);
+assert.equal(partialDraft.turn_summaries.length, 132,
+    'filling gaps in a paused draft must merge all matching formal summaries');
+assert.equal(partialDraft.turn_summaries[0], grownData.turn_summaries[0],
+    'an already generated draft summary must win over the formal copy for the same floor');
+assert.equal(partialDraft.completed, 132);
+assert.equal(partialDraft.reuse_existing, true);
 
 const stoppedEmptyDraft = {
     ...grownData,

@@ -6,7 +6,7 @@ import { QUEUE_PRIORITY, SLOTS } from './constants.js';
 import { captureBranchCheckpoint } from './branch.js';
 import { getPairTexts, getPairs } from './ids.js';
 import { HISTORY_SEGMENT_JSON_SCHEMA, HISTORY_SEGMENT_SYSTEM } from './prompts.js';
-import { cancelQueuedJobs, clearFailedJobs, enqueue, getQueueSnapshot } from './queue.js';
+import { cancelQueuedJobs, clearFailedJobs, enqueue, getQueueSnapshot, retryFailedJob } from './queue.js';
 import { normalizeGeneratedEntity, validateMemoryEntryShape } from './quality.js';
 import { appendLog, assertChatData, getChatData, getContext, getSettings, saveChatData } from './settings.js';
 import { evidenceInSource } from './tokens.js';
@@ -112,6 +112,41 @@ export function seedStagingFromCurrent(data, staging, pairs) {
             && Array.from({ length: size }, (_, offset) => start + offset).every(floor => reusedFloors.has(floor));
     }).map(clone);
     staging.completed = staging.turn_summaries.length;
+    return staging;
+}
+
+export function mergeStagingFromCurrent(data, staging, pairs) {
+    const seeded = createStaging(pairs.length, staging.baseline, true);
+    seedStagingFromCurrent(data, seeded, pairs);
+    const draftedFloors = new Set((staging.turn_summaries || []).map(item => item.pairIndex));
+    const draftedRanges = new Set((staging.chapters || []).map(chapter => JSON.stringify(chapter.floor_range)));
+
+    staging.turn_summaries = [
+        ...(staging.turn_summaries || []),
+        ...seeded.turn_summaries.filter(item => !draftedFloors.has(item.pairIndex)),
+    ].sort((a, b) => a.pairIndex - b.pairIndex);
+    staging.fact_events = [
+        ...(staging.fact_events || []),
+        ...seeded.fact_events.filter(item => !draftedFloors.has(item.floor)),
+    ];
+    staging.fact_candidates = [
+        ...(staging.fact_candidates || []),
+        ...seeded.fact_candidates.filter(item => !draftedFloors.has(item.floor)),
+    ];
+    staging.chapters = [
+        ...(staging.chapters || []),
+        ...seeded.chapters.filter(chapter => !draftedRanges.has(JSON.stringify(chapter.floor_range))),
+    ].sort((a, b) => a.floor_range[0] - b.floor_range[0]);
+    staging.extracted_keys = [...new Set([
+        ...(staging.extracted_keys || []),
+        ...seeded.extracted_keys,
+    ])];
+    staging.entries = [];
+    for (const event of staging.fact_events.slice().sort((a, b) => a.floor - b.floor)) {
+        upsertStagedFact(staging, event.fact, event.floor);
+    }
+    staging.completed = staging.turn_summaries.length;
+    staging.reuse_existing = true;
     return staging;
 }
 
@@ -810,6 +845,7 @@ export async function startHistoryRebuild({ reuseExisting = false } = {}) {
         data.history_rebuild = createStaging(pairs.length, data.progress?.baseline_pair ?? -1, reuseExisting);
         if (reuseExisting) seedStagingFromCurrent(data, data.history_rebuild, pairs);
     } else {
+        if (reuseExisting) mergeStagingFromCurrent(data, data.history_rebuild, pairs);
         data.history_rebuild.status = 'running';
         data.history_rebuild.error = null;
         data.history_rebuild.stoppedAt = null;
@@ -817,6 +853,34 @@ export async function startHistoryRebuild({ reuseExisting = false } = {}) {
     await saveChatData(data);
     enqueueMissingRebuildJobs(data, pairs);
     return getHistoryRebuildSnapshot();
+}
+
+export async function retryHistoryRebuildJob(jobId) {
+    const data = getChatData();
+    const state = rebuildState(data);
+    const job = getQueueSnapshot().failed.find(item => item.id === jobId);
+    if (!state || !job || !REBUILD_JOB_TYPES.includes(job.type)) return false;
+    if (job.type === 'history_rebuild_segment' && state.stage_mode !== 'turns') {
+        throw new Error('这条逐轮任务不属于当前重建阶段，请从“对话记录”继续。');
+    }
+    if (job.type === 'history_rebuild_chapter' && state.stage_mode !== 'chapters') {
+        throw new Error('这条章节任务不属于当前重建阶段，请从“章节摘要”继续。');
+    }
+    abortRequested = false;
+    state.status = 'running';
+    state.error = null;
+    state.stoppedAt = null;
+    state.phase = rebuildStage(job, state);
+    await saveChatData(data);
+    const retried = retryFailedJob(jobId);
+    if (!retried) {
+        state.status = 'error';
+        state.error = '没有找到需要重新处理的任务';
+        await saveChatData(data);
+    } else {
+        enqueueMissingRebuildJobs(data, pairsForActiveRebuild(data, state));
+    }
+    return retried;
 }
 
 export async function startHistoryRebuildChapters() {
