@@ -44,12 +44,14 @@ const DRAWER_ID = 'layered-memory-drawer';
 const BACKDROP_ID = 'layered-memory-backdrop';
 const SETTINGS_CARD_ID = 'layered-memory-settings-entry';
 const MENU_ENTRY_ID = 'layered-memory-menu-entry';
+const GEOMETRY_STYLE_ID = 'layered-memory-viewport-geometry';
 let lastDrawerTrigger = null;
 let lastConnectionTest = null;
 let settingsDirty = false;
 let currentFactView = 'active';
 
 export function injectPanel() {
+    injectViewportGeometryStyle();
     if (document.getElementById(DRAWER_ID)) {
         return;
     }
@@ -155,6 +157,52 @@ export function injectPanel() {
     renderShellStatus();
 }
 
+function injectViewportGeometryStyle() {
+    if (document.getElementById(GEOMETRY_STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = GEOMETRY_STYLE_ID;
+    // Keep critical viewport geometry with the JavaScript bundle as well as the
+    // external stylesheet. Some CDN/browser combinations retain an older CSS
+    // asset after an extension update; stale layout CSS must never re-anchor
+    // the modal to SillyTavern's right-side settings host.
+    style.textContent = `
+        #${ROOT_ID} {
+            position: fixed !important;
+            top: clamp(44px, 6vh, 72px) !important;
+            right: 0 !important;
+            bottom: auto !important;
+            left: 0 !important;
+            width: min(1120px, calc(100% - clamp(24px, 4vw, 64px))) !important;
+            height: calc(100dvh - clamp(60px, 9vh, 104px)) !important;
+            margin-inline: auto !important;
+            transform-origin: top center !important;
+        }
+        @media (max-width: 899px) {
+            #${ROOT_ID} {
+                inset: 50px 8px auto !important;
+                width: auto !important;
+                height: calc(100dvh - 58px) !important;
+                margin-inline: 0 !important;
+            }
+        }
+        @media (max-width: 599px) {
+            #${ROOT_ID} {
+                inset: 0 !important;
+                width: auto !important;
+                height: 100dvh !important;
+            }
+        }
+        @media (max-height: 520px) and (max-width: 899px) {
+            #${ROOT_ID} {
+                inset: 6px !important;
+                width: auto !important;
+                height: calc(100dvh - 12px) !important;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+}
+
 function refreshQueueUi() {
     const panel = document.getElementById(ROOT_ID);
     if (!panel || panel.hasAttribute('hidden')) {
@@ -194,27 +242,35 @@ function workflowPercent(completed, total) {
     return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
 }
 
-function renderTurnProgressCard(snapshot, { controls = false, showOpen = true } = {}) {
+function renderTurnProgressCard(snapshot, { controls = false, showOpen = true, preservedCount = 0 } = {}) {
     const progress = snapshot.turnProgress || { status: 'idle', completed: 0, total: snapshot.total || 0 };
     const percent = workflowPercent(progress.completed, progress.total);
+    const remaining = Math.max(0, progress.total - progress.completed);
     const active = snapshot.stage_mode === 'turns' && ['running', 'stopping'].includes(snapshot.status);
     const failed = snapshot.stage_mode === 'turns' && snapshot.status === 'error';
+    const paused = snapshot.stage_mode === 'turns' && snapshot.status === 'stopped';
+    const preservingFormal = preservedCount > 0 && snapshot.status !== 'complete' && progress.completed === 0;
     const title = progress.status === 'complete' ? '逐轮记录已经齐全'
         : progress.status === 'partial' ? '逐轮记录还有遗漏'
         : failed ? '逐轮记录生成遇到问题'
-            : active ? '正在生成逐轮记录'
-                : progress.completed ? '逐轮记录尚未完成' : '还没有生成逐轮记录';
+            : active ? `正在整理，还剩 ${remaining} 轮`
+                : paused ? `整理已暂停，还有 ${remaining} 轮`
+                : progress.completed ? '逐轮记录尚未完成'
+                    : preservingFormal ? `本次重建还有 ${remaining} 轮待整理` : '还没有生成逐轮记录';
     const detail = failed ? snapshot.error
         : active ? snapshot.stage
             : progress.status === 'complete' ? '可以随时查看和修改；完成章节后这些记录也不会消失。'
                 : progress.status === 'partial' ? `当前聊天共有 ${progress.total} 轮，已有 ${progress.completed} 轮记录仍与原文一致；可以只补缺少部分。`
-                : '先逐轮整理用户输入和角色回应，再决定是否生成章节摘要。';
+                : preservingFormal ? `原来的 ${preservedCount} 条正式记录仍然保留并显示，不需要重新付费才能查看。`
+                    : '先逐轮整理用户输入和角色回应，再决定是否生成章节摘要。';
     const label = progress.status === 'complete' ? '重新生成全部逐轮记录'
         : progress.status === 'partial' ? '补齐缺少的逐轮记录'
         : ['error', 'stopped'].includes(progress.status) ? '继续生成逐轮记录'
             : '生成逐轮记录';
+    const progressValueLabel = snapshot.stage_mode === 'turns' && snapshot.status !== 'complete'
+        ? `还剩 ${remaining} 轮` : `${progress.completed} / ${progress.total} 轮`;
     return `<section class="lm-backfill-card" data-workflow="turns" data-state="${escapeHtml(progress.status)}">
-        <div class="lm-backfill-heading"><div><span class="lm-kicker">第一步 · 可独立使用</span><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${progress.completed} / ${progress.total} 轮</strong></div>
+        <div class="lm-backfill-heading"><div><span class="lm-kicker">第一步 · 可独立使用</span><b>${escapeHtml(title)}</b><p>${escapeHtml(detail || '')}</p></div><strong>${escapeHtml(progressValueLabel)}</strong></div>
         <progress max="100" value="${percent}" aria-label="逐轮记录进度：${percent}%">${percent}%</progress>
         <div class="lm-backfill-meta"><span>${percent}%</span><span>${Number(snapshot.warningCount) ? `已忽略 ${snapshot.warningCount} 条证据不可靠的事实` : '没有未解决的逐轮错误'}</span></div>
         ${controls ? `<div class="lm-settings-actions"><button type="button" class="lm-button" data-rebuild-action="turns" data-rebuild-mode="${progress.status === 'partial' ? 'reuse' : 'full'}" ${active || snapshot.stage_mode === 'chapters' && snapshot.status === 'running' ? 'disabled' : ''}>${escapeHtml(label)}</button>${progress.status === 'partial' ? '<button type="button" class="lm-text-button" data-rebuild-action="turns" data-rebuild-mode="full">放弃旧结果，全部重新生成</button>' : ''}${showOpen ? '<button type="button" class="lm-text-button" data-open-workflow="turns">查看逐轮记录</button>' : ''}${active ? '<button type="button" class="lm-text-button" data-rebuild-action="stop">停止</button>' : ''}</div>` : ''}
@@ -473,6 +529,7 @@ function renderShellStatus() {
     }
     const maxSealed = pairs.at(-1)?.pairIndex ?? -1;
     const rebuild = getHistoryRebuildSnapshot();
+    const formalTurnCount = normalizedTurnSummaries(data).length;
     let syncLabel;
     if (rebuild?.turnProgress?.status === 'complete') {
         syncLabel = `已整理 ${rebuild.turnProgress.completed} / ${rebuild.turnProgress.total} 轮`;
@@ -485,7 +542,10 @@ function renderShellStatus() {
         syncLabel = `章节摘要 ${rebuild.chapterProgress?.completed || 0} / ${rebuild.chapterProgress?.total || 0} 章${needsAttention}`;
     } else if (rebuild?.stage_mode === 'turns' && ['running', 'stopping', 'stopped', 'error'].includes(rebuild.status)) {
         const needsAttention = ['stopped', 'error'].includes(rebuild.status) ? ' · 需要继续' : '';
-        syncLabel = `逐轮记录 ${rebuild.turnProgress?.completed || 0} / ${rebuild.turnProgress?.total || 0} 轮${needsAttention}`;
+        const remaining = Math.max(0, (rebuild.turnProgress?.total || 0) - (rebuild.turnProgress?.completed || 0));
+        syncLabel = formalTurnCount
+            ? `还有 ${remaining} 轮待重新整理 · 原记录 ${formalTurnCount} 条仍可查看${needsAttention}`
+            : `还有 ${remaining} 轮尚未整理${needsAttention}`;
     } else if (syncedThrough >= liveStart) {
         syncLabel = syncedThrough === maxSealed ? `已整理到第 ${syncedThrough} 轮` : `已整理到第 ${syncedThrough} 轮 · 后面有遗漏`;
     } else {
@@ -1122,10 +1182,21 @@ function openReportDialog({ entryId = null, type = 'miss', pairIndex = null } = 
     alert('已保存这条纠错记录。以后可以在“设置 → 开发者工具”中查看。');
 }
 
-function turnSummaryDisplaySource(data) {
+export function turnSummaryDisplaySource(data) {
     const rebuild = data.history_rebuild;
-    const staged = rebuild && rebuild.status !== 'complete' && Array.isArray(rebuild.turn_summaries);
-    return { items: staged ? rebuild.turn_summaries : currentMatchingTurnSummaries(data), staged };
+    const rebuilding = rebuild && rebuild.status !== 'complete' && Array.isArray(rebuild.turn_summaries);
+    const stagedItems = rebuilding ? normalizedTurnSummaries({ turn_summaries: rebuild.turn_summaries }) : [];
+    if (stagedItems.length) return { items: rebuild.turn_summaries, staged: true, source: 'staged' };
+
+    const matchingFormal = currentMatchingTurnSummaries(data);
+    const rawFormal = data.turn_summaries || [];
+    const items = matchingFormal.length ? matchingFormal : rawFormal;
+    return {
+        items,
+        staged: false,
+        source: rebuilding && items.length ? 'formal_during_rebuild'
+            : matchingFormal.length ? 'formal' : rawFormal.length ? 'legacy_formal' : 'empty',
+    };
 }
 
 function renderTurnsTab() {
@@ -1133,6 +1204,7 @@ function renderTurnsTab() {
     const snapshot = getHistoryRebuildSnapshot();
     const source = turnSummaryDisplaySource(data);
     const turns = normalizedTurnSummaries({ turn_summaries: source.items });
+    const formalCount = normalizedTurnSummaries(data).length;
     const size = getSettings().chapterSize || 25;
     const groups = [];
     for (let offset = 0; offset < turns.length; offset += size) {
@@ -1140,9 +1212,21 @@ function renderTurnsTab() {
         groups.push({ items, partial: items.length < size });
     }
     const chapterRunning = snapshot.stage_mode === 'chapters' && ['running', 'stopping'].includes(snapshot.status);
-    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">每一轮都保留</span><h3>逐轮记录</h3><p>这里与章节摘要互相独立。完成章节后仍可查看和编辑每一轮。</p></div><div class="lm-page-count">${turns.length} / ${snapshot.turnProgress?.total || turns.length} 轮</div></div>`;
-    html += `<div class="lm-workflow-progress">${renderTurnProgressCard(snapshot, { controls: true, showOpen: false })}</div>`;
-    html += `<aside class="lm-quality-alert"><span class="fa-solid fa-pen" aria-hidden="true"></span><div><strong>${source.staged ? '当前显示重建暂存记录' : '编辑会保留为人工修改'}</strong><p>${chapterRunning ? '章节正在生成；为避免当前章节使用旧内容，请先停止章节任务再编辑。' : '编辑这里只改变剧情记录；人物身份、关系和其他结构化事实请到“当前记忆”修改。'}</p></div></aside>`;
+    const remaining = Math.max(0, (snapshot.turnProgress?.total || 0) - (snapshot.turnProgress?.completed || 0));
+    const countLabel = source.source === 'staged' ? `新记录 ${turns.length} 条 · 还剩 ${remaining} 轮`
+        : source.source === 'formal_during_rebuild' ? `正式记录 ${turns.length} 条 · 重建还剩 ${remaining} 轮`
+            : `${turns.length} / ${snapshot.turnProgress?.total || turns.length} 轮`;
+    const sourceTitle = source.source === 'staged' ? '当前显示本次重建草稿'
+        : source.source === 'formal_during_rebuild' ? '本次重建尚无草稿，当前显示原来的正式记录'
+            : source.source === 'legacy_formal' ? '当前显示旧版本保存的正式记录'
+                : '编辑会保留为人工修改';
+    const sourceDetail = source.source === 'formal_during_rebuild'
+        ? `原来的 ${formalCount} 条记录没有被删除；本次重建还有 ${remaining} 轮未整理。`
+        : chapterRunning ? '章节正在生成；为避免当前章节使用旧内容，请先停止章节任务再编辑。'
+            : '编辑这里只改变剧情记录；人物身份、关系和其他结构化事实请到“当前记忆”修改。';
+    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">每一轮都保留</span><h3>逐轮记录</h3><p>这里与章节摘要互相独立。完成章节后仍可查看和编辑每一轮。</p></div><div class="lm-page-count">${escapeHtml(countLabel)}</div></div>`;
+    html += `<div class="lm-workflow-progress">${renderTurnProgressCard(snapshot, { controls: true, showOpen: false, preservedCount: formalCount })}</div>`;
+    html += `<aside class="lm-quality-alert"><span class="fa-solid fa-pen" aria-hidden="true"></span><div><strong>${escapeHtml(sourceTitle)}</strong><p>${escapeHtml(sourceDetail)}</p></div></aside>`;
     for (const group of groups.reverse()) {
         html += renderTurnSummaryDisclosure(group.items, {
             draft: source.staged,
@@ -1159,12 +1243,17 @@ function renderTurnsTab() {
 function renderChaptersTab() {
     const data = getChatData();
     const snapshot = getHistoryRebuildSnapshot();
-    const staged = data.history_rebuild && data.history_rebuild.status !== 'complete' && Array.isArray(data.history_rebuild.chapters);
+    const rebuilding = data.history_rebuild && data.history_rebuild.status !== 'complete' && Array.isArray(data.history_rebuild.chapters);
+    const staged = rebuilding && data.history_rebuild.chapters.length > 0;
+    const showingPreserved = rebuilding && !staged && (data.chapters || []).length > 0;
     const chapters = [...(staged ? data.history_rebuild.chapters : (data.chapters || []))]
         .sort((a, b) => (b.floor_range?.[1] || 0) - (a.floor_range?.[1] || 0));
     const volumes = staged ? [] : (data.volumes || []);
     let html = `<div class="lm-page-heading"><div><span class="lm-kicker">按章节回顾</span><h3>章节摘要</h3><p>只根据已经确认的逐轮记录生成；它有自己的任务和进度。</p></div><div class="lm-page-count">${snapshot.chapterProgress?.completed || chapters.length} / ${snapshot.chapterProgress?.total || chapters.length} 章</div></div>`;
     html += `<div class="lm-workflow-progress">${renderChapterProgressCard(snapshot, { controls: true, showOpen: false })}</div>`;
+    if (showingPreserved) {
+        html += `<aside class="lm-quality-alert"><span class="fa-solid fa-book" aria-hidden="true"></span><div><strong>本次重建尚无章节草稿，当前显示原来的章节摘要</strong><p>原来的 ${chapters.length} 章没有被删除；重建全部通过后才会一次性替换。</p></div></aside>`;
+    }
     if (volumes.length) {
         html += '<section class="lm-volume-strip"><h4>很久以前的剧情</h4><div>';
         for (const v of volumes) {

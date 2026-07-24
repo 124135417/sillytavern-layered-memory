@@ -1,3 +1,4 @@
+/* Filename is versioned so extension/CDN updates cannot retain stale modal geometry. */
 :root {
     --lm-bg: #121212;
     --lm-surface: #1b1b1b;

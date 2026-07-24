@@ -17,7 +17,7 @@ const { summarizeChapterNotes, validateChapterArchive } = await import('../src/a
 const { formatRebuildFloorList, rebuildStage } = await import('../src/rebuild.js');
 const { handleChapterSummaryJob, markChapterStaleForTurnSummaryEdit } = await import('../src/chapter.js');
 const { displayNarrativeText, isUsableMemoryEntry } = await import('../src/quality.js');
-const { normalizedTurnSummaries, uncoveredTurnSummaryGroups } = await import('../src/ui/panel.js');
+const { normalizedTurnSummaries, turnSummaryDisplaySource, uncoveredTurnSummaryGroups } = await import('../src/ui/panel.js');
 const { renderL1Block } = await import('../src/render.js');
 const { validateVolumeResult } = await import('../src/volume.js');
 const { getPairs } = await import('../src/ids.js');
@@ -478,5 +478,14 @@ const grownMissing = buildMissingRebuildSegmentPayloads(grownPairs, new Set(reus
 assert.equal(grownMissing.flatMap(item => item.pairIndexes).length, 168,
     'fill-missing mode should enqueue only floors 132 through 299');
 assert.equal(grownMissing[0].pairIndexes[0], 132);
+
+const stoppedEmptyDraft = {
+    ...grownData,
+    history_rebuild: { status: 'stopped', stage_mode: 'turns', total: 300, completed: 0, turn_summaries: [] },
+};
+const preservedDisplay = turnSummaryDisplaySource(stoppedEmptyDraft);
+assert.equal(preservedDisplay.source, 'formal_during_rebuild');
+assert.equal(preservedDisplay.items.length, 132,
+    'an empty or paused rebuild draft must not hide the previously saved formal turn records');
 
 console.log('rebuild quality smoke: validation gates, visible turn records, and atomic replacement passed');

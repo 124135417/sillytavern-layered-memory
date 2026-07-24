@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
     <title>分层长程记忆 UI Harness</title>
-    <link rel="stylesheet" href="../style.css"/>
+    <link rel="stylesheet" href="../style-v0.10.2.css"/>
     <style>
         :root {
             --SmartThemeBlurTintColor: #15171f;
@@ -20,6 +20,12 @@
         #extensionsMenu { display: none; }
         #extensions_settings { width: 320px; margin: 32px; }
         #hostile-mobile-controls { display: none; }
+        body.simulate-stale-layout .layered-memory-root {
+            right: 32px;
+            left: auto;
+            margin-inline: 0;
+            transform-origin: top right;
+        }
         @media (max-width: 599px) {
             #top-settings-holder { display: none; }
             #hostile-mobile-controls {
@@ -51,6 +57,7 @@
     <script type="module">
         const now = Date.now();
         const harnessMode = new URLSearchParams(location.search).get('mode') || 'complete';
+        if (harnessMode === 'stale-css') document.body.classList.add('simulate-stale-layout');
         const chatPairCount = harnessMode === 'grown' ? 300 : 132;
         const recordedPairCount = harnessMode === 'grown' ? 132 : chatPairCount;
         const chat = [];
@@ -102,6 +109,8 @@
             quarantined_entries: [{ id: 'bad1', slot: 'world', subject: '', value: 'undefined', quarantineReason: '缺少明确主体；缺少事实内容' }],
             history_rebuild: harnessMode === 'review'
                 ? { status: 'review', stage_mode: 'turns', total: 132, completed: 132, phase: '逐轮记录已经生成，等待检查和修改', turn_summaries: structuredClone(turnSummaries), entries: [], fact_events: [], chapters: [], extracted_keys: [], warnings: [], unresolved_floors: [], startedAt: now - 100000 }
+                : harnessMode === 'empty-draft'
+                    ? { status: 'stopped', stage_mode: 'turns', total: 132, completed: 0, phase: '逐轮记录重建已暂停', turn_summaries: [], entries: [], fact_events: [], chapters: [], extracted_keys: [], warnings: [], unresolved_floors: [], startedAt: now - 100000 }
                 : harnessMode === 'chapter_error'
                     ? { status: 'error', stage_mode: 'chapters', total: 132, completed: 132, phase: '正在合并第 50–74 轮剧情', error: '章节生成失败，可继续处理', turn_summaries: structuredClone(turnSummaries), entries: [], fact_events: [], chapters: [chapter(1, 0, 24), chapter(2, 25, 49)], extracted_keys: [], warnings: [], unresolved_floors: [], startedAt: now - 100000 }
                     : { status: 'complete', stage_mode: 'chapters', total: 132, completed: 132, phase: '安全重建完成', warnings: ['第 31 轮已忽略一条不可靠事实'], startedAt: now - 100000, finishedAt: now },

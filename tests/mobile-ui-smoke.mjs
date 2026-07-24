@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const [panel, css] = await Promise.all([
     readFile(new URL('../src/ui/panel.js', import.meta.url), 'utf8'),
-    readFile(new URL('../style.css', import.meta.url), 'utf8'),
+    readFile(new URL('../style-v0.10.2.css', import.meta.url), 'utf8'),
 ]);
 
 assert.match(panel, /value="cancel" formnovalidate[^>]*aria-label="关闭"/u,
@@ -20,6 +20,10 @@ assert.match(panel, /id="lm-tab-chapters"[^>]*data-tab="chapters"[^>]*>章节摘
     'chapter summaries need a separate navigation destination');
 assert.match(panel, /document\.body\.appendChild\(panel\)/u,
     'the fixed panel must be portaled outside SillyTavern responsive menu hosts');
+assert.match(panel, /GEOMETRY_STYLE_ID = 'layered-memory-viewport-geometry'/u,
+    'critical viewport positioning must have a JavaScript-delivered cache fallback');
+assert.match(panel, /#\$\{ROOT_ID\}[\s\S]*right: 0 !important;[\s\S]*left: 0 !important;[\s\S]*margin-inline: auto !important;/u,
+    'the runtime cache fallback must force true viewport centering on desktop');
 assert.match(panel, /panel\?\.querySelectorAll\('\.lm-tab'\)/u,
     'tab listeners must bind to the portaled panel rather than the launcher host');
 assert.match(panel, /document\.getElementById\(ROOT_ID\)[\s\S]*openMemoryCenter\(memoryPanel\?\.hasAttribute\('hidden'\)\)/u,
