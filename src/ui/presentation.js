@@ -34,7 +34,7 @@ export function workflowPresentation({ status = 'idle', completed = 0, total = 0
     const failed = Math.max(0, Number(failedCount) || 0);
     const active = ['running', 'stopping'].includes(status);
     const paused = status === 'stopped';
-    const complete = safeTotal > 0 && safeRemaining === 0 && failed === 0 && !active;
+    const complete = safeTotal > 0 && safeRemaining === 0 && failed === 0 && !active && status !== 'error';
     const error = failed > 0 || status === 'error';
     const state = complete ? 'complete'
         : error ? 'error'

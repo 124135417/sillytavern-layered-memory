@@ -159,7 +159,7 @@ export function factCandidateView(data) {
             reason = '你已选择不采用这条内容。';
         } else if (exact) {
             status = 'active';
-            reason = '正在作为当前事实发送给模型。';
+            reason = '与当前记忆一致。';
         } else if (candidate.validation_errors?.length) {
             status = 'unverified';
             reason = `自动检查未通过：${candidate.validation_errors.join('；')}`;

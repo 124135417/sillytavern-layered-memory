@@ -14,9 +14,9 @@ const CONNECTION_TEST_USER_PROMPT = 'Reply with exactly OK.';
  * category: success | unavailable | auth | rate_limit | timeout | network |
  *           not_found | bad_request | server_error | empty_response | request_failed
  */
-export async function testAuxModelConnection({ timeoutMs = CONNECTION_TEST_TIMEOUT_MS } = {}) {
+export async function testAuxModelConnection({ timeoutMs = CONNECTION_TEST_TIMEOUT_MS, settings: settingsOverride = null } = {}) {
     const startedAt = Date.now();
-    const settings = getSettings();
+    const settings = settingsOverride || getSettings();
     const ctx = getContext();
     const boundedTimeoutMs = normalizeTimeout(timeoutMs);
     const source = normalizeModelSource(settings.memoryModelSource);

@@ -22,6 +22,7 @@ export function openFormDialog({
     description = '',
     submitLabel,
     cancelLabel = '不保存',
+    showCancel = true,
     tone = 'default',
     className = '',
     buildFields,
@@ -61,7 +62,8 @@ export function openFormDialog({
     cancel.type = 'button';
     const submit = makeElement('button', `lm-button ${tone === 'danger' ? 'lm-button-danger' : 'lm-button-primary'}`, submitLabel);
     submit.type = 'submit';
-    footer.append(cancel, submit);
+    if (showCancel) footer.appendChild(cancel);
+    footer.appendChild(submit);
     form.append(header, content, footer);
     dialog.appendChild(form);
     document.body.appendChild(dialog);
@@ -74,7 +76,7 @@ export function openFormDialog({
         };
         const cancelDialog = () => dialog.close('cancel');
         close.addEventListener('click', cancelDialog);
-        cancel.addEventListener('click', cancelDialog);
+        if (showCancel) cancel.addEventListener('click', cancelDialog);
         dialog.addEventListener('cancel', event => {
             event.preventDefault();
             cancelDialog();
@@ -184,7 +186,7 @@ export function openMessageDialog({ kicker = '提示', title, description, close
         title,
         description,
         submitLabel: closeLabel,
-        cancelLabel: closeLabel,
+        showCancel: false,
         buildFields() {},
         readValue: () => true,
     });
