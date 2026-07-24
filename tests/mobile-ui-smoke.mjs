@@ -33,6 +33,20 @@ assert.match(css, /--lm-space-1: 4px;[\s\S]*--lm-space-8: 32px;/u,
 assert.match(css, /--lm-page-gutter: 24px/u, 'desktop page gutters must be 24px');
 assert.match(css, /@media \(max-width: 599px\)[\s\S]*--lm-page-gutter: 16px/u,
     'phone page gutters must be 16px');
+assert.match(panel, /class="lm-page-content lm-turns-content"/u,
+    'turn progress, notices, and records must share one page-level spacing container');
+assert.match(panel, /class="lm-page-content lm-chapters-content"/u,
+    'chapter progress, notices, archive cards, and timeline must share one page-level spacing container');
+assert.match(panel, /class="lm-page-content lm-review-content"/u,
+    'review cards and empty states must share the same page-level spacing container');
+assert.match(css, /\.lm-page-content \{[^}]*gap: var\(--lm-space-4\);[^}]*padding: var\(--lm-space-6\) var\(--lm-page-gutter\) var\(--lm-space-8\);/u,
+    'desktop content pages must use the shared 16px section gap and 24px page gutter');
+assert.match(css, /@media \(max-width: 599px\)[\s\S]*\.lm-page-content \{ padding: var\(--lm-space-4\) var\(--lm-page-gutter\) var\(--lm-space-6\); \}/u,
+    'phone content pages must start with the shared 16px inset');
+assert.doesNotMatch(css, /\.lm-workflow-progress \{[^}]*var\(--lm-page-gutter\)/u,
+    'child sections must not reimplement page gutters');
+assert.doesNotMatch(css, /\.lm-turn-records(?:-loose)? \{[^}]*margin:[^;}]*(?:14px|18px|48px)/u,
+    'turn record rows must not retain arbitrary outer offsets');
 assert.match(css, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/u,
     'five phone navigation items must share equal width');
 assert.match(css, /\.lm-tabs \{[^}]*overflow: hidden;/u,
