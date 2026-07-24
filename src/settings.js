@@ -35,13 +35,6 @@ export function getSettings() {
     if (!Object.hasOwn(settings, 'directModel')) {
         settings.directModel = settings.fallbackModel || '';
     }
-    if (!Object.hasOwn(settings, 'minRecentPairs')) {
-        const legacyRecent = Number(settings.recentPairs);
-        settings.minRecentPairs = Math.max(6, Number.isFinite(legacyRecent) ? legacyRecent : 0);
-    }
-    if (!['compact', 'balanced', 'detailed', 'custom'].includes(settings.historyBudgetMode)) {
-        settings.historyBudgetMode = 'balanced';
-    }
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
         if (!Object.hasOwn(settings, key)) {
             settings[key] = structuredClone(DEFAULT_SETTINGS[key]);

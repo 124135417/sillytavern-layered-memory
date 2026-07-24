@@ -32,7 +32,7 @@ const requiredCopy = [
     '测试连接',
     '记忆模型连接',
     '自动整理',
-    '发送范围',
+    '相关旧记忆',
     '兼容性',
     '历史与恢复',
     '高级设置',
@@ -59,6 +59,9 @@ const retiredCopy = [
     'HUMAN REVIEW',
     '当前事实的发送位置',
     '剧情摘要的发送位置',
+    '希望保留多少最近剧情',
+    '至少保留最近几轮完整对话',
+    '自定义聊天历史容量',
 ];
 for (const copy of retiredCopy) {
     assert.ok(!panel.includes(copy) && !facts.includes(copy), `retired or misleading UI copy returned: ${copy}`);

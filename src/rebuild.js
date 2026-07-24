@@ -178,7 +178,6 @@ function backupCurrent(data) {
         history_backfill: clone(data.history_backfill || {}),
         review_queue: clone(data.review_queue || []),
         notices: clone(data.notices || []),
-        context_handoff: clone(data.context_handoff || null),
         progress: clone(data.progress || {}),
     };
 }
@@ -944,7 +943,7 @@ export async function restoreRebuildBackup() {
     if (!backup || ['running', 'stopping'].includes(data.history_rebuild?.status)) return false;
     for (const key of ['state_table', 'turn_summaries', 'floor_events', 'branch_checkpoints', 'chapters', 'volumes',
         'keyword_index', 'extracted_keys', 'quarantined_entries', 'history_backfill', 'review_queue', 'notices',
-        'context_handoff', 'progress', 'fact_ledger', 'fact_decisions', 'manual_events']) {
+        'progress', 'fact_ledger', 'fact_decisions', 'manual_events']) {
         data[key] = clone(backup[key]);
     }
     data.history_rebuild = null;

@@ -13,7 +13,6 @@ const data = {
     chapters: [], volumes: [], keyword_index: {}, review_queue: [], pending_floors: [], extracted_keys: [], logs: [],
     job_queue: { scope_id: 'migration-scope', paused: true, queued: [], running: null, failed: [], updatedAt: null },
     progress: { last_chapter_end_pair: -1, pairs_since_proofread: 0, next_entry_seq: 1, next_chapter_seq: 1, baseline_pair: 3 },
-    context_handoff: null,
 };
 const chat = [];
 for (let i = 0; i < 4; i++) chat.push(message(i, true), message(i, false));

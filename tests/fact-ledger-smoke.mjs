@@ -102,6 +102,6 @@ renderedData.state_table.entries.push({ id: 'e_1', slot: 'identity', topic: '身
 assert.match(renderL1Block(renderedData, 2000, { name1: '临川', name2: '任意角色卡' }), /当前角色卡：任意角色卡/u);
 assert.doesNotMatch(renderL1Block(renderedData, 2000, { name1: '临川', name2: '任意角色卡' }), /阿尔德/u);
 renderedData.turn_summaries.push({ pairIndex: 1, summary: '发生了一件事。', story_time: time });
-assert.match(renderL2Block(renderedData, { throughPair: 1 }), /剧情时间：次日清晨/u);
+assert.match(renderL2Block(renderedData), /剧情时间：次日清晨/u);
 
 console.log('fact ledger smoke: ok');

@@ -31,16 +31,6 @@ export const QUEUE_PRIORITY = {
     history_rebuild_commit: 8,
 };
 
-/**
- * Only these generate types may trim chat.
- * Unknown / quiet variants default to NOT trimming (safer than a denylist).
- */
-export const TRIM_TYPES = new Set([
-    '',
-    'normal',
-    'group_chat',
-]);
-
 export const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     /** Explicit auxiliary-model source: direct | profile | current. */
@@ -60,14 +50,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     budgetL1: 2000,
     budgetL2: 5000,
     budgetL4: 1500,
-    /** How much of the model context the post-regex chat history may use. */
-    historyBudgetMode: 'balanced', // compact | balanced | detailed | custom
-    historyTokenBudget: 12000,
-    minRecentPairs: 6,
     /** Empty means the complete AI reply. Capture group 1 is the narrative body. */
     bodyExtractionRegex: '',
-    /** @deprecated Kept for settings migration from <= 0.2.0. */
-    recentPairs: 3,
     chapterSize: 25,
     proofreadEvery: 75,
     /** @deprecated L1 is a mandatory IN_PROMPT block; retained for settings compatibility. */
@@ -143,7 +127,5 @@ export const EMPTY_CHAT_DATA = () => ({
          */
         baseline_pair: null,
     },
-    /** Last request-only context handoff. Contains counts/ranges, never chat text. */
-    context_handoff: null,
     logs: [],
 });

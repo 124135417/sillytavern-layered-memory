@@ -129,9 +129,6 @@
             },
             history_backfill: { status: 'complete', total: 132, completed: 132, startedAt: now - 100000, finishedAt: now },
             progress: { last_chapter_end_pair: 124, pairs_since_proofread: 2, next_entry_seq: 6, next_chapter_seq: 6, baseline_pair: 131 },
-            context_handoff: harnessMode === 'actual'
-                ? { status: 'trimmed', reason: 'coverage_limit', removedThrough: 99, keptFrom: 100, historyTokensBefore: 14800, historyTokensAfter: 9100, historyBudget: 12000 }
-                : null,
             logs: [{ t: now - 50000, level: 'info', message: '提取完成 楼#126: +1 丢0 冲突0' }],
         };
         const context = {
@@ -140,7 +137,7 @@
             name2: '北港旧灯塔 · 长档测试',
             characterId: 0,
             characters: [{ name: '北港旧灯塔' }],
-            extensionSettings: { layered_memory: { enabled: true, memoryModelSource: 'profile', connectionProfile: 'writer-small', profileModelOverride: '', directBaseUrl: '', directApiKey: '', directModel: '', fallbackEnabled: false, fallbackBaseUrl: '', fallbackApiKey: '', fallbackModel: '', budgetL1: 2000, budgetL2: 5000, budgetL4: 1500, historyBudgetMode: 'balanced', historyTokenBudget: 12000, minRecentPairs: 6, recentPairs: 6, chapterSize: 25, proofreadEvery: 75, depthL1: 100, depthL2: 100, depthL4: 4, volumeCompressConfirm: false, l4Enabled: false, mentionStatMode: 'summary_and_table', chapterInputTokenCap: 20000, migrationReviewMode: false, eval_cases: [] } },
+            extensionSettings: { layered_memory: { enabled: true, memoryModelSource: 'profile', connectionProfile: 'writer-small', profileModelOverride: '', directBaseUrl: '', directApiKey: '', directModel: '', fallbackEnabled: false, fallbackBaseUrl: '', fallbackApiKey: '', fallbackModel: '', budgetL1: 2000, budgetL2: 5000, budgetL4: 1500, chapterSize: 25, proofreadEvery: 75, depthL1: 100, depthL2: 100, depthL4: 4, volumeCompressConfirm: false, l4Enabled: false, mentionStatMode: 'summary_and_table', chapterInputTokenCap: 20000, migrationReviewMode: false, eval_cases: [] } },
             chatMetadata: { layered_memory: memoryData },
             getConnectionProfiles: () => [{ id: 'writer-small', name: '记忆副模型', model: 'deepseek-v4-flash' }],
             generateRaw: async () => '{"ok":true}',

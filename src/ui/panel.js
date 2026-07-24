@@ -31,7 +31,7 @@ import {
 import { QUEUE_PRIORITY } from '../constants.js';
 import { getChatData, getSettings, saveChatData, saveSettings } from '../settings.js';
 import { updateInjection } from '../inject.js';
-import { renderL1Block, renderL2Block, renderL4Block } from '../render.js';
+import { renderL1Block, renderL4Block } from '../render.js';
 import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
@@ -1019,39 +1019,14 @@ function bindQueueControls(body) {
 function renderInjectionFooter() {
     const data = getChatData();
     const settings = getSettings();
-    const handoff = data.context_handoff;
-    const removedThrough = Number.isInteger(handoff?.removedThrough) ? handoff.removedThrough : -1;
     const l1 = renderL1Block(data, settings.budgetL1, SillyTavern.getContext());
-    const l2 = renderL2Block(data, { budget: settings.budgetL2, throughPair: removedThrough });
     const hits = settings.l4Enabled ? retrieveHits(data, settings.budgetL4) : [];
     const l4 = settings.l4Enabled ? renderL4Block(hits, settings.budgetL4) : '';
-    const pairs = getPairs();
-    const minRecent = settings.minRecentPairs || settings.recentPairs || 6;
-    const recent = pairs.slice(-minRecent);
-    const range = handoff?.status === 'trimmed'
-        ? pairFloorRangeLabel(handoff.keptFrom, pairs.at(-1)?.pairIndex ?? handoff.keptFrom, pairs)
-        : recent.length ? `至少保留${pairFloorRangeLabel(recent[0].pairIndex, recent.at(-1).pairIndex, pairs)}` : '还没有完整对话';
-    const blockedReasons = {
-        summary_gap: '较早聊天还没有被有效摘要连续覆盖，为避免断档，本轮没有精简。',
-        message_mapping: '无法安全确认请求消息对应的原楼层，为避免误删，本轮没有精简。',
-        recent_floor: '聊天还没有超过必须保留的最近轮数，本轮没有精简。',
-        archive_budget: '用于接替旧聊天的压缩档案仍然太长，为避免摘要被截断，本轮没有精简。',
-        invalid_budget: '聊天历史容量设置无效，本轮没有精简。',
-        generation_type: '这次不是普通回复，插件没有改动聊天历史。',
-    };
-    const isActual = handoff?.status === 'trimmed' || handoff?.reason === 'within_budget' || handoff?.status === 'blocked';
-    const presentation = injectionPresentation(isActual);
-    const handoffText = handoff?.status === 'trimmed'
-        ? `最近一次普通回复已用压缩档案接替${pairFloorRangeLabel(0, removedThrough, pairs)}；聊天历史约从 ${handoff.historyTokensBefore} 减至 ${handoff.historyTokensAfter} token。${handoff.reason === 'coverage_limit' ? '更早内容已精简到当前安全边界，剩余部分交给酒馆继续计算。' : ''}`
-        : handoff?.reason === 'within_budget'
-            ? `最近一次普通回复中，聊天历史约 ${handoff.historyTokensBefore} token，未超过 ${handoff.historyBudget} token 的目标。`
-            : blockedReasons[handoff?.reason] || '尚未发生下一次真实请求。以下是预计内容；真正发送时会根据当时的上下文容量决定加入哪些剧情摘要。';
+    const presentation = injectionPresentation(false);
     const preview = [
-        `【上下文交接】\n${handoffText}`,
         l1 && `【当前仍然成立的事实】\n${l1}`,
-        l2 && `【以前的剧情摘要】\n${l2}`,
+        '【剧情摘要】\n当前不发送；每轮记录、章节和卷仍保存在记忆中心，等待明确的发送规则。',
         l4 && `【与当前剧情相关的旧记忆】\n${l4}`,
-        `【最近保留的完整对话】\n${range}`,
     ].filter(Boolean).join('\n\n');
     return `
         <footer class="lm-injection-footer">
@@ -1061,9 +1036,8 @@ function renderInjectionFooter() {
             </div>
             <div class="lm-budget-chips">
                 <span>当前事实 ${estimateTokens(l1)} / ${settings.budgetL1}</span>
-                <span>剧情摘要 ${estimateTokens(l2)} / ${settings.budgetL2}</span>
+                <span>剧情摘要 当前不发送</span>
                 <span>相关旧记忆 ${settings.l4Enabled ? `${hits.length} 条` : '未开启'}</span>
-                <span>完整对话 ${escapeHtml(range)}</span>
             </div>
             <button type="button" class="lm-text-button" id="lm-preview-injection">${presentation.action}</button>
             <dialog class="lm-dialog" id="lm-injection-dialog">
@@ -1932,7 +1906,7 @@ function renderSettingsTab() {
         : baseline < 0 ? '这是一段新聊天，所有对话都会自动整理'
             : `插件将从第 ${nextFloor} 楼开始自动记录；更早的内容可以在这里补记`;
     return `
-        <div class="lm-page-heading"><div><span class="lm-kicker">使用设置</span><h3>设置</h3><p>决定以后怎样连接模型、整理对话和控制发送范围。</p></div></div>
+        <div class="lm-page-heading"><div><span class="lm-kicker">使用设置</span><h3>设置</h3><p>决定以后怎样连接模型、整理对话和使用相关旧记忆。</p></div></div>
         <div class="lm-settings-layout">
             <section class="lm-settings-section">
                 <header><div><span class="fa-solid fa-plug" aria-hidden="true"></span><div><h4>记忆模型连接</h4><p>选择用哪个模型整理记忆，并决定插件是否工作。</p></div></div></header>
@@ -1984,22 +1958,7 @@ function renderSettingsTab() {
             </section>
 
             <section class="lm-settings-section">
-                <header><div><span class="fa-solid fa-paper-plane" aria-hidden="true"></span><div><h4>发送范围</h4><p>控制聊天请求中保留多少最近剧情，以及是否找回相关旧记忆。</p></div></div></header>
-                <div class="lm-settings-fields lm-field-grid">
-                    <label>希望保留多少最近剧情？
-                        <small>插件会先让预设和正则整理聊天，再按这里的目标精简更早内容。</small>
-                        <select id="lm-history-mode">
-                            <option value="compact" ${s.historyBudgetMode === 'compact' ? 'selected' : ''}>节省上下文</option>
-                            <option value="balanced" ${s.historyBudgetMode === 'balanced' ? 'selected' : ''}>平衡（推荐）</option>
-                            <option value="detailed" ${s.historyBudgetMode === 'detailed' ? 'selected' : ''}>尽量完整</option>
-                            <option value="custom" ${s.historyBudgetMode === 'custom' ? 'selected' : ''}>使用高级设置中的自定义容量</option>
-                        </select>
-                    </label>
-                    <label>至少保留最近几轮完整对话
-                        <small>推荐 6。即使空间紧张，这些对话也不会被插件精简。</small>
-                        <input type="number" id="lm-n" min="1" value="${s.minRecentPairs}"/>
-                    </label>
-                </div>
+                <header><div><span class="fa-solid fa-paper-plane" aria-hidden="true"></span><div><h4>相关旧记忆</h4><p>按需找回与当前内容直接相关的旧人物、物品或地点。</p></div></div></header>
                 <div class="lm-settings-fields">
                     <label class="lm-switch-row"><span><b>需要时找回相关的旧记忆</b><small>当前对话提到旧人物、物品或地点时，尝试找回相关剧情。只靠关键词判断，默认关闭。</small></span><input type="checkbox" id="lm-l4" ${s.l4Enabled ? 'checked' : ''}/></label>
                 </div>
@@ -2032,7 +1991,6 @@ function renderSettingsTab() {
             <details class="lm-settings-section lm-settings-disclosure">
                 <summary><div><span class="fa-solid fa-sliders" aria-hidden="true"></span><div><h4>高级设置</h4><p>记忆容量和相关旧记忆的发送位置。不了解这些选项时，请保持默认。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
                 <div class="lm-settings-fields lm-field-grid lm-field-grid-three">
-                    <label>自定义聊天历史容量<small>仅在上方选择“自定义”时使用；这里只计算正则处理后的聊天。</small><input type="number" id="lm-history-budget" min="500" value="${s.historyTokenBudget}"/></label>
                     <label>当前事实容量<small>长期有效的人物状态、关系和约定。推荐 2000。</small><input type="number" id="lm-b1" min="200" value="${s.budgetL1}"/></label>
                     <label>剧情摘要容量<small>以前发生过的剧情。推荐 5000。</small><input type="number" id="lm-b2" min="500" value="${s.budgetL2}"/></label>
                     <label>相关旧记忆容量<small>临时找回的旧内容。推荐 1500。</small><input type="number" id="lm-b4" min="0" value="${s.budgetL4}"/></label>
@@ -2115,13 +2073,10 @@ function bindSettingsTab(body) {
             profileModelOverride: body.querySelector('#lm-profile-model').value.trim(),
             directBaseUrl: body.querySelector('#lm-direct-url').value.trim(),
             directModel: body.querySelector('#lm-direct-model').value.trim(),
-            historyBudgetMode: body.querySelector('#lm-history-mode').value,
             bodyExtractionRegex: body.querySelector('#lm-body-regex').value.trim(),
-            historyTokenBudget: readNumber('#lm-history-budget', 12000, 500),
             budgetL1: readNumber('#lm-b1', 2000, 200),
             budgetL2: readNumber('#lm-b2', 5000, 500),
             budgetL4: readNumber('#lm-b4', 1500, 0),
-            minRecentPairs: readNumber('#lm-n', 6, 1),
             chapterSize: readNumber('#lm-ch', 25, 5),
             proofreadEvery: readNumber('#lm-pr', 75, 5),
             depthL4: readNumber('#lm-d4', 4, 0),
@@ -2134,7 +2089,6 @@ function bindSettingsTab(body) {
         } else if (nextKey) {
             next.directApiKey = nextKey;
         }
-        next.recentPairs = next.minRecentPairs;
         // Keep legacy mirrors until old installations have had time to migrate.
         next.fallbackEnabled = next.memoryModelSource === 'direct';
         next.fallbackBaseUrl = next.directBaseUrl;

@@ -7,7 +7,7 @@ import {
     handleMigrateFinalizeJob,
 } from './src/eval/migrate.js';
 import { ensureMessageIds, getPairs } from './src/ids.js';
-import { trimChatForGenerate, updateInjection } from './src/inject.js';
+import { updateInjection } from './src/inject.js';
 import { handleProofreadJob } from './src/proofread.js';
 import { rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
 import { appendLog, getChatData, getSettings, saveChatData } from './src/settings.js';
@@ -72,27 +72,6 @@ async function onMessageEvents(mesId) {
     updateInjection();
 }
 
-/**
- * Global generate interceptor (manifest.generate_interceptor).
- */
-globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, contextSize, abort, type) {
-    try {
-        if (!getSettings().enabled) {
-            return;
-        }
-        const originMetadata = ctx().chatMetadata;
-        await ensureCurrentBranchRecovery();
-        if (ctx().chatMetadata !== originMetadata) return;
-        ensureMessageIds();
-        void rebuildAndEnqueuePending();
-        const handoff = await trimChatForGenerate(chat, type, contextSize);
-        if (ctx().chatMetadata !== originMetadata) return;
-        updateInjection({ archiveEndPair: handoff?.removedThrough ?? -1 });
-    } catch (err) {
-        console.error(`[${MODULE}] interceptor error`, err);
-    }
-};
-
 jQuery(async () => {
     wireHandlers();
     getSettings();
@@ -145,6 +124,7 @@ jQuery(async () => {
     if (event_types.GENERATION_STARTED) {
         eventSource.on(event_types.GENERATION_STARTED, async () => {
             const originMetadata = ctx().chatMetadata;
+            await ensureCurrentBranchRecovery();
             await waitForBranchRecovery();
             if (ctx().chatMetadata !== originMetadata) return;
             await rebuildAndEnqueuePending();
@@ -155,7 +135,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.11.2`);
+    console.log(`[${MODULE}] 已加载 v0.11.3`);
 });
 
 export async function onActivate() {

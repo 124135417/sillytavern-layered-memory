@@ -295,7 +295,7 @@ const commitData = {
     pending_floors: [], extracted_keys: [],
     job_queue: { scope_id: 'commit-test', paused: true, queued: [], running: null, failed: [] },
     progress: { baseline_pair: 3, last_chapter_end_pair: -1, next_entry_seq: 10, next_chapter_seq: 5, pairs_since_proofread: 0 },
-    context_handoff: null, logs: [],
+    logs: [],
 };
 globalThis.SillyTavern = { getContext: () => ({
     chat,

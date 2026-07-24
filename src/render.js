@@ -60,20 +60,14 @@ function getVolumeFloorRange(volume, chaptersById) {
     return [sorted[0].floor_range[0], expected - 1];
 }
 
-/**
- * Render archived plot summaries. When throughPair is provided, only summaries
- * wholly contained in the request prefix that was actually removed are used.
- */
-export function renderL2Block(data, { forBudget = false, budget = 5000, throughPair } = {}) {
+export function renderL2Block(data, { forBudget = false, budget = 5000 } = {}) {
     const items = [];
     const chaptersById = new Map((data.chapters || []).map(c => [c.id, c]));
-    const bounded = Number.isInteger(throughPair);
     const coveredChapterIds = new Set();
     const coveredRanges = [];
     const volumes = (data.volumes || [])
-        .filter(v => bounded ? !v.stale : (!v.stale || forBudget))
+        .filter(v => !v.stale || forBudget)
         .map(v => ({ ...v, floor_range: getVolumeFloorRange(v, chaptersById) }))
-        .filter(v => !bounded || (v.floor_range && v.floor_range[1] <= throughPair))
         .sort((a, b) => (a.floor_range?.[0] ?? 0) - (b.floor_range?.[0] ?? 0));
     for (const v of volumes) {
         items.push({
@@ -88,9 +82,7 @@ export function renderL2Block(data, { forBudget = false, budget = 5000, throughP
     }
     const chapters = (data.chapters || [])
         .filter(c => !c.stale)
-        .filter(c => bounded
-            ? Array.isArray(c.floor_range) && c.floor_range[1] <= throughPair && !coveredChapterIds.has(c.id)
-            : !c.demoted)
+        .filter(c => !c.demoted && !coveredChapterIds.has(c.id))
         .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
     for (const c of chapters) {
         items.push({
@@ -102,7 +94,6 @@ export function renderL2Block(data, { forBudget = false, budget = 5000, throughP
     }
     const turnSummaries = (data.turn_summaries || [])
         .filter(item => Number.isInteger(item.pairIndex) && item.summary)
-        .filter(item => !bounded || item.pairIndex <= throughPair)
         .filter(item => !coveredRanges.some(([start, end]) => item.pairIndex >= start && item.pairIndex <= end));
     for (const item of turnSummaries) {
         items.push({

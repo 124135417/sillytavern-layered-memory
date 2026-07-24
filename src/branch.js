@@ -233,7 +233,6 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
     ]);
     data.extracted_keys = (parentData.extracted_keys || []).filter(key => trustedKeys.has(underlyingFloorKey(key)));
     data.pending_floors = [];
-    data.context_handoff = null;
     data.history_rebuild = null;
     data.rebuild_backup = null;
     data.review_queue = (parentData.review_queue || [])
