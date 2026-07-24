@@ -89,6 +89,11 @@ export function getPairs() {
         }
         const pair = {
             pairIndex: pairs.length,
+            // These are the real SillyTavern message floors shown by `mesid`.
+            // Keep pairIndex as the stable internal processing index, but never
+            // present it to people as though it were a chat floor.
+            userFloor: i,
+            aiFloor: ai ? j : null,
             user,
             ai,
             userKey: messageStableKey(user),
@@ -152,7 +157,10 @@ export function ensureActivationBaseline() {
     const baseline = sealed.length ? Math.max(...sealed.map(p => p.pairIndex)) : -1;
     data.progress.baseline_pair = baseline;
     if (baseline >= 0) {
-        const note = `插件将从第 ${baseline + 1} 轮对话开始自动记录。更早的聊天不会自动整理；如果需要，请前往“设置 → 安全重建以前的聊天”。`;
+        const firstNewPair = getPairs().find(pair => pair.pairIndex === baseline + 1);
+        const note = firstNewPair
+            ? `插件将从第 ${firstNewPair.userFloor} 楼开始自动记录。更早的聊天不会自动整理；如果需要，请前往“设置 → 安全重建以前的聊天”。`
+            : '插件会从下一条用户消息开始自动记录。更早的聊天不会自动整理；如果需要，请前往“设置 → 安全重建以前的聊天”。';
         const notices = data.notices || [];
         if (!notices.some(x => String(x.note || '').includes('开始自动记录'))) {
             notices.push({

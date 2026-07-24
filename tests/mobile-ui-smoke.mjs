@@ -14,7 +14,7 @@ assert.match(panel, /class="lm-task-disclosure" aria-expanded="false"/u,
     'mobile task status must expose an accessible disclosure control');
 assert.match(panel, /body\.classList\.toggle\('lm-state-body', tab === 'state'\)/u,
     'the state page must opt into the mobile fixed-rail layout');
-assert.match(panel, /id="lm-tab-turns"[^>]*data-tab="turns"[^>]*>逐轮记录</u,
+assert.match(panel, /id="lm-tab-turns"[^>]*data-tab="turns"[^>]*>逐条记录</u,
     'per-turn records need their own permanent navigation destination');
 assert.match(panel, /id="lm-tab-chapters"[^>]*data-tab="chapters"[^>]*>章节摘要</u,
     'chapter summaries need a separate navigation destination');
