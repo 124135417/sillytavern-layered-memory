@@ -9,6 +9,41 @@ function promptForNotes(notes, retryNote = '') {
     ].join('\n\n');
 }
 
+function detectChapterNumbering(coverage, keyEvents, startPair, endPair) {
+    const size = endPair - startPair + 1;
+    const coverageFloors = coverage.map(item => Number(item?.floor)).filter(Number.isFinite);
+    const eventFloors = keyEvents.flatMap(event => Array.isArray(event?.floor_range)
+        ? event.floor_range.map(Number).filter(Number.isFinite)
+        : []);
+    const numbers = coverageFloors.length ? coverageFloors : eventFloors;
+    if (!numbers.length || numbers.every(value => value >= startPair && value <= endPair)) {
+        return value => value;
+    }
+    const exactZeroBased = coverageFloors.length === size
+        && coverageFloors.every((value, index) => value === index);
+    const exactOneBased = coverageFloors.length === size
+        && coverageFloors.every((value, index) => value === index + 1);
+    const allZeroBased = numbers.every(value => Number.isInteger(value) && value >= 0 && value < size);
+    const allOneBased = numbers.every(value => Number.isInteger(value) && value >= 1 && value <= size);
+    if (exactZeroBased || allZeroBased && numbers.includes(0)) {
+        return value => startPair + value;
+    }
+    if (exactOneBased || allOneBased) {
+        return value => startPair + value - 1;
+    }
+    return value => value;
+}
+
+function coverageFromEvents(expected, events) {
+    const coverage = [];
+    for (const floor of expected) {
+        const eventIndex = events.findIndex(event => floor >= event.floor_range[0] && floor <= event.floor_range[1]);
+        if (eventIndex < 0) return null;
+        coverage.push({ floor, event_index: eventIndex });
+    }
+    return coverage;
+}
+
 export function validateChapterArchive(raw, startPair, endPair) {
     const rawSummary = String(raw?.summary || '').trim();
     const keyEvents = Array.isArray(raw?.key_events) ? raw.key_events : [];
@@ -17,7 +52,16 @@ export function validateChapterArchive(raw, startPair, endPair) {
         ? raw.keywords.map(String).map(value => value.trim()).filter(Boolean).slice(0, 10)
         : [];
     const expected = Array.from({ length: endPair - startPair + 1 }, (_, index) => startPair + index);
-    const actual = coverage.map(item => Number(item?.floor));
+    const normalizeFloor = detectChapterNumbering(coverage, keyEvents, startPair, endPair);
+    const normalizedEvents = keyEvents.map(event => ({
+        floor_range: [normalizeFloor(Number(event.floor_range?.[0])), normalizeFloor(Number(event.floor_range?.[1]))],
+        text: String(event.text || '').trim(),
+    }));
+    let normalizedCoverage = coverage.map(item => ({
+        floor: normalizeFloor(Number(item?.floor)),
+        event_index: Number(item?.event_index),
+    }));
+    let actual = normalizedCoverage.map(item => item.floor);
     const errors = [];
     const warnings = [];
     const recommendedLength = Math.min(450, Math.max(180, expected.length * 18));
@@ -32,13 +76,11 @@ export function validateChapterArchive(raw, startPair, endPair) {
         summary = [...rawSummary].slice(0, 900).join('').trimEnd();
         warnings.push(`章节概述超过 900 字，已保留前 900 字`);
     }
-    if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
-        errors.push(`coverage 必须依次包含 ${expected.join('、')}`);
-    }
     if (!keyEvents.length) errors.push('缺少关键事件');
     if (keywords.length < 3) errors.push('关键词少于 3 个');
     const midpoint = Math.floor((startPair + endPair) / 2);
-    const ranges = keyEvents.map(event => event?.floor_range).filter(range => Array.isArray(range) && range.length === 2);
+    const ranges = normalizedEvents.map(event => event.floor_range)
+        .filter(range => range.every(Number.isFinite));
     if (!ranges.some(range => Number(range[0]) <= midpoint)) errors.push('关键事件没有覆盖章节前半');
     if (!ranges.some(range => Number(range[1]) > midpoint)) errors.push('关键事件没有覆盖章节后半');
     for (const range of ranges) {
@@ -46,15 +88,38 @@ export function validateChapterArchive(raw, startPair, endPair) {
             errors.push('关键事件轮数越界');
         }
     }
-    const normalizedEvents = keyEvents.map(event => ({
-        floor_range: [Number(event.floor_range?.[0]), Number(event.floor_range?.[1])],
-        text: String(event.text || '').trim(),
-    }));
     if (normalizedEvents.some(event => !event.text || !event.floor_range.every(Number.isFinite))) {
         errors.push('关键事件缺少文字或有效轮数范围');
     }
-    for (let index = 0; index < coverage.length; index += 1) {
-        const eventIndex = Number(coverage[index]?.event_index);
+    let coverageValid = actual.length === expected.length
+        && actual.every((value, index) => value === expected[index]);
+    if (coverageValid) {
+        for (let index = 0; index < normalizedCoverage.length; index += 1) {
+            const eventIndex = normalizedCoverage[index].event_index;
+            if (!Number.isInteger(eventIndex) || eventIndex < 0 || eventIndex >= normalizedEvents.length) {
+                coverageValid = false;
+                break;
+            }
+            const [eventStart, eventEnd] = normalizedEvents[eventIndex].floor_range;
+            if (actual[index] < eventStart || actual[index] > eventEnd) {
+                coverageValid = false;
+                break;
+            }
+        }
+    }
+    if (!coverageValid) {
+        const rebuilt = coverageFromEvents(expected, normalizedEvents);
+        if (rebuilt) {
+            normalizedCoverage = rebuilt;
+            actual = expected;
+            coverageValid = true;
+        }
+    }
+    if (!coverageValid) {
+        errors.push(`coverage 必须依次包含 ${expected.join('、')}`);
+    }
+    for (let index = 0; coverageValid && index < normalizedCoverage.length; index += 1) {
+        const eventIndex = normalizedCoverage[index].event_index;
         if (!Number.isInteger(eventIndex) || eventIndex < 0 || eventIndex >= normalizedEvents.length) {
             errors.push(`第 ${actual[index]} 轮引用了不存在的关键事件`);
             continue;
@@ -71,7 +136,7 @@ export function validateChapterArchive(raw, startPair, endPair) {
         chapter: {
             summary,
             key_events: normalizedEvents,
-            coverage: coverage.map(item => ({ floor: Number(item.floor), event_index: Number(item.event_index) })),
+            coverage: normalizedCoverage,
             keywords,
             story_time_range: storyTimeRange([]),
             quality_warnings: warnings,

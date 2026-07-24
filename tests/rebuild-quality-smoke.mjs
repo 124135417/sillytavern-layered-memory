@@ -167,10 +167,41 @@ const validChapter = {
     keywords: ['林许', '安排', '饮食偏好'],
 };
 assert.equal(validateChapterArchive(validChapter, 0, 24).ok, true);
-assert.equal(validateChapterArchive({ ...validChapter, coverage: coverage.slice(0, -1) }, 0, 24).ok, false,
-    'chapter coverage must include every floor');
+const rebuiltCoverage = validateChapterArchive({ ...validChapter, coverage: coverage.slice(0, -1) }, 0, 24);
+assert.equal(rebuiltCoverage.ok, true,
+    'redundant coverage should be rebuilt when valid key-event ranges already cover the whole chapter');
+assert.equal(rebuiltCoverage.chapter.coverage.length, 25);
 assert.equal(validateChapterArchive({ ...validChapter, key_events: [validChapter.key_events[0]] }, 0, 24).ok, false,
     'chapter events must cover the second half');
+const localOneBasedChapter = {
+    ...validChapter,
+    key_events: [
+        { floor_range: [1, 13], text: '前半段事件得到推进并形成阶段性结果。' },
+        { floor_range: [14, 25], text: '后半段继续发展并明确后续安排。' },
+    ],
+    coverage: Array.from({ length: 25 }, (_, index) => ({ floor: index + 1, event_index: index < 13 ? 0 : 1 })),
+};
+const normalizedOneBased = validateChapterArchive(localOneBasedChapter, 125, 149);
+assert.equal(normalizedOneBased.ok, true,
+    'a model-local 1–25 chapter numbering scheme must normalize to the requested absolute range');
+assert.deepEqual(normalizedOneBased.chapter.key_events.map(event => event.floor_range), [[125, 137], [138, 149]]);
+assert.deepEqual(normalizedOneBased.chapter.coverage.map(item => item.floor),
+    Array.from({ length: 25 }, (_, index) => 125 + index));
+const localZeroBasedChapter = {
+    ...validChapter,
+    key_events: [
+        { floor_range: [0, 12], text: '前半段事件得到推进并形成阶段性结果。' },
+        { floor_range: [13, 24], text: '后半段继续发展并明确后续安排。' },
+    ],
+    coverage: Array.from({ length: 25 }, (_, index) => ({ floor: index, event_index: index < 13 ? 0 : 1 })),
+};
+assert.equal(validateChapterArchive(localZeroBasedChapter, 125, 149).ok, true,
+    'a model-local 0–24 chapter numbering scheme must also normalize safely');
+assert.equal(validateChapterArchive({
+    ...localOneBasedChapter,
+    key_events: [{ floor_range: [1, 10], text: '只覆盖开头。' }],
+    coverage: [],
+}, 125, 149).ok, false, 'number normalization must not conceal a real event-coverage gap');
 const conciseChapter = { ...validChapter, summary: '用户明确提出要求，林许据此调整行动，并确认了接下来的安排和仍待解决的问题。'.repeat(9) };
 const conciseCheck = validateChapterArchive(conciseChapter, 0, 24);
 assert.equal(conciseCheck.ok, true, 'a complete concise chapter must not be discarded only for missing the preferred length');
