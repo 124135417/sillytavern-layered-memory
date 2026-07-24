@@ -896,6 +896,16 @@ body.lm-memory-center-open {
     .lm-center-header { padding-top: max(8px, env(safe-area-inset-top)); padding-bottom: 7px; }
     .lm-tabs { gap: 0; padding-right: 2px; padding-left: 2px; }
     .lm-tab { padding-right: 2px; padding-left: 2px; font-size: .7rem; }
+    .lm-memory-main { padding-top: var(--lm-space-2); }
+    .lm-notice-strip,
+    .lm-fact-explainer,
+    .lm-memory-toolbar select { display: none; }
+    .lm-quality-alert { margin-bottom: var(--lm-space-2); padding: var(--lm-space-2) var(--lm-space-3); }
+    .lm-quality-alert p { display: none; }
+    .lm-memory-toolbar { margin-top: var(--lm-space-2); margin-bottom: var(--lm-space-3); }
+    .lm-task-rail h3 { display: none; }
+    .lm-task-rail { padding-block: var(--lm-space-1); }
+    .lm-task-rail > header { min-height: 44px; }
     .lm-injection-footer { min-height: 52px; padding: 6px 10px max(6px, env(safe-area-inset-bottom)); }
 }
 

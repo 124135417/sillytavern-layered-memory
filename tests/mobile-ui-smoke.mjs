@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const [panel, css] = await Promise.all([
     readFile(new URL('../src/ui/panel.js', import.meta.url), 'utf8'),
-    readFile(new URL('../style-v0.10.2.css', import.meta.url), 'utf8'),
+    readFile(new URL('../style-v0.11.0.css', import.meta.url), 'utf8'),
 ]);
 
 assert.match(panel, /id="lm-tab-turns"[^>]*data-tab="turns"[^>]*>对话记录</u);
@@ -13,8 +13,12 @@ assert.match(panel, /class="lm-task-disclosure" aria-expanded="\$\{expanded \? '
     'task status needs a real accessible disclosure state');
 assert.match(panel, /setHostInert\(true\)/u, 'opening must make the host page inert');
 assert.match(panel, /setHostInert\(false\)/u, 'closing must restore the host page');
+assert.match(panel, /element\.setAttribute\('inert', ''\)/u,
+    'host isolation must use the inert attribute even when the host browser lacks a reflected property');
 assert.match(panel, /trapPanelFocus\(event, panel\)/u, 'the main panel must trap Tab focus');
 assert.match(panel, /lastDrawerTrigger\.focus/u, 'focus must return to the original launcher');
+assert.match(panel, /const closedLabel = `查看 \$\{subject\}`;[\s\S]*const openLabel = `收起 \$\{subject\}`;/u,
+    'record disclosures must update real visible text in both states');
 assert.match(panel, /document\.body\.appendChild\(panel\)/u,
     'the panel must be portaled outside responsive host menus');
 assert.match(panel, /GEOMETRY_STYLE_ID = 'layered-memory-viewport-geometry'/u,
@@ -43,6 +47,8 @@ assert.match(css, /\.lm-dashboard:has\(\.lm-task-rail:not\(\.lm-task-expanded\)\
     'collapsed desktop task status must use a single row');
 assert.match(css, /\.lm-budget-chips \{ display: none; \}/u,
     'phone injection details must move into the preview');
+assert.match(css, /@media \(max-width: 360px\) and \(max-height: 650px\)[\s\S]*\.lm-notice-strip,[\s\S]*\.lm-memory-toolbar select \{ display: none; \}/u,
+    'very short phones must preserve the primary actions above low-priority detail');
 assert.match(css, /\.lm-page-heading \{ display: grid; grid-template-columns: minmax\(0, 1fr\)/u,
     'phone page headings must use one column');
 assert.match(css, /\.lm-button-danger/u, 'dangerous actions need a distinct button style');

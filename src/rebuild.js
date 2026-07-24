@@ -489,15 +489,15 @@ export async function handleHistoryRebuildCommit() {
         staging.status = 'review';
         staging.completed = pairs.length;
         staging.error = null;
-        staging.phase = '逐轮记录已经生成，等待检查和修改';
+        staging.phase = '对话记录已经生成，等待检查和修改';
         await saveChatData(data);
-        appendLog('info', `逐轮记录草稿已完成：${pairs.length}/${pairs.length}`);
+        appendLog('info', `对话记录草稿已完成：${pairs.length}/${pairs.length}`);
         return;
     }
     const fullChapterCount = Math.floor(pairs.length / (getSettings().chapterSize || 25));
     if (staging.chapters.length !== fullChapterCount) {
         staging.status = 'error';
-        staging.error = `逐轮记录已经齐全，仍有 ${fullChapterCount - staging.chapters.length} 章需要重新合并`;
+        staging.error = `对话记录已经齐全，仍有 ${fullChapterCount - staging.chapters.length} 章需要重新合并`;
         staging.phase = '已保留合格结果，等待继续重建';
         await saveChatData(data);
         appendLog('warn', staging.error);
@@ -650,7 +650,7 @@ export function rebuildStage(job, state) {
         return `正在逐轮核对第 ${floors} 轮`;
     }
     if (job?.type === 'history_rebuild_chapter') return `正在合并第 ${job.payload.startPair}–${job.payload.endPair} 轮剧情`;
-    if (job?.type === 'history_rebuild_commit') return job.payload?.reviewOnly ? '正在完成逐轮记录草稿' : '正在安全替换旧结果';
+    if (job?.type === 'history_rebuild_commit') return job.payload?.reviewOnly ? '正在完成对话记录草稿' : '正在安全替换旧结果';
     if (state?.phase) return state.phase;
     return '等待后台开始';
 }
@@ -826,7 +826,7 @@ export async function startHistoryRebuildChapters() {
     const pairs = pairsForActiveRebuild(data, state);
     const resumableChapterStage = state?.stage_mode === 'chapters' && ['stopped', 'error'].includes(state.status);
     if (!state || (!resumableChapterStage && state.status !== 'review') || state.turn_summaries.length !== pairs.length) {
-        throw new Error('逐轮记录尚未完整生成，暂时不能整理章节');
+        throw new Error('对话记录尚未完整生成，暂时不能整理章节');
     }
     state.stage_mode = 'chapters';
     state.status = 'running';

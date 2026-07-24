@@ -81,7 +81,7 @@ export function validateChapterArchive(raw, startPair, endPair) {
 
 export async function summarizeChapterNotes(notes, startPair, endPair, assertCurrent = () => {}) {
     const expected = endPair - startPair + 1;
-    if (notes.length !== expected) throw nonRetryable(`章节缺少逐轮记录：需要 ${expected} 轮，实际 ${notes.length} 轮`);
+    if (notes.length !== expected) throw nonRetryable(`章节缺少对话记录：需要 ${expected} 轮，实际 ${notes.length} 轮`);
     let retryNote = '';
     for (let attempt = 0; attempt < 2; attempt += 1) {
         const { text } = await callAuxModel({

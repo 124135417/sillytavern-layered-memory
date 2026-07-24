@@ -67,12 +67,13 @@ function setHostInert(inert) {
         const backdrop = document.getElementById(BACKDROP_ID);
         hostInertSnapshot = [...document.body.children]
             .filter(element => element !== panel && element !== backdrop)
-            .map(element => ({ element, inert: Boolean(element.inert) }));
-        hostInertSnapshot.forEach(({ element }) => { element.inert = true; });
+            .map(element => ({ element, hadInert: element.hasAttribute('inert') }));
+        hostInertSnapshot.forEach(({ element }) => element.setAttribute('inert', ''));
         return;
     }
-    hostInertSnapshot.forEach(({ element, inert: previous }) => {
-        if (element.isConnected) element.inert = previous;
+    hostInertSnapshot.forEach(({ element, hadInert }) => {
+        if (!element.isConnected || hadInert) return;
+        element.removeAttribute('inert');
     });
     hostInertSnapshot = [];
 }
@@ -559,7 +560,10 @@ export async function openMemoryCenter(open = true, targetTab = null) {
         document.getElementById(DRAWER_ID)?.classList.remove('lm-open');
         trigger.setAttribute('aria-expanded', 'false');
         setHostInert(false);
-        if (lastDrawerTrigger instanceof HTMLElement && document.contains(lastDrawerTrigger)) {
+        if (lastDrawerTrigger instanceof HTMLElement
+            && lastDrawerTrigger !== document.body
+            && lastDrawerTrigger !== document.documentElement
+            && document.contains(lastDrawerTrigger)) {
             lastDrawerTrigger.focus();
         } else {
             trigger.focus();
@@ -916,7 +920,7 @@ function renderTaskRail() {
             <header>
                 <div class="lm-task-heading"><span class="lm-kicker">自动整理</span><h3>记忆整理进度</h3><span class="lm-task-summary">${escapeHtml(summary)}</span></div>
                 <div class="lm-task-controls">
-                    <button type="button" class="lm-text-button" id="lm-queue-toggle" aria-pressed="${q.paused ? 'true' : 'false'}">${q.paused ? '继续整理' : '暂停新的整理工作'}</button>
+                    <button type="button" class="lm-text-button" id="lm-queue-toggle" aria-pressed="${q.paused ? 'true' : 'false'}" aria-label="${q.paused ? '继续后台整理' : '暂停新的整理工作'}">${q.paused ? '继续' : '暂停'}</button>
                     <button type="button" class="lm-task-disclosure" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="lm-task-list"><span>${expanded ? '收起' : '展开'}</span><span aria-hidden="true">⌄</span></button>
                 </div>
             </header>
@@ -1622,13 +1626,15 @@ function renderTurnSummaryDisclosure(items, { loose = false, draft = false, edit
     if (!items.length) return '';
     const start = items[0].pairIndex;
     const end = items.at(-1).pairIndex;
-    const label = draft
+    const subject = draft
         ? `${partial ? '尚未凑满一章 · ' : ''}${pairFloorRangeLabel(start, end)} · ${items.length} 轮草稿`
         : loose
-        ? `尚未合并的对话记录 · ${pairFloorRangeLabel(start, end)} · ${items.length} 轮`
-        : `查看本章 ${items.length} 轮对话记录`;
-    return `<details class="lm-turn-records ${loose || draft ? 'lm-turn-records-loose' : ''}" data-closed-label="${escapeHtml(label)}" data-open-label="${escapeHtml(label.replace(/^查看/u, '收起'))}">
-        <summary><span>${escapeHtml(label)}</span></summary>
+            ? `尚未合并的对话记录 · ${pairFloorRangeLabel(start, end)} · ${items.length} 轮`
+            : `${items.length} 轮对话记录`;
+    const closedLabel = `查看 ${subject}`;
+    const openLabel = `收起 ${subject}`;
+    return `<details class="lm-turn-records ${loose || draft ? 'lm-turn-records-loose' : ''}" data-closed-label="${escapeHtml(closedLabel)}" data-open-label="${escapeHtml(openLabel)}">
+        <summary><span>${escapeHtml(closedLabel)}</span></summary>
         ${loose ? '<p>这些记录还没有凑满一章；Fork 或精简到这里时，插件会直接使用它们。</p>' : ''}
         ${draft && partial ? '<p>这部分会保留为对话记录，不会因为不足一章而丢失；以后凑满章节所需记录后再合并。</p>' : ''}
         <ol>${items.map(item => `<li><span>${pairFloorRangeLabel(item.pairIndex)}${item.manual_override ? '<em>人工修改</em>' : ''}${item.story_time?.label ? `<em class="lm-time-label">${escapeHtml(item.story_time.label)}</em>` : ''}</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p>${editable ? `<button type="button" class="lm-text-button" data-turn-edit="${item.pairIndex}" data-draft="${draft ? 'true' : 'false'}">编辑</button>` : ''}</li>`).join('')}</ol>
@@ -1859,7 +1865,7 @@ function bindReviewTab(body) {
                     contentFingerprint: pair.contentFingerprint,
                 } : {});
                 if (!result || result.error) {
-                    toastr?.error?.(result?.error || '这条候选事实已经不存在，待确认项仍会保留。');
+                    toastr?.error?.(result?.error || '这条候选事实已经不存在，待处理项仍会保留。');
                     return;
                 }
                 if (result?.entry && !result.existed) {
@@ -1872,7 +1878,7 @@ function bindReviewTab(body) {
             } else if (item.kind === 'flag_conflict' && item.entry_id) {
                 const current = data.state_table.entries.find(entry => entry.id === item.entry_id);
                 if (!current) {
-                    toastr?.error?.('发生矛盾的原事实已经不存在，待确认项仍会保留。');
+                    toastr?.error?.('发生矛盾的原事实已经不存在，待处理项仍会保留。');
                     return;
                 }
                 const before = structuredClone(current);
