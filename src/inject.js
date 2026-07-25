@@ -38,9 +38,9 @@ export function updateInjection() {
 
     const data = getChatData();
     const l1 = renderL1Block(data, settings.budgetL1, SillyTavern.getContext());
-    // L2 remains stored but unsent until an explicit user-controlled injection
-    // policy replaces the removed context-percentage trimming mechanism.
-    const l2 = '';
+    // L2 always sends the complete highest-available narrative coverage.
+    // budgetL2 triggers higher-level compression but never truncates injection.
+    const l2 = renderL2Block(data, { forInjection: true });
 
     if (estimateTokens(renderL2Block(data, { forBudget: true })) > (settings.budgetL2 || 5000)) {
         enqueue('volume_compress', { reason: 'budget' }, QUEUE_PRIORITY.volume_compress);

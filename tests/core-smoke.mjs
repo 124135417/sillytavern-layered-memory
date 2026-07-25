@@ -70,7 +70,7 @@ const l2Injection = extensionPromptCalls.find(([key]) => key === 'layered_memory
 const l4Injection = extensionPromptCalls.find(([key]) => key === 'layered_memory_l4');
 assert.deepEqual(l1Injection?.slice(2), [0, 0, false, 0], 'L1 必须作为 IN_PROMPT system 提示发送，旧 depth 设置不得生效');
 assert.deepEqual(l2Injection?.slice(2), [0, 0, false, 0], 'L2 必须作为 IN_PROMPT system 提示发送，旧 depth 设置不得生效');
-assert.equal(l2Injection?.[1], '', '未确定显式发送规则前，L2 必须保持为空');
+assert.equal(l2Injection?.[1], '', '没有剧情摘要时 L2 应为空');
 assert.deepEqual(l4Injection?.slice(2), [1, 3, false, 0], 'L4 仍应使用 IN_CHAT 和可配置 depth');
 
 function setPairs(count) {

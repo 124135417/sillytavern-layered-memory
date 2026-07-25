@@ -34,7 +34,9 @@ assert.doesNotMatch(renderSource, /throughPair|removed prefix/u,
     'L2 rendering must not depend on a removed-chat boundary');
 assert.doesNotMatch(panelSource, /希望保留多少最近剧情|自定义聊天历史容量|至少保留最近几轮完整对话/u,
     'settings must not expose removed trimming controls');
-assert.match(injectionSource, /const l2 = '';/u,
-    'L2 must stay unsent until an explicit replacement policy is designed');
+assert.match(injectionSource, /const l2 = renderL2Block\(data, \{ forInjection: true \}\);/u,
+    'L2 must use the explicit complete-injection policy');
+assert.doesNotMatch(injectionSource, /const l2 = '';/u,
+    'L2 must no longer be silently withheld');
 
 console.log('no context trimming smoke: percentage budget and request mutation are absent');

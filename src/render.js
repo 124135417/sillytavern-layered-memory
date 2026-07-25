@@ -44,62 +44,103 @@ export function renderL1Block(data, budget = 2000, context = null) {
     return truncateToBudget(lines.join('\n').trim(), budget);
 }
 
-function getVolumeFloorRange(volume, chaptersById) {
-    const chapters = (volume.chapter_ids || []).map(id => chaptersById.get(id)).filter(Boolean);
-    if (!chapters.length || chapters.some(c => c.stale || !Array.isArray(c.floor_range))) {
+function validFloorRange(value) {
+    if (!Array.isArray(value) || value.length < 2) {
         return null;
     }
-    const sorted = chapters.slice().sort((a, b) => a.floor_range[0] - b.floor_range[0]);
-    let expected = sorted[0].floor_range[0];
-    for (const chapter of sorted) {
-        if (chapter.floor_range[0] > expected) {
-            return null;
-        }
-        expected = Math.max(expected, chapter.floor_range[1] + 1);
-    }
-    return [sorted[0].floor_range[0], expected - 1];
+    const start = Number(value[0]);
+    const end = Number(value[1]);
+    return Number.isInteger(start) && Number.isInteger(end) && start <= end ? [start, end] : null;
 }
 
-export function renderL2Block(data, { forBudget = false, budget = 5000 } = {}) {
+function hasSummary(value) {
+    return Boolean(String(value ?? '').trim());
+}
+
+function rangeOverlaps([start, end], ranges) {
+    return ranges.some(([coveredStart, coveredEnd]) => start <= coveredEnd && end >= coveredStart);
+}
+
+function floorIsCovered(floor, ranges) {
+    return ranges.some(([start, end]) => floor >= start && floor <= end);
+}
+
+function getVolumeFloorRange(volume, chaptersById) {
+    const chapterIds = Array.isArray(volume?.chapter_ids) ? volume.chapter_ids : [];
+    if (!chapterIds.length || new Set(chapterIds).size !== chapterIds.length) {
+        return null;
+    }
+
+    const chapters = chapterIds.map(id => chaptersById.get(id));
+    if (chapters.some(chapter => !chapter || chapter.stale || !hasSummary(chapter.summary))) {
+        return null;
+    }
+    const ranged = chapters.map(chapter => ({ range: validFloorRange(chapter.floor_range) }));
+    if (ranged.some(item => !item.range)) {
+        return null;
+    }
+    ranged.sort((a, b) => a.range[0] - b.range[0]);
+    let expected = ranged[0].range[0];
+    for (const { range } of ranged) {
+        if (range[0] !== expected) {
+            return null;
+        }
+        expected = range[1] + 1;
+    }
+    return [ranged[0].range[0], expected - 1];
+}
+
+export function renderL2Block(data, { forBudget = false, forInjection = false, budget = 5000 } = {}) {
     const items = [];
     const chaptersById = new Map((data.chapters || []).map(c => [c.id, c]));
-    const coveredChapterIds = new Set();
     const coveredRanges = [];
     const volumes = (data.volumes || [])
-        .filter(v => !v.stale || forBudget)
+        .filter(v => !v.stale && hasSummary(v.summary))
         .map(v => ({ ...v, floor_range: getVolumeFloorRange(v, chaptersById) }))
-        .sort((a, b) => (a.floor_range?.[0] ?? 0) - (b.floor_range?.[0] ?? 0));
+        .filter(v => v.floor_range)
+        .sort((a, b) => a.floor_range[0] - b.floor_range[0] || a.floor_range[1] - b.floor_range[1]);
     for (const v of volumes) {
-        items.push({
-            start: v.floor_range?.[0] ?? 0,
-            end: v.floor_range?.[1] ?? 0,
-            text: `### 很久以前的剧情摘要\n${v.summary}`,
-        });
-        if (v.floor_range) coveredRanges.push(v.floor_range);
-        for (const id of v.chapter_ids || []) {
-            coveredChapterIds.add(id);
+        if (rangeOverlaps(v.floor_range, coveredRanges)) {
+            continue;
         }
+        items.push({
+            start: v.floor_range[0],
+            end: v.floor_range[1],
+            text: `### 很久以前的剧情摘要\n${String(v.summary).trim()}`,
+        });
+        coveredRanges.push(v.floor_range);
     }
+    // Do not filter demoted chapters here: they are the required fallback when
+    // their higher-level volume is missing or invalid.
     const chapters = (data.chapters || [])
-        .filter(c => !c.stale)
-        .filter(c => !c.demoted && !coveredChapterIds.has(c.id))
-        .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
+        .filter(c => !c.stale && hasSummary(c.summary))
+        .map(c => ({ ...c, floor_range: validFloorRange(c.floor_range) }))
+        .filter(c => c.floor_range)
+        .sort((a, b) => a.floor_range[0] - b.floor_range[0] || a.floor_range[1] - b.floor_range[1]);
     for (const c of chapters) {
+        if (rangeOverlaps(c.floor_range, coveredRanges)) {
+            continue;
+        }
         items.push({
             start: c.floor_range[0],
             end: c.floor_range[1],
-            text: `### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要${c.story_time_range?.label ? `（剧情时间：${c.story_time_range.label}）` : ''}\n${c.summary}`,
+            text: `### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要${c.story_time_range?.label ? `（剧情时间：${c.story_time_range.label}）` : ''}\n${String(c.summary).trim()}`,
         });
         coveredRanges.push(c.floor_range);
     }
-    const turnSummaries = (data.turn_summaries || [])
-        .filter(item => Number.isInteger(item.pairIndex) && item.summary)
-        .filter(item => !coveredRanges.some(([start, end]) => item.pairIndex >= start && item.pairIndex <= end));
+    const turnSummariesByFloor = new Map();
+    for (const item of data.turn_summaries || []) {
+        if (Number.isInteger(item?.pairIndex) && hasSummary(item.summary)) {
+            turnSummariesByFloor.set(item.pairIndex, item);
+        }
+    }
+    const turnSummaries = [...turnSummariesByFloor.values()]
+        .filter(item => !floorIsCovered(item.pairIndex, coveredRanges));
     for (const item of turnSummaries) {
         items.push({
             start: item.pairIndex,
             end: item.pairIndex,
-            text: `### 第 ${item.pairIndex} 轮对话的剧情记录${item.story_time?.label ? `（剧情时间：${item.story_time.label}）` : ''}\n${item.summary}`,
+            text: `### 第 ${item.pairIndex} 轮对话的剧情记录${item.story_time?.label ? `（剧情时间：${item.story_time.label}）` : ''}\n${String(item.summary).trim()}`,
         });
     }
     items.sort((a, b) => a.start - b.start || a.end - b.end);
@@ -107,7 +148,7 @@ export function renderL2Block(data, { forBudget = false, budget = 5000 } = {}) {
     if (!text) {
         return '';
     }
-    if (forBudget) {
+    if (forBudget || forInjection) {
         return text;
     }
     return truncateToBudget(text, budget);
