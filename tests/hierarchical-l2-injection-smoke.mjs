@@ -53,6 +53,12 @@ const { getQueueSnapshot } = await import('../src/queue.js');
 
 const count = (text, pattern) => [...String(text).matchAll(pattern)].length;
 
+const visiblePairs = Array.from({ length: 60 }, (_, pairIndex) => ({
+    pairIndex,
+    userFloor: pairIndex * 2 + 1,
+    aiFloor: pairIndex * 2 + 2,
+}));
+
 const chapterAndTail = renderL2Block(data, { forInjection: true });
 assert.match(chapterAndTail, /CHAPTER_001[\s\S]*CHAPTER_002[\s\S]*TURN_051[\s\S]*TURN_060/,
     '60 轮应按顺序注入两个完整章节和最后 10 条逐轮摘要');
@@ -60,6 +66,21 @@ assert.equal(count(chapterAndTail, /CHAPTER_/g), 2);
 assert.equal(count(chapterAndTail, /TURN_/g), 10);
 assert.doesNotMatch(chapterAndTail, /TURN_050/,
     '被章节摘要覆盖的逐轮内容不得重复注入');
+assert.match(chapterAndTail, /^## 剧情记忆开始/u,
+    'L2 必须有明确的总起始边界');
+assert.match(chapterAndTail, /【本段范围结束｜第 1–25 轮对话】/u,
+    '无聊天楼层映射时不得暴露从 0 开始的内部 pairIndex');
+assert.match(chapterAndTail, /## 剧情记忆结束\n后续提示词、最近完整对话及用户新输入均不属于上述任何摘要范围。$/u,
+    'L2 必须明确声明后续输入不属于最后一段摘要');
+
+const visibleFloorLabels = renderL2Block(data, { forInjection: true, pairs: visiblePairs });
+assert.match(visibleFloorLabels, /### 章节摘要｜第 1–50 楼/u);
+assert.match(visibleFloorLabels, /【本段范围结束｜第 1–50 楼】[\s\S]*### 章节摘要｜第 51–100 楼/u,
+    '每个章节必须用真实聊天楼层标注并显式结束');
+assert.match(visibleFloorLabels, /### 逐轮剧情记录｜第 101–102 楼[\s\S]*【本段范围结束｜第 101–102 楼】/u,
+    '每条逐轮记录必须有独立、不可继承错的真实楼层范围');
+assert.match(visibleFloorLabels, /### 逐轮剧情记录｜第 119–120 楼/u,
+    '尾部最后一条记录也必须标清实际楼层');
 
 data.chapters.forEach(chapter => { chapter.demoted = true; });
 data.volumes = [{

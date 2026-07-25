@@ -65,6 +65,32 @@ function floorIsCovered(floor, ranges) {
     return ranges.some(([start, end]) => floor >= start && floor <= end);
 }
 
+function narrativeRangeLabel(startPair, endPair, pairs = []) {
+    const pairByIndex = new Map((Array.isArray(pairs) ? pairs : [])
+        .filter(pair => Number.isInteger(pair?.pairIndex))
+        .map(pair => [pair.pairIndex, pair]));
+    const start = pairByIndex.get(startPair);
+    const end = pairByIndex.get(endPair);
+    const startFloor = Number(start?.userFloor);
+    const endFloor = Number(end?.aiFloor ?? end?.userFloor);
+    if (Number.isInteger(startFloor) && Number.isInteger(endFloor)) {
+        return startFloor === endFloor ? `第 ${startFloor} 楼` : `第 ${startFloor}–${endFloor} 楼`;
+    }
+    const firstTurn = startPair + 1;
+    const lastTurn = endPair + 1;
+    return firstTurn === lastTurn ? `第 ${firstTurn} 轮对话` : `第 ${firstTurn}–${lastTurn} 轮对话`;
+}
+
+function renderNarrativeItem(item, pairs) {
+    const range = narrativeRangeLabel(item.start, item.end, pairs);
+    const storyTime = item.storyTime ? `（剧情时间：${item.storyTime}）` : '';
+    return [
+        `### ${item.kind}｜${range}${storyTime}`,
+        item.summary,
+        `【本段范围结束｜${range}】`,
+    ].join('\n');
+}
+
 function getVolumeFloorRange(volume, chaptersById) {
     const chapterIds = Array.isArray(volume?.chapter_ids) ? volume.chapter_ids : [];
     if (!chapterIds.length || new Set(chapterIds).size !== chapterIds.length) {
@@ -90,7 +116,12 @@ function getVolumeFloorRange(volume, chaptersById) {
     return [ranged[0].range[0], expected - 1];
 }
 
-export function renderL2Block(data, { forBudget = false, forInjection = false, budget = 5000 } = {}) {
+export function renderL2Block(data, {
+    forBudget = false,
+    forInjection = false,
+    budget = 5000,
+    pairs = [],
+} = {}) {
     const items = [];
     const chaptersById = new Map((data.chapters || []).map(c => [c.id, c]));
     const coveredRanges = [];
@@ -106,7 +137,8 @@ export function renderL2Block(data, { forBudget = false, forInjection = false, b
         items.push({
             start: v.floor_range[0],
             end: v.floor_range[1],
-            text: `### 很久以前的剧情摘要\n${String(v.summary).trim()}`,
+            kind: '长期摘要',
+            summary: String(v.summary).trim(),
         });
         coveredRanges.push(v.floor_range);
     }
@@ -124,7 +156,9 @@ export function renderL2Block(data, { forBudget = false, forInjection = false, b
         items.push({
             start: c.floor_range[0],
             end: c.floor_range[1],
-            text: `### 第 ${c.floor_range[0]}–${c.floor_range[1]} 轮对话的剧情摘要${c.story_time_range?.label ? `（剧情时间：${c.story_time_range.label}）` : ''}\n${String(c.summary).trim()}`,
+            kind: '章节摘要',
+            summary: String(c.summary).trim(),
+            storyTime: c.story_time_range?.label,
         });
         coveredRanges.push(c.floor_range);
     }
@@ -140,14 +174,25 @@ export function renderL2Block(data, { forBudget = false, forInjection = false, b
         items.push({
             start: item.pairIndex,
             end: item.pairIndex,
-            text: `### 第 ${item.pairIndex} 轮对话的剧情记录${item.story_time?.label ? `（剧情时间：${item.story_time.label}）` : ''}\n${String(item.summary).trim()}`,
+            kind: '逐轮剧情记录',
+            summary: String(item.summary).trim(),
+            storyTime: item.story_time?.label,
         });
     }
     items.sort((a, b) => a.start - b.start || a.end - b.end);
-    const text = items.map(item => item.text).join('\n\n').trim();
-    if (!text) {
+    if (!items.length) {
         return '';
     }
+    const text = [
+        '## 剧情记忆开始',
+        '以下内容只记录已经发生的过去剧情，并按聊天楼层顺序排列。',
+        '每个标题的范围只适用于该标题下方、对应“本段范围结束”之前的内容；各段互不包含。',
+        '',
+        items.map(item => renderNarrativeItem(item, pairs)).join('\n\n'),
+        '',
+        '## 剧情记忆结束',
+        '后续提示词、最近完整对话及用户新输入均不属于上述任何摘要范围。',
+    ].join('\n').trim();
     if (forBudget || forInjection) {
         return text;
     }

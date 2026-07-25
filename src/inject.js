@@ -1,4 +1,5 @@
 import { PROMPT_KEYS, QUEUE_PRIORITY } from './constants.js';
+import { getPairs } from './ids.js';
 import { retrieveHits } from './retrieve.js';
 import { renderL1Block, renderL2Block, renderL4Block } from './render.js';
 import { enqueue } from './queue.js';
@@ -40,7 +41,7 @@ export function updateInjection() {
     const l1 = renderL1Block(data, settings.budgetL1, SillyTavern.getContext());
     // L2 always sends the complete highest-available narrative coverage.
     // budgetL2 triggers higher-level compression but never truncates injection.
-    const l2 = renderL2Block(data, { forInjection: true });
+    const l2 = renderL2Block(data, { forInjection: true, pairs: getPairs() });
 
     if (estimateTokens(renderL2Block(data, { forBudget: true })) > (settings.budgetL2 || 5000)) {
         enqueue('volume_compress', { reason: 'budget' }, QUEUE_PRIORITY.volume_compress);
