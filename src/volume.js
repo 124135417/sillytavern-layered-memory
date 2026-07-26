@@ -90,11 +90,14 @@ async function createValidatedVolume(chapters, mustKeep, userPrompt, data) {
 export async function handleVolumeCompressJob(payload = {}) {
     const settings = getSettings();
     const data = getChatData();
+    const useNarrative = Boolean(payload.narrative || (data.narrative_chapters || []).length);
+    const chapters = useNarrative ? (data.narrative_chapters || []) : (data.chapters || []);
+    const volumes = useNarrative ? (data.narrative_volumes || []) : (data.volumes || []);
 
     // If forcing stale volume regen
     if (payload.force && payload.staleVolumes?.length) {
         for (const vid of payload.staleVolumes) {
-            await recompressVolume(vid, data);
+            await recompressVolume(vid, data, useNarrative);
             assertChatData(data);
         }
         return;
@@ -120,7 +123,7 @@ export async function handleVolumeCompressJob(payload = {}) {
         return;
     }
 
-    const activeChapters = (data.chapters || [])
+    const activeChapters = chapters
         .filter(c => !c.demoted && !c.pinned)
         .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
 
@@ -150,9 +153,11 @@ export async function handleVolumeCompressJob(payload = {}) {
         return;
     }
 
-    const volId = `vol_${String((data.volumes?.length || 0) + 1).padStart(3, '0')}`;
-    data.volumes = data.volumes || [];
-    data.volumes.push({
+    const volId = `${useNarrative ? 'nvol' : 'vol'}_${String(volumes.length + 1).padStart(3, '0')}`;
+    if (useNarrative) data.narrative_volumes = data.narrative_volumes || [];
+    else data.volumes = data.volumes || [];
+    const targetVolumes = useNarrative ? data.narrative_volumes : data.volumes;
+    targetVolumes.push({
         id: volId,
         summary,
         chapter_ids: toCompress.map(c => c.id),
@@ -167,14 +172,16 @@ export async function handleVolumeCompressJob(payload = {}) {
     appendLog('info', `卷压缩完成 ${volId}`);
 }
 
-async function recompressVolume(volId, data = getChatData()) {
-    const vol = (data.volumes || []).find(v => v.id === volId);
+async function recompressVolume(volId, data = getChatData(), narrative = String(volId).startsWith('nvol_')) {
+    const volumes = narrative ? (data.narrative_volumes || []) : (data.volumes || []);
+    const allChapters = narrative ? (data.narrative_chapters || []) : (data.chapters || []);
+    const vol = volumes.find(v => v.id === volId);
     if (!vol) {
         return;
     }
-    const chapters = (data.chapters || []).filter(c => vol.chapter_ids.includes(c.id));
+    const chapters = allChapters.filter(c => vol.chapter_ids.includes(c.id));
     // Temporarily treat as toCompress set
-    const later = (data.chapters || []).filter(c => !vol.chapter_ids.includes(c.id) && !c.demoted);
+    const later = allChapters.filter(c => !vol.chapter_ids.includes(c.id) && !c.demoted);
     const mustKeep = buildMustKeepList(chapters, later, data.state_table, getSettings().mentionStatMode);
     const input = chapters.map(c => `### ${c.id}\n${c.summary}`).join('\n\n');
     const summary = await createValidatedVolume(

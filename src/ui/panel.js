@@ -947,6 +947,8 @@ function renderTaskRail() {
 function renderTask(job, state) {
     const labels = {
         extract: '整理本轮出现的新记忆',
+        narrative_summary: '补齐真实楼层剧情记录',
+        narrative_chapter: '合并 25 楼剧情章节',
         chapter_summary: '整理一段剧情摘要',
         volume_compress: '精简很久以前的剧情摘要',
         proofread: '检查已有记忆',
@@ -965,6 +967,10 @@ function renderTask(job, state) {
     }
     const target = job.payload?.pairIndex != null ? pairFloorRangeLabel(job.payload.pairIndex)
         : job.payload?.startPair != null ? pairFloorRangeLabel(job.payload.startPair, job.payload.endPair)
+            : job.payload?.startFloor != null
+                ? (job.payload.startFloor === job.payload.endFloor
+                    ? `第 ${job.payload.startFloor} 楼`
+                    : `第 ${job.payload.startFloor}–${job.payload.endFloor} 楼`)
             : '';
     const stateLabel = state === 'running' ? '正在处理' : state === 'failed' ? '需要处理' : '等待处理';
     const attempt = job.attempt ? ` · 已尝试 ${job.attempt}/${job.maxAttempts || job.attempt} 次` : '';

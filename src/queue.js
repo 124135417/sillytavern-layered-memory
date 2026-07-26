@@ -107,6 +107,13 @@ function hydrateCurrentScope() {
 function sameWork(a, type, payload) {
     if (a.type !== type) return false;
     if (type === 'extract') return a.payload?.floorKey && a.payload.floorKey === payload.floorKey;
+    if (type === 'narrative_summary') {
+        return JSON.stringify(a.payload?.messageKeys || []) === JSON.stringify(payload.messageKeys || [])
+            && JSON.stringify(a.payload?.fingerprints || []) === JSON.stringify(payload.fingerprints || []);
+    }
+    if (type === 'narrative_chapter') {
+        return a.payload?.startFloor === payload.startFloor && a.payload?.endFloor === payload.endFloor;
+    }
     if (type === 'chapter_summary') {
         if (payload.regenStale) return Boolean(a.payload?.regenStale);
         return a.payload?.startPair === payload.startPair && a.payload?.endPair === payload.endPair;
@@ -480,6 +487,8 @@ export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {})
 
     const missingCh = enqueueMissingChapters(getPairs, baseline);
     if (missingCh) appendLog('info', `补偿入队缺失章节摘要 ×${missingCh}`);
+    const { scheduleNarrativeMaintenance } = await import('./narrative.js');
+    await scheduleNarrativeMaintenance();
     void pump();
     return pending.length;
 }

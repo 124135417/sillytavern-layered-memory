@@ -20,6 +20,7 @@ import {
     handleHistoryRebuildSegment,
 } from './src/rebuild.js';
 import { beginBranchRecovery, ensureBranchCheckpoint, ensureCurrentBranchRecovery, reconcileCurrentHistory, waitForBranchRecovery } from './src/branch.js';
+import { handleNarrativeChapterJob, handleNarrativeSummaryJob } from './src/narrative.js';
 
 const MODULE = 'layered-memory';
 
@@ -29,6 +30,8 @@ function ctx() {
 
 function wireHandlers() {
     registerHandler('extract', handleExtractJob);
+    registerHandler('narrative_summary', handleNarrativeSummaryJob);
+    registerHandler('narrative_chapter', handleNarrativeChapterJob);
     registerHandler('chapter_summary', handleChapterSummaryJob);
     registerHandler('volume_compress', handleVolumeCompressJob);
     registerHandler('proofread', handleProofreadJob);
@@ -144,7 +147,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.11.5`);
+    console.log(`[${MODULE}] 已加载 v0.12.0`);
 });
 
 export async function onActivate() {

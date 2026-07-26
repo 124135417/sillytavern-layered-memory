@@ -6,6 +6,7 @@ import { renderL1Block, renderL2Block, renderL4Block } from './render.js';
 import { enqueue } from './queue.js';
 import { getChatData, getSettings } from './settings.js';
 import { estimateTokens } from './tokens.js';
+import { currentNarrativeSources, fallbackNarrativeSummary } from './narrative.js';
 
 let presetMacroRegistered = false;
 
@@ -45,8 +46,12 @@ export function renderCoreMemoryPayload({
     settings = getSettings(),
     context = SillyTavern.getContext(),
     pairs = getPairs(),
+    narrativeSources = currentNarrativeSources().map(source => ({
+        ...source,
+        fallbackSummary: fallbackNarrativeSummary(source),
+    })),
 } = {}) {
-    const l2 = renderL2Block(data, { forInjection: true, pairs });
+    const l2 = renderL2Block(data, { forInjection: true, pairs, narrativeSources });
     const l1 = renderL1Block(data, settings.budgetL1, context);
     return [l2, l1].filter(Boolean).join('\n\n');
 }
@@ -93,13 +98,17 @@ export function updateInjection() {
     }
 
     const data = getChatData();
+    const narrativeSources = currentNarrativeSources().map(source => ({
+        ...source,
+        fallbackSummary: fallbackNarrativeSummary(source),
+    }));
     const l1 = renderL1Block(data, settings.budgetL1, context);
     // L2 always sends the complete highest-available narrative coverage.
     // budgetL2 triggers higher-level compression but never truncates injection.
-    const l2 = renderL2Block(data, { forInjection: true, pairs: getPairs() });
+    const l2 = renderL2Block(data, { forInjection: true, pairs: getPairs(), narrativeSources });
 
-    if (estimateTokens(renderL2Block(data, { forBudget: true })) > (settings.budgetL2 || 5000)) {
-        enqueue('volume_compress', { reason: 'budget' }, QUEUE_PRIORITY.volume_compress);
+    if (estimateTokens(renderL2Block(data, { forBudget: true, narrativeSources })) > (settings.budgetL2 || 5000)) {
+        enqueue('volume_compress', { reason: 'budget', narrative: true }, QUEUE_PRIORITY.volume_compress);
     }
     if (estimateTokens(l1) > (settings.budgetL1 || 2000) * 0.95) {
         enqueue('state_gc', {}, QUEUE_PRIORITY.state_gc);

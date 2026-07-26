@@ -2,10 +2,11 @@ import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { CHAPTER_JSON_SCHEMA, CHAPTER_SYSTEM } from './prompts.js';
 import { storyTimeRange } from './story-time.js';
 
-function promptForNotes(notes, retryNote = '') {
+function promptForNotes(notes, retryNote = '', unit = 'turn') {
+    const label = unit === 'floor' ? '楼' : '轮';
     return [
-        retryNote ? `上次输出没有通过校验：${retryNote}\n请重新覆盖全部轮次。\n\n` : '',
-        ...notes.map(item => `【第 ${item.pairIndex} 轮${item.story_time?.label ? `｜剧情时间：${item.story_time.label}` : ''}】${item.summary}`),
+        retryNote ? `上次输出没有通过校验：${retryNote}\n请重新覆盖全部${label}号。\n\n` : '',
+        ...notes.map(item => `【第 ${item.pairIndex} ${label}${item.story_time?.label ? `｜剧情时间：${item.story_time.label}` : ''}】${item.summary}`),
     ].join('\n\n');
 }
 
@@ -144,15 +145,16 @@ export function validateChapterArchive(raw, startPair, endPair) {
     };
 }
 
-export async function summarizeChapterNotes(notes, startPair, endPair, assertCurrent = () => {}) {
+export async function summarizeChapterNotes(notes, startPair, endPair, assertCurrent = () => {}, { unit = 'turn' } = {}) {
     const expected = endPair - startPair + 1;
-    if (notes.length !== expected) throw nonRetryable(`章节缺少对话记录：需要 ${expected} 轮，实际 ${notes.length} 轮`);
+    const label = unit === 'floor' ? '楼' : '轮';
+    if (notes.length !== expected) throw nonRetryable(`章节缺少对话记录：需要 ${expected} ${label}，实际 ${notes.length} ${label}`);
     let retryNote = '';
     for (let attempt = 0; attempt < 2; attempt += 1) {
         const { text } = await callAuxModel({
             purpose: 'chapter_summary',
             systemPrompt: CHAPTER_SYSTEM,
-            userPrompt: promptForNotes(notes, retryNote),
+            userPrompt: promptForNotes(notes, retryNote, unit),
             jsonSchema: CHAPTER_JSON_SCHEMA,
             temperature: 0.2,
         });

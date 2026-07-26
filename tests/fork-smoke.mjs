@@ -99,6 +99,7 @@ globalThis.fetch = async (url, init) => {
 };
 
 const { beginBranchRecovery, buildFreshBranchData, buildLegacyRebuildData, ensureCurrentBranchRecovery, reconcileCurrentHistory, replayBranchData, waitForBranchRecovery } = await import('../src/branch.js');
+const { getMessageFloors, getPairs } = await import('../src/ids.js');
 const indexSource = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 const queueSource = await readFile(new URL('../src/queue.js', import.meta.url), 'utf8');
 assert.match(indexSource, /event_types\.GENERATION_STARTED[\s\S]*await ensureCurrentBranchRecovery\(\)[\s\S]*await waitForBranchRecovery\(\)[\s\S]*updateInjection\(\)/u,
@@ -122,6 +123,30 @@ assert.notEqual(replayed.job_queue.scope_id, 'parent-scope');
 assert.equal(replayed.branch_origin.method, 'checkpoint_replay');
 assert.equal(replayed.branch_checkpoints.every(point => point.stateTable.changelog.length === 0), true,
     'branch checkpoints must not recursively copy the changelog');
+
+const narrativeParent = structuredClone(parent);
+const liveMessages = getMessageFloors({ includeTrailingUser: true });
+narrativeParent.narrative_summaries = liveMessages.map(message => ({
+    messageKey: message.messageKey,
+    messageIndex: message.messageIndex,
+    role: message.role,
+    contentFingerprint: message.contentFingerprint,
+    summary: `消息楼 ${message.messageIndex}`,
+}));
+narrativeParent.narrative_chapters = [{ id: 'nch_001', floor_range: [0, 3], summary: '四楼章节', stale: false }];
+narrativeParent.narrative_volumes = [];
+const narrativeReplay = replayBranchData(narrativeParent, getPairs(), 'Parent Chat');
+assert.deepEqual(narrativeReplay.narrative_summaries.map(item => item.messageIndex), [0, 1, 2, 3],
+    'fork must inherit every verified visible-message summary, not pair-shaped substitutes');
+assert.deepEqual(narrativeReplay.narrative_chapters.map(item => item.id), ['nch_001']);
+activeChat[3].swipes = ['a1', 'changed a1'];
+activeChat[3].swipe_id = 1;
+const changedNarrativeReplay = replayBranchData(narrativeParent, getPairs(), 'Parent Chat');
+assert.deepEqual(changedNarrativeReplay.narrative_summaries.map(item => item.messageIndex), [0, 1],
+    'a changed swipe must remove later visible-message summaries from the trusted fork prefix');
+assert.equal(changedNarrativeReplay.narrative_chapters.length, 0,
+    'a chapter may not survive when one of its source message fingerprints changed');
+activeChat[3].swipe_id = 0;
 
 const parentWithManualEdit = structuredClone(parent);
 parentWithManualEdit.manual_events.push({

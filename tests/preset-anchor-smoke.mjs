@@ -102,7 +102,7 @@ updateInjection();
 let l1Call = extensionPromptCalls.find(([key]) => key === 'layered_memory_l1');
 let l2Call = extensionPromptCalls.find(([key]) => key === 'layered_memory_l2');
 assert.match(l1Call?.[1], /仍持有旧宅钥匙/u, 'missing-anchor mode must keep the L1 compatibility injection');
-assert.match(l2Call?.[1], /用户收起旧宅钥匙/u, 'missing-anchor mode must keep the L2 compatibility injection');
+assert.match(l2Call?.[1], /<user>：钥匙还在我这里/u, 'missing-anchor mode must keep complete per-message L2 coverage');
 
 promptSettings.prompt_order[0].order[0].enabled = true;
 assert.equal(getPresetAnchorStatus(context).mode, 'anchor');
@@ -131,6 +131,6 @@ updateInjection();
 l1Call = extensionPromptCalls.find(([key]) => key === 'layered_memory_l1');
 l2Call = extensionPromptCalls.find(([key]) => key === 'layered_memory_l2');
 assert.match(l1Call?.[1], /仍持有旧宅钥匙/u, 'duplicate-anchor mode must send L1 once through compatibility injection');
-assert.match(l2Call?.[1], /用户收起旧宅钥匙/u, 'duplicate-anchor mode must send L2 once through compatibility injection');
+assert.match(l2Call?.[1], /<user>：钥匙还在我这里/u, 'duplicate-anchor mode must send L2 once through compatibility injection');
 
 console.log('preset anchor smoke: exact macro, fallback, de-duplication, and payload order passed');

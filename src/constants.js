@@ -20,6 +20,8 @@ export const SLOTS = Object.keys(SLOT_LABELS);
 
 export const QUEUE_PRIORITY = {
     extract: 100,
+    narrative_summary: 95,
+    narrative_chapter: 85,
     chapter_summary: 80,
     volume_compress: 60,
     proofread: 50,
@@ -69,13 +71,18 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const EMPTY_CHAT_DATA = () => ({
-    version: 4,
+    version: 5,
     state_table: {
         version: 1,
         entries: [],
         changelog: [],
     },
     turn_summaries: [],
+    /** One summary per real SillyTavern message floor, used by narrative injection. */
+    narrative_summaries: [],
+    /** Frozen 25-message narrative chapters. Pair-based legacy chapters stay separate. */
+    narrative_chapters: [],
+    narrative_volumes: [],
     /** Replayable per-floor materialized changes used to restore Fork branches. */
     floor_events: [],
     /** Compact user edits, anchored to the visible branch at the time of editing. */

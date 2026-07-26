@@ -82,13 +82,87 @@ function narrativeRangeLabel(startPair, endPair, pairs = []) {
 }
 
 function renderNarrativeItem(item, pairs) {
-    const range = narrativeRangeLabel(item.start, item.end, pairs);
+    const range = item.floorUnit === 'message'
+        ? (item.start === item.end ? `第 ${item.start} 楼` : `第 ${item.start}–${item.end} 楼`)
+        : narrativeRangeLabel(item.start, item.end, pairs);
     const storyTime = item.storyTime ? `（剧情时间：${item.storyTime}）` : '';
     return [
         `### ${item.kind}｜${range}${storyTime}`,
         item.summary,
         `【本段范围结束｜${range}】`,
     ].join('\n');
+}
+
+function completeNarrativeText(items) {
+    if (!items.length) return '';
+    return [
+        '## 剧情记忆开始',
+        '以下内容只记录已经发生的过去剧情，并按聊天楼层顺序排列。',
+        '每个标题的范围只适用于该标题下方、对应“本段范围结束”之前的内容；各段互不包含。',
+        '',
+        items.map(item => renderNarrativeItem(item, [])).join('\n\n'),
+        '',
+        '## 剧情记忆结束',
+        '后续提示词、最近完整对话及用户新输入均不属于上述任何摘要范围。',
+    ].join('\n').trim();
+}
+
+function renderVisibleFloorNarrative(data, narrativeSources) {
+    const records = (data.narrative_summaries || []).filter(item =>
+        Number.isInteger(item?.messageIndex) && hasSummary(item.summary));
+    const sources = narrativeSources.length ? narrativeSources : records.map(item => ({
+        messageKey: item.messageKey,
+        messageIndex: item.messageIndex,
+        role: item.role,
+        contentFingerprint: item.contentFingerprint,
+        fallbackSummary: item.summary,
+    }));
+    if (!sources.length) return '';
+
+    const recordByKey = new Map(records.map(item => [item.messageKey, item]));
+    const validSources = sources.slice().sort((a, b) => a.messageIndex - b.messageIndex);
+    const chaptersById = new Map((data.narrative_chapters || []).map(chapter => [chapter.id, chapter]));
+    const coveredRanges = [];
+    const items = [];
+    const volumes = (data.narrative_volumes || [])
+        .filter(volume => !volume.stale && hasSummary(volume.summary))
+        .map(volume => ({ ...volume, floor_range: getVolumeFloorRange(volume, chaptersById) }))
+        .filter(volume => volume.floor_range)
+        .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
+    for (const volume of volumes) {
+        if (rangeOverlaps(volume.floor_range, coveredRanges)) continue;
+        items.push({
+            start: volume.floor_range[0], end: volume.floor_range[1], floorUnit: 'message',
+            kind: '长期摘要', summary: String(volume.summary).trim(),
+        });
+        coveredRanges.push(volume.floor_range);
+    }
+    const chapters = (data.narrative_chapters || [])
+        .filter(chapter => !chapter.stale && hasSummary(chapter.summary))
+        .map(chapter => ({ ...chapter, floor_range: validFloorRange(chapter.floor_range) }))
+        .filter(chapter => chapter.floor_range)
+        .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
+    for (const chapter of chapters) {
+        if (rangeOverlaps(chapter.floor_range, coveredRanges)) continue;
+        items.push({
+            start: chapter.floor_range[0], end: chapter.floor_range[1], floorUnit: 'message',
+            kind: '章节摘要', summary: String(chapter.summary).trim(), storyTime: chapter.story_time_range?.label,
+        });
+        coveredRanges.push(chapter.floor_range);
+    }
+    for (const source of validSources) {
+        if (floorIsCovered(source.messageIndex, coveredRanges)) continue;
+        const stored = recordByKey.get(source.messageKey);
+        const matches = stored && stored.contentFingerprint === source.contentFingerprint;
+        const summary = matches ? stored.summary : source.fallbackSummary;
+        if (!hasSummary(summary)) continue;
+        items.push({
+            start: source.messageIndex, end: source.messageIndex, floorUnit: 'message',
+            kind: matches ? '逐楼剧情记录' : '逐楼原文临时记录', summary: String(summary).trim(),
+        });
+    }
+    items.sort((a, b) => a.start - b.start || a.end - b.end);
+    return completeNarrativeText(items);
 }
 
 function getVolumeFloorRange(volume, chaptersById) {
@@ -121,7 +195,16 @@ export function renderL2Block(data, {
     forInjection = false,
     budget = 5000,
     pairs = [],
+    narrativeSources = [],
 } = {}) {
+    const hasVisibleFloorMaterial = narrativeSources.length
+        || (data.narrative_summaries || []).length
+        || (data.narrative_chapters || []).length;
+    if (hasVisibleFloorMaterial) {
+        const text = renderVisibleFloorNarrative(data, narrativeSources);
+        if (forBudget || forInjection) return text;
+        return truncateToBudget(text, budget);
+    }
     const items = [];
     const chaptersById = new Map((data.chapters || []).map(c => [c.id, c]));
     const coveredRanges = [];

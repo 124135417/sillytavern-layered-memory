@@ -52,6 +52,41 @@ function fnv1a(value, seed = 0x811c9dc5) {
     return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+/** Fingerprint one visible SillyTavern message, including the active swipe. */
+export function messageContentFingerprint(mes) {
+    const text = getActiveMesText(mes);
+    const payload = [
+        messageStableKey(mes),
+        mes?.is_user ? 'user' : 'assistant',
+        text,
+    ].join('\0');
+    return `v1:${fnv1a(payload)}${fnv1a(payload, 0x9e3779b9)}:${payload.length}`;
+}
+
+/**
+ * Visible chat messages are the narrative floor unit. The trailing user
+ * message is normally excluded because SillyTavern already sends it verbatim
+ * as the current request while the next assistant floor is being generated.
+ */
+export function getMessageFloors({ includeTrailingUser = false } = {}) {
+    ensureMessageIds();
+    const { chat } = getContext();
+    const lastIndex = chat.length - 1;
+    return chat.flatMap((message, messageIndex) => {
+        if (!includeTrailingUser && messageIndex === lastIndex && message?.is_user) {
+            return [];
+        }
+        return [{
+            message,
+            messageKey: messageStableKey(message),
+            messageIndex,
+            role: message?.is_user ? 'user' : 'assistant',
+            text: getActiveMesText(message),
+            contentFingerprint: messageContentFingerprint(message),
+        }];
+    });
+}
+
 /** Detect edits and non-current swipe Forks even when SillyTavern keeps message IDs. */
 export function pairContentFingerprint(pair) {
     const { userText, aiText } = getPairTexts(pair);

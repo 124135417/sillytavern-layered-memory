@@ -1,5 +1,5 @@
 import { EMPTY_CHAT_DATA, MODULE_NAME } from './constants.js';
-import { getPairs } from './ids.js';
+import { getMessageFloors, getPairs } from './ids.js';
 import { appendLog, getChatData, getContext, saveChatData } from './settings.js';
 
 let recoveryBarrier = Promise.resolve({ status: 'idle' });
@@ -207,12 +207,47 @@ function reconcileArchives(data, maxPair) {
     }
 }
 
+function reconcileNarrativeArchives(data, liveMessages, maxFloor) {
+    const liveFloors = new Set((liveMessages || [])
+        .filter(message => message.messageIndex <= maxFloor)
+        .map(message => message.messageIndex));
+    const summarizedFloors = new Set((data.narrative_summaries || []).map(item => item.messageIndex));
+    data.narrative_chapters = (data.narrative_chapters || []).filter(chapter => {
+        const [start, end] = chapter.floor_range || [];
+        return Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end <= maxFloor
+            && Array.from({ length: end - start + 1 }, (_, offset) => start + offset)
+                .every(floor => liveFloors.has(floor) && summarizedFloors.has(floor));
+    });
+    const chapterIds = new Set(data.narrative_chapters.map(chapter => chapter.id));
+    data.narrative_volumes = (data.narrative_volumes || []).filter(volume =>
+        Array.isArray(volume.chapter_ids) && volume.chapter_ids.length > 0
+        && volume.chapter_ids.every(id => chapterIds.has(id)));
+    const volumeIds = new Set(data.narrative_volumes.map(volume => volume.id));
+    for (const chapter of data.narrative_chapters) {
+        if (!chapter.volume_id || !volumeIds.has(chapter.volume_id)) {
+            chapter.volume_id = null;
+            chapter.demoted = false;
+        }
+    }
+}
+
 function finishBranchData(data, parentData, livePairs, parentChat, method, trustedMaxPair) {
     const liveByKey = pairMap(livePairs);
     const maxPair = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
+    const maxFloor = livePairs.filter(pair => pair.sealed && pair.pairIndex <= trustedMaxPair).at(-1)?.aiFloor ?? -1;
+    const liveMessages = getMessageFloors({ includeTrailingUser: true });
+    const liveMessageByKey = new Map(liveMessages.map(message => [message.messageKey, message]));
     const withinTrustedPrefix = item => Number(item.floor ?? item.pairIndex ?? item.anchorPairIndex) <= trustedMaxPair;
     data.turn_summaries = (parentData.turn_summaries || [])
         .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
+    data.narrative_summaries = (parentData.narrative_summaries || []).filter(item => {
+        const message = liveMessageByKey.get(item.messageKey);
+        return message && message.messageIndex <= maxFloor
+            && item.contentFingerprint === message.contentFingerprint;
+    }).map(item => {
+        const message = liveMessageByKey.get(item.messageKey);
+        return { ...clone(item), messageIndex: message.messageIndex, role: message.role };
+    });
     data.floor_events = (parentData.floor_events || [])
         .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
     data.manual_events = (parentData.manual_events || [])
@@ -246,6 +281,9 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
     data.progress.baseline_pair = Math.min(Number.isFinite(parentBaseline) ? parentBaseline : -1, trustedMaxPair, maxPair);
     data.progress.last_chapter_end_pair = Math.min(Number.isFinite(parentChapterEnd) ? parentChapterEnd : -1, trustedMaxPair, maxPair);
     reconcileArchives(data, trustedMaxPair);
+    data.narrative_chapters = clone(parentData.narrative_chapters || []);
+    data.narrative_volumes = clone(parentData.narrative_volumes || []);
+    reconcileNarrativeArchives(data, liveMessages, maxFloor);
     data.progress.next_entry_seq = Math.max(1, ...data.state_table.entries.map(entry => Number(String(entry.id || '').replace(/^e_/, '')) + 1).filter(Number.isFinite));
     data.progress.next_chapter_seq = Math.max(1, ...data.chapters.map(chapter => Number(String(chapter.id || '').replace(/^ch_/, '')) + 1).filter(Number.isFinite));
     data.branch_origin = {
