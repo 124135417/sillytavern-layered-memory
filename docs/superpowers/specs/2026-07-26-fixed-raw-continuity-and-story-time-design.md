@@ -35,7 +35,7 @@ Events are an open-ended, ordered list of independently meaningful additions. Th
 
 Each segment may introduce a `time_change`. A floor may have zero, one, or many changes. Time labels and evidence must be verbatim substrings of the complete floor source, so preset-provided story-time fields may be read even when they are outside the extracted narrative body. The complete source is available only to the background validator for time evidence; it is never placed in the recent-raw injection. Events must still be grounded in the extracted narrative body, not preset summaries or state panels.
 
-The validator rejects missing floors, duplicate floors, invalid summaries, ungrounded events, ungrounded time changes, or time evidence returned out of source order. The job retains its existing bounded retry. Saved records keep `summary`, `segments`, and a derived final `story_time` for compatibility with chapter and UI code.
+The validator rejects missing floors, duplicate floors, and invalid summaries. Event evidence may be either one exact span or multiple exact, source-ordered spans joined by an ellipsis; lightweight Markdown emphasis differences are ignored. The first model result is checked strictly. On the bounded retry, ungrounded events and invalid time changes are dropped while the valid summary, grounded events, and valid times are saved. A partial evidence failure must never leave the entire floor permanently unrecorded. Saved records keep `summary`, `segments`, and a derived final `story_time` for compatibility with chapter and UI code.
 
 ## Rendering and chronology
 

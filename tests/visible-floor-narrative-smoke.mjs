@@ -36,7 +36,13 @@ const context = {
 globalThis.SillyTavern = { getContext: () => context };
 
 const { getMessageFloors } = await import('../src/ids.js');
-const { currentNarrativeSources, fallbackNarrativeSummary, reconcileNarrativeSummaries, validateNarrativeBatch } = await import('../src/narrative.js');
+const {
+    clearResolvedNarrativeFailures,
+    currentNarrativeSources,
+    fallbackNarrativeSummary,
+    reconcileNarrativeSummaries,
+    validateNarrativeBatch,
+} = await import('../src/narrative.js');
 const { renderL2Block } = await import('../src/render.js');
 
 const allSources = getMessageFloors({ includeTrailingUser: true }).map(source => ({
@@ -130,6 +136,59 @@ const invented = validateNarrativeBatch({ floors: [{
 }] }, [crossingSource]);
 assert.equal(invented.ok, false);
 assert.match(invented.errors.join('；'), /无原文依据|缺少剧情正文证据/u);
+
+const partial = validateNarrativeBatch({ floors: [{
+    floor: 88,
+    summary: '众人当晚留宿旅店，并在次日清晨动身。',
+    segments: [{
+        time_change: null,
+        events: [
+            { text: '众人在旅店留宿。', evidence: '他们在旅店留宿' },
+            { text: '众人决定进攻王都。', evidence: '进攻王都' },
+        ],
+    }],
+}] }, [crossingSource], { allowPartial: true });
+assert.equal(partial.ok, true, partial.errors.join('；'));
+assert.equal(partial.results[0].segments[0].events.length, 1,
+    '第二次校验必须只丢弃无原文证据的事件');
+assert.match(partial.warnings.join('；'), /已忽略该事件/u);
+
+const compositeSource = {
+    ...crossingSource,
+    text: '他拉开矮凳，先看了一眼锅。随后伸手捏起一双筷子。\n*连血都没有。*\n*这是残渣。*',
+    narrativeText: '他拉开矮凳，先看了一眼锅。随后伸手捏起一双筷子。\n*连血都没有。*\n*这是残渣。*',
+    timeSourceText: '他拉开矮凳，先看了一眼锅。随后伸手捏起一双筷子。\n*连血都没有。*\n*这是残渣。*',
+};
+const composite = validateNarrativeBatch({ floors: [{
+    floor: 88,
+    summary: '他拉开矮凳拿起筷子，并在心中嫌弃食物。',
+    segments: [{
+        time_change: null,
+        events: [
+            { text: '他拉开矮凳并拿起筷子。', evidence: '他拉开矮凳……捏起一双筷子' },
+            { text: '他认为食物连血都没有，只是残渣。', evidence: '连血都没有。这是残渣。' },
+        ],
+    }],
+}] }, [compositeSource]);
+assert.equal(composite.ok, true, composite.errors.join('；'));
+assert.equal(composite.results[0].segments[0].events.length, 2,
+    '有序多段引文和仅缺少 Markdown 强调符的引文应通过证据校验');
+
+const resolvedFailureData = {
+    narrative_summaries: [{
+        messageKey: 'm44', contentFingerprint: 'fp44', summary: '第44楼已经补齐。',
+    }],
+    job_queue: { failed: [{
+        id: 'old-failure', type: 'narrative_summary',
+        payload: { messageKeys: ['m44'], fingerprints: ['fp44'] },
+    }, {
+        id: 'unrelated', type: 'proofread', payload: {},
+    }] },
+};
+assert.equal(clearResolvedNarrativeFailures(resolvedFailureData), 1);
+assert.deepEqual(resolvedFailureData.job_queue.failed.map(job => job.id), ['unrelated'],
+    '补齐成功后只能清除已经解决的逐楼失败任务');
+assert.equal(clearResolvedNarrativeFailures({}), 0, '缺少任务队列时清理必须安全跳过');
 
 data.narrative_summaries.find(item => item.messageIndex === 25).segments = crossing.results[0].segments;
 data.narrative_summaries.find(item => item.messageIndex === 25).story_time = crossing.results[0].storyTime;

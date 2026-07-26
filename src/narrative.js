@@ -7,10 +7,11 @@ import { NARRATIVE_FLOOR_JSON_SCHEMA, NARRATIVE_FLOOR_SYSTEM } from './prompts.j
 import { enqueue } from './queue.js';
 import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
 import { normalizeStoryTime, storyTimeEvidencePosition } from './story-time.js';
-import { evidenceInSource } from './tokens.js';
+import { evidenceSpansInSource } from './tokens.js';
 
 const MAX_BATCH_MESSAGES = 25;
 const MAX_BATCH_CHARS = 45_000;
+const NARRATIVE_VALIDATOR_VERSION = 2;
 
 function narrativeText(source) {
     if (source.role === 'assistant') {
@@ -115,6 +116,28 @@ function makeBatches(sources) {
     return batches;
 }
 
+/** Remove only failed jobs whose exact source versions now have saved records. */
+export function clearResolvedNarrativeFailures(data) {
+    if (!data?.job_queue) return 0;
+    const failed = Array.isArray(data?.job_queue?.failed) ? data.job_queue.failed : [];
+    const records = new Map((data?.narrative_summaries || []).map(item => [item.messageKey, item]));
+    const kept = failed.filter(job => {
+        if (job?.type !== 'narrative_summary') return true;
+        const keys = Array.isArray(job.payload?.messageKeys) ? job.payload.messageKeys : [];
+        const fingerprints = Array.isArray(job.payload?.fingerprints) ? job.payload.fingerprints : [];
+        if (!keys.length) return true;
+        return !keys.every((key, index) => {
+            const record = records.get(key);
+            return record
+                && record.contentFingerprint === fingerprints[index]
+                && String(record.summary || '').trim();
+        });
+    });
+    const removed = failed.length - kept.length;
+    data.job_queue.failed = kept;
+    return removed;
+}
+
 export async function scheduleNarrativeMaintenance() {
     const data = getChatData();
     const sources = currentNarrativeSources();
@@ -126,6 +149,7 @@ export async function scheduleNarrativeMaintenance() {
         enqueue('narrative_summary', {
             messageKeys: batch.map(item => item.messageKey),
             fingerprints: batch.map(item => item.contentFingerprint),
+            validatorVersion: NARRATIVE_VALIDATOR_VERSION,
         }, QUEUE_PRIORITY.narrative_summary);
     }
     enqueueMissingNarrativeChapters(data, sources);
@@ -147,44 +171,70 @@ function batchPrompt(sources, retryNote = '') {
     ].join('\n\n');
 }
 
-function normalizeNarrativeSegments(rawSegments, source, floorErrors) {
+function normalizeNarrativeSegments(rawSegments, source, floorErrors, warnings, { allowPartial = false } = {}) {
+    const report = (errorMessage, warningMessage = errorMessage) => {
+        (allowPartial ? warnings : floorErrors).push(allowPartial ? warningMessage : errorMessage);
+    };
     if (!Array.isArray(rawSegments) || !rawSegments.length) {
-        floorErrors.push(`第 ${source.messageIndex} 楼缺少事件分段`);
+        report(
+            `第 ${source.messageIndex} 楼缺少事件分段`,
+            `第 ${source.messageIndex} 楼缺少事件分段，已保留摘要`,
+        );
         return { segments: [], storyTime: null };
     }
     const segments = [];
     let eventCount = 0;
+    let rawEventCount = 0;
     let lastTimePosition = -1;
     let storyTime = null;
     for (const rawSegment of rawSegments) {
         const rawTime = rawSegment?.time_change;
         const timeSourceText = source.timeSourceText ?? stripHtmlComments(source.text);
-        const timeChange = normalizeStoryTime(rawTime, timeSourceText);
+        let timeChange = normalizeStoryTime(rawTime, timeSourceText);
         if (rawTime && !timeChange) {
-            floorErrors.push(`第 ${source.messageIndex} 楼包含无原文依据的剧情时间`);
+            report(
+                `第 ${source.messageIndex} 楼包含无原文依据的剧情时间`,
+                `第 ${source.messageIndex} 楼包含无原文依据的剧情时间，已忽略该时间`,
+            );
         }
         if (timeChange) {
             const position = storyTimeEvidencePosition(timeChange.evidence, timeSourceText);
             if (position < lastTimePosition) {
-                floorErrors.push(`第 ${source.messageIndex} 楼剧情时间顺序与原文不一致`);
+                report(
+                    `第 ${source.messageIndex} 楼剧情时间顺序与原文不一致`,
+                    `第 ${source.messageIndex} 楼剧情时间顺序与原文不一致，已忽略该时间`,
+                );
+                if (allowPartial) timeChange = null;
             }
-            lastTimePosition = Math.max(lastTimePosition, position);
-            storyTime = timeChange;
+            if (timeChange) {
+                lastTimePosition = Math.max(lastTimePosition, position);
+                storyTime = timeChange;
+            }
         }
         const events = [];
         if (!Array.isArray(rawSegment?.events)) {
-            floorErrors.push(`第 ${source.messageIndex} 楼事件分段格式错误`);
+            report(
+                `第 ${source.messageIndex} 楼事件分段格式错误`,
+                `第 ${source.messageIndex} 楼事件分段格式错误，已保留摘要`,
+            );
         } else {
+            rawEventCount += rawSegment.events.length;
             for (const rawEvent of rawSegment.events) {
                 let text = String(rawEvent?.text || '').replace(/\s+/g, ' ').trim();
                 const evidence = String(rawEvent?.evidence || '').trim();
                 if ([...text].length < 2 || [...text].length > 240) {
-                    floorErrors.push(`第 ${source.messageIndex} 楼事件文字长度异常`);
+                    report(
+                        `第 ${source.messageIndex} 楼事件文字长度异常`,
+                        `第 ${source.messageIndex} 楼事件文字长度异常，已忽略该事件`,
+                    );
                     continue;
                 }
-                if ([...evidence].length < 1 || [...evidence].length > 120
-                    || !evidenceInSource(evidence, source.narrativeText ?? source.text)) {
-                    floorErrors.push(`第 ${source.messageIndex} 楼事件缺少剧情正文证据`);
+                if ([...evidence].length < 1 || [...evidence].length > 500
+                    || !evidenceSpansInSource(evidence, source.narrativeText ?? source.text)) {
+                    report(
+                        `第 ${source.messageIndex} 楼事件缺少剧情正文证据`,
+                        `第 ${source.messageIndex} 楼事件缺少剧情正文证据，已忽略该事件`,
+                    );
                     continue;
                 }
                 if (source.role === 'user' && !text.includes('<user>')) {
@@ -195,20 +245,31 @@ function normalizeNarrativeSegments(rawSegments, source, floorErrors) {
             }
         }
         if (!timeChange && !events.length) {
-            floorErrors.push(`第 ${source.messageIndex} 楼包含空事件分段`);
+            if (!rawSegment?.events?.length) {
+                report(
+                    `第 ${source.messageIndex} 楼包含空事件分段`,
+                    `第 ${source.messageIndex} 楼包含空事件分段，已忽略该分段`,
+                );
+            }
             continue;
         }
         segments.push({ time_change: timeChange, events });
     }
-    if (!eventCount) floorErrors.push(`第 ${source.messageIndex} 楼没有可核验事件`);
+    if (!eventCount && !rawEventCount) {
+        report(
+            `第 ${source.messageIndex} 楼没有可核验事件`,
+            `第 ${source.messageIndex} 楼没有可核验事件，已保留摘要`,
+        );
+    }
     return { segments, storyTime };
 }
 
-export function validateNarrativeBatch(raw, sources) {
+export function validateNarrativeBatch(raw, sources, { allowPartial = false } = {}) {
     const floors = Array.isArray(raw?.floors) ? raw.floors : [];
     const expected = sources.map(source => source.messageIndex);
     const results = [];
     const errors = [];
+    const warnings = [];
     for (const source of sources) {
         const matches = floors.filter(item => Number(item?.floor) === source.messageIndex);
         if (matches.length !== 1) {
@@ -224,13 +285,26 @@ export function validateNarrativeBatch(raw, sources) {
         if (source.role === 'user' && !summary.includes('<user>')) {
             summary = `<user>${summary.replace(/^(?:用户|你)/u, '')}`;
         }
-        const { segments, storyTime } = normalizeNarrativeSegments(matches[0]?.segments, source, floorErrors);
+        const { segments, storyTime } = normalizeNarrativeSegments(
+            matches[0]?.segments,
+            source,
+            floorErrors,
+            warnings,
+            { allowPartial },
+        );
         errors.push(...floorErrors);
         if (!floorErrors.length) results.push({ source, summary, segments, storyTime });
     }
     const returned = floors.map(item => Number(item?.floor)).filter(Number.isInteger);
     if (returned.some(floor => !expected.includes(floor))) errors.push('返回了未请求的楼号');
-    return { ok: errors.length === 0 && results.length === sources.length, errors, results };
+    const uniqueErrors = [...new Set(errors)];
+    const uniqueWarnings = [...new Set(warnings)];
+    return {
+        ok: uniqueErrors.length === 0 && results.length === sources.length,
+        errors: uniqueErrors,
+        warnings: uniqueWarnings,
+        results,
+    };
 }
 
 export async function handleNarrativeSummaryJob(payload) {
@@ -251,7 +325,7 @@ export async function handleNarrativeSummaryJob(payload) {
             temperature: 0,
         });
         assertChatData(data);
-        const checked = validateNarrativeBatch(parseJsonFromModel(text), missing);
+        const checked = validateNarrativeBatch(parseJsonFromModel(text), missing, { allowPartial: attempt === 1 });
         if (!checked.ok) {
             retryNote = checked.errors.join('；');
             continue;
@@ -273,7 +347,11 @@ export async function handleNarrativeSummaryJob(payload) {
             else data.narrative_summaries.push(next);
         }
         data.narrative_summaries.sort((a, b) => a.messageIndex - b.messageIndex);
+        clearResolvedNarrativeFailures(data);
         await saveChatData(data);
+        if (checked.warnings.length) {
+            appendLog('warn', `逐楼剧情记录已降级保存：${checked.warnings.join('；')}`);
+        }
         appendLog('info', `逐楼剧情记录完成：第 ${missing[0].messageIndex}–${missing.at(-1).messageIndex} 楼`);
         enqueueMissingNarrativeChapters(data, currentNarrativeSources());
         return;

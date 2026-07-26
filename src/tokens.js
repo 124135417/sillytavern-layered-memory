@@ -63,3 +63,30 @@ export function evidenceInSource(evidence, source) {
     const nS = normalizeWhitespace(source);
     return nS.includes(nE);
 }
+
+function normalizeEvidenceComparable(value) {
+    return String(value ?? '')
+        .replace(/[*_`]/gu, '')
+        .replace(/\s+/gu, '');
+}
+
+/**
+ * Models sometimes join multiple exact source spans with an ellipsis. Accept
+ * that representation only when every non-empty span occurs in source order.
+ */
+export function evidenceSpansInSource(evidence, source) {
+    if (evidenceInSource(evidence, source)) return true;
+    const haystack = normalizeEvidenceComparable(source);
+    const spans = String(evidence ?? '')
+        .split(/(?:…{2,}|\.{3,})/u)
+        .map(normalizeEvidenceComparable)
+        .filter(Boolean);
+    if (!haystack || !spans.length) return false;
+    let offset = 0;
+    for (const span of spans) {
+        const index = haystack.indexOf(span, offset);
+        if (index < 0) return false;
+        offset = index + span.length;
+    }
+    return true;
+}

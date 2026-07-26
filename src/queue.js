@@ -109,7 +109,8 @@ function sameWork(a, type, payload) {
     if (type === 'extract') return a.payload?.floorKey && a.payload.floorKey === payload.floorKey;
     if (type === 'narrative_summary') {
         return JSON.stringify(a.payload?.messageKeys || []) === JSON.stringify(payload.messageKeys || [])
-            && JSON.stringify(a.payload?.fingerprints || []) === JSON.stringify(payload.fingerprints || []);
+            && JSON.stringify(a.payload?.fingerprints || []) === JSON.stringify(payload.fingerprints || [])
+            && Number(a.payload?.validatorVersion || 1) === Number(payload.validatorVersion || 1);
     }
     if (type === 'narrative_chapter') {
         return a.payload?.startFloor === payload.startFloor && a.payload?.endFloor === payload.endFloor;
