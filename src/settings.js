@@ -40,6 +40,9 @@ export function getSettings() {
             settings[key] = structuredClone(DEFAULT_SETTINGS[key]);
         }
     }
+    if (![8000, 16000, 32000].includes(Number(settings.recentRawTokens))) {
+        settings.recentRawTokens = DEFAULT_SETTINGS.recentRawTokens;
+    }
     if (!Array.isArray(settings.eval_cases)) {
         settings.eval_cases = [];
     }

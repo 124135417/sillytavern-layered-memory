@@ -81,33 +81,55 @@ function narrativeRangeLabel(startPair, endPair, pairs = []) {
     return firstTurn === lastTurn ? `第 ${firstTurn} 轮对话` : `第 ${firstTurn}–${lastTurn} 轮对话`;
 }
 
-function renderNarrativeItem(item, pairs) {
+function renderStructuredSegments(segments, timeState) {
+    const lines = [];
+    for (const segment of Array.isArray(segments) ? segments : []) {
+        const label = String(segment?.time_change?.label || '').trim();
+        if (label && label !== timeState.current) {
+            lines.push(`【剧情时间推进：${label}】`);
+            timeState.current = label;
+        }
+        for (const event of Array.isArray(segment?.events) ? segment.events : []) {
+            const text = String(event?.text || '').trim();
+            if (text) lines.push(`- ${text}`);
+        }
+    }
+    return lines.join('\n');
+}
+
+function renderNarrativeItem(item, pairs, timeState = { current: '' }) {
     const range = item.floorUnit === 'message'
         ? (item.start === item.end ? `第 ${item.start} 楼` : `第 ${item.start}–${item.end} 楼`)
         : narrativeRangeLabel(item.start, item.end, pairs);
-    const storyTime = item.storyTime ? `（剧情时间：${item.storyTime}）` : '';
+    const structured = renderStructuredSegments(item.segments, timeState);
+    const storyTime = !structured && item.storyTime ? `（剧情时间：${item.storyTime}）` : '';
+    if (!structured && item.storyTime) timeState.current = item.storyTimeEnd || item.storyTime;
     return [
         `### ${item.kind}｜${range}${storyTime}`,
-        item.summary,
+        structured || item.summary,
         `【本段范围结束｜${range}】`,
     ].join('\n');
 }
 
-function completeNarrativeText(items) {
+function completeNarrativeText(items, nextRawFloor = null) {
     if (!items.length) return '';
+    const handoff = Number.isInteger(nextRawFloor)
+        ? `以上摘要截至第 ${nextRawFloor - 1} 楼；紧随其后的完整原文从第 ${nextRawFloor} 楼开始，二者连续且不重叠。`
+        : '后续提示词、最近完整对话及用户新输入均不属于上述任何摘要范围。';
+    const timeState = { current: '' };
     return [
         '## 剧情记忆开始',
         '以下内容只记录已经发生的过去剧情，并按聊天楼层顺序排列。',
         '每个标题的范围只适用于该标题下方、对应“本段范围结束”之前的内容；各段互不包含。',
         '',
-        items.map(item => renderNarrativeItem(item, [])).join('\n\n'),
+        items.map(item => renderNarrativeItem(item, [], timeState)).join('\n\n'),
         '',
         '## 剧情记忆结束',
-        '后续提示词、最近完整对话及用户新输入均不属于上述任何摘要范围。',
+        handoff,
     ].join('\n').trim();
 }
 
-function renderVisibleFloorNarrative(data, narrativeSources) {
+function renderVisibleFloorNarrative(data, narrativeSources, maxFloor = null) {
     const records = (data.narrative_summaries || []).filter(item =>
         Number.isInteger(item?.messageIndex) && hasSummary(item.summary));
     const sources = narrativeSources.length ? narrativeSources : records.map(item => ({
@@ -120,7 +142,11 @@ function renderVisibleFloorNarrative(data, narrativeSources) {
     if (!sources.length) return '';
 
     const recordByKey = new Map(records.map(item => [item.messageKey, item]));
-    const validSources = sources.slice().sort((a, b) => a.messageIndex - b.messageIndex);
+    const validSources = sources
+        .filter(source => !Number.isInteger(maxFloor) || source.messageIndex <= maxFloor)
+        .slice()
+        .sort((a, b) => a.messageIndex - b.messageIndex);
+    if (!validSources.length) return '';
     const chaptersById = new Map((data.narrative_chapters || []).map(chapter => [chapter.id, chapter]));
     const coveredRanges = [];
     const items = [];
@@ -128,6 +154,7 @@ function renderVisibleFloorNarrative(data, narrativeSources) {
         .filter(volume => !volume.stale && hasSummary(volume.summary))
         .map(volume => ({ ...volume, floor_range: getVolumeFloorRange(volume, chaptersById) }))
         .filter(volume => volume.floor_range)
+        .filter(volume => !Number.isInteger(maxFloor) || volume.floor_range[1] <= maxFloor)
         .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
     for (const volume of volumes) {
         if (rangeOverlaps(volume.floor_range, coveredRanges)) continue;
@@ -141,12 +168,14 @@ function renderVisibleFloorNarrative(data, narrativeSources) {
         .filter(chapter => !chapter.stale && hasSummary(chapter.summary))
         .map(chapter => ({ ...chapter, floor_range: validFloorRange(chapter.floor_range) }))
         .filter(chapter => chapter.floor_range)
+        .filter(chapter => !Number.isInteger(maxFloor) || chapter.floor_range[1] <= maxFloor)
         .sort((a, b) => a.floor_range[0] - b.floor_range[0]);
     for (const chapter of chapters) {
         if (rangeOverlaps(chapter.floor_range, coveredRanges)) continue;
         items.push({
             start: chapter.floor_range[0], end: chapter.floor_range[1], floorUnit: 'message',
             kind: '章节摘要', summary: String(chapter.summary).trim(), storyTime: chapter.story_time_range?.label,
+            storyTimeEnd: chapter.story_time_range?.end,
         });
         coveredRanges.push(chapter.floor_range);
     }
@@ -158,11 +187,13 @@ function renderVisibleFloorNarrative(data, narrativeSources) {
         if (!hasSummary(summary)) continue;
         items.push({
             start: source.messageIndex, end: source.messageIndex, floorUnit: 'message',
-            kind: matches ? '逐楼剧情记录' : '逐楼原文临时记录', summary: String(summary).trim(),
+            kind: matches ? '逐楼剧情记录' : '逐楼临时记录', summary: String(summary).trim(),
+            storyTime: matches ? stored.story_time?.label : null,
+            segments: matches ? stored.segments : null,
         });
     }
     items.sort((a, b) => a.start - b.start || a.end - b.end);
-    return completeNarrativeText(items);
+    return completeNarrativeText(items, Number.isInteger(maxFloor) ? maxFloor + 1 : null);
 }
 
 function getVolumeFloorRange(volume, chaptersById) {
@@ -196,12 +227,13 @@ export function renderL2Block(data, {
     budget = 5000,
     pairs = [],
     narrativeSources = [],
+    maxFloor = null,
 } = {}) {
     const hasVisibleFloorMaterial = narrativeSources.length
         || (data.narrative_summaries || []).length
         || (data.narrative_chapters || []).length;
     if (hasVisibleFloorMaterial) {
-        const text = renderVisibleFloorNarrative(data, narrativeSources);
+        const text = renderVisibleFloorNarrative(data, narrativeSources, maxFloor);
         if (forBudget || forInjection) return text;
         return truncateToBudget(text, budget);
     }
@@ -271,7 +303,10 @@ export function renderL2Block(data, {
         '以下内容只记录已经发生的过去剧情，并按聊天楼层顺序排列。',
         '每个标题的范围只适用于该标题下方、对应“本段范围结束”之前的内容；各段互不包含。',
         '',
-        items.map(item => renderNarrativeItem(item, pairs)).join('\n\n'),
+        (() => {
+            const timeState = { current: '' };
+            return items.map(item => renderNarrativeItem(item, pairs, timeState)).join('\n\n');
+        })(),
         '',
         '## 剧情记忆结束',
         '后续提示词、最近完整对话及用户新输入均不属于上述任何摘要范围。',

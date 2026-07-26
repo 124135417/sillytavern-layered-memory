@@ -77,10 +77,69 @@ assert.equal(data.narrative_chapters[1].stale, true,
     '来源历史改变后对应章节必须失效并回退逐楼覆盖');
 
 const checked = validateNarrativeBatch({ floors: [
-    { floor: 0, summary: '角色在开场说明了所处地点。' },
-    { floor: 1, summary: '询问下一步该怎么做。' },
+    { floor: 0, summary: '角色在开场说明了所处地点。', segments: [{ time_change: null, events: [{ text: '角色提到了开场消息。', evidence: 'MESSAGE_0' }] }] },
+    { floor: 1, summary: '询问下一步该怎么做。', segments: [{ time_change: null, events: [{ text: '询问下一步。', evidence: 'MESSAGE_1' }] }] },
 ] }, allSources.slice(0, 2));
-assert.equal(checked.ok, true);
+assert.equal(checked.ok, true, checked.errors.join('；'));
 assert.match(checked.results[1].summary, /^<user>/u, '用户楼摘要必须统一使用 <user>');
+assert.match(checked.results[1].segments[0].events[0].text, /^<user>/u,
+    '用户楼原子事件也必须统一使用 <user>');
 
-console.log('visible-floor narrative smoke: 25-floor chapter, 19-floor tail, current-user exclusion, swipe invalidation passed');
+const crossingSource = {
+    ...allSources[0],
+    messageIndex: 88,
+    text: '当晚，他们在旅店留宿。次日清晨，众人动身前往北门。',
+    narrativeText: '当晚，他们在旅店留宿。次日清晨，众人动身前往北门。',
+};
+const crossing = validateNarrativeBatch({ floors: [{
+    floor: 88,
+    summary: '众人当晚留宿旅店，次日清晨前往北门。',
+    segments: [{
+        time_change: { label: '当晚', kind: 'time_of_day', evidence: '当晚' },
+        events: [{ text: '众人在旅店留宿。', evidence: '他们在旅店留宿' }],
+    }, {
+        time_change: { label: '次日清晨', kind: 'relative', evidence: '次日清晨' },
+        events: [{ text: '众人动身前往北门。', evidence: '众人动身前往北门' }],
+    }],
+}] }, [crossingSource]);
+assert.equal(crossing.ok, true, crossing.errors.join('；'));
+assert.equal(crossing.results[0].segments.length, 2, '一楼跨天必须保留多个有序时间分段');
+assert.equal(crossing.results[0].storyTime.label, '次日清晨');
+
+const reversedTime = validateNarrativeBatch({ floors: [{
+    floor: 88,
+    summary: '模型把两个明确时间点的顺序写反了。',
+    segments: [{
+        time_change: { label: '次日清晨', kind: 'relative', evidence: '次日清晨' },
+        events: [{ text: '众人在旅店留宿。', evidence: '他们在旅店留宿' }],
+    }, {
+        time_change: { label: '当晚', kind: 'time_of_day', evidence: '当晚' },
+        events: [{ text: '众人动身前往北门。', evidence: '众人动身前往北门' }],
+    }],
+}] }, [crossingSource]);
+assert.equal(reversedTime.ok, false);
+assert.match(reversedTime.errors.join('；'), /剧情时间顺序与原文不一致/u);
+
+const invented = validateNarrativeBatch({ floors: [{
+    floor: 88,
+    summary: '模型编造了不存在的安排。',
+    segments: [{
+        time_change: { label: '第三天', kind: 'relative', evidence: '第三天' },
+        events: [{ text: '众人决定进攻王都。', evidence: '进攻王都' }],
+    }],
+}] }, [crossingSource]);
+assert.equal(invented.ok, false);
+assert.match(invented.errors.join('；'), /无原文依据|缺少剧情正文证据/u);
+
+data.narrative_summaries.find(item => item.messageIndex === 25).segments = crossing.results[0].segments;
+data.narrative_summaries.find(item => item.messageIndex === 25).story_time = crossing.results[0].storyTime;
+data.narrative_summaries.find(item => item.messageIndex === 26).segments = [{
+    time_change: { label: '次日清晨', kind: 'relative', evidence: '次日清晨' },
+    events: [{ text: '众人继续赶路。', evidence: 'MESSAGE_26' }],
+}];
+const timedRendered = renderL2Block(data, { forInjection: true, narrativeSources: allSources });
+assert.equal([...timedRendered.matchAll(/【剧情时间推进：次日清晨】/gu)].length, 1,
+    '相邻楼重复的预设剧情时间只能注入一次');
+assert.match(timedRendered, /【剧情时间推进：当晚】[\s\S]*众人在旅店留宿[\s\S]*【剧情时间推进：次日清晨】[\s\S]*众人动身前往北门/u);
+
+console.log('visible-floor narrative smoke: chapters, current-user exclusion, atomic events, and cross-day time segments passed');

@@ -1,0 +1,53 @@
+import { estimateTokens } from './tokens.js';
+
+function renderRawFloor(source) {
+    const role = source.role === 'user' ? '用户原文' : '角色原文';
+    return `### 第 ${source.messageIndex} 楼｜${role}\n${String(source.text || '').trim()}`;
+}
+
+export function renderRecentRawBlock(sources = []) {
+    if (!sources.length) return '';
+    const ordered = sources.slice().sort((a, b) => a.messageIndex - b.messageIndex);
+    const start = ordered[0].messageIndex;
+    const end = ordered.at(-1).messageIndex;
+    const handoff = start > 0
+        ? `前面的剧情摘要截至第 ${start - 1} 楼；以下完整原文从第 ${start} 楼连续开始。`
+        : '以下完整原文从聊天第 0 楼开始。';
+    return [
+        '## 最近完整剧情原文开始',
+        handoff,
+        '原文比更早的摘要新；如两者存在差异，以后出现的原文为准。',
+        '',
+        ordered.map(renderRawFloor).join('\n\n'),
+        '',
+        `## 最近完整剧情原文结束｜第 ${start}–${end} 楼`,
+        '紧随其后的 SillyTavern 最近消息和当前用户输入不属于以上原文范围。',
+    ].join('\n').trim();
+}
+
+/** Select a continuous suffix of complete visible floors without cutting one. */
+export function selectRecentRawWindow(sources = [], budget = 16_000) {
+    const allowance = Math.max(0, Number(budget) || 0);
+    const ordered = sources
+        .filter(source => Number.isInteger(source?.messageIndex))
+        .slice()
+        .sort((a, b) => a.messageIndex - b.messageIndex);
+    let selected = [];
+    let expectedFloor = ordered.at(-1)?.messageIndex;
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+        const source = ordered[index];
+        if (source.messageIndex !== expectedFloor) break;
+        const candidate = [source, ...selected];
+        if (estimateTokens(renderRecentRawBlock(candidate)) > allowance) break;
+        selected = candidate;
+        expectedFloor -= 1;
+    }
+    const text = renderRecentRawBlock(selected);
+    return {
+        sources: selected,
+        text,
+        tokens: estimateTokens(text),
+        startFloor: selected[0]?.messageIndex ?? null,
+        endFloor: selected.at(-1)?.messageIndex ?? null,
+    };
+}

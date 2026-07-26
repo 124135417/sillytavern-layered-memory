@@ -5,6 +5,7 @@ const settings = {
     budgetL1: 2000,
     budgetL2: 5000,
     budgetL4: 1500,
+    recentRawTokens: 16000,
     depthL4: 4,
     l4Enabled: false,
 };
@@ -102,15 +103,17 @@ updateInjection();
 let l1Call = extensionPromptCalls.find(([key]) => key === 'layered_memory_l1');
 let l2Call = extensionPromptCalls.find(([key]) => key === 'layered_memory_l2');
 assert.match(l1Call?.[1], /仍持有旧宅钥匙/u, 'missing-anchor mode must keep the L1 compatibility injection');
-assert.match(l2Call?.[1], /<user>：钥匙还在我这里/u, 'missing-anchor mode must keep complete per-message L2 coverage');
+assert.match(l1Call?.[1], /最近完整剧情原文开始[\s\S]*钥匙还在我这里/u,
+    'missing-anchor mode must keep recent raw floors in the same ordered core prompt');
+assert.equal(l2Call?.[1], '', 'the separate L2 key must stay empty so prompt-manager keys cannot reorder core memory');
 
 promptSettings.prompt_order[0].order[0].enabled = true;
 assert.equal(getPresetAnchorStatus(context).mode, 'anchor');
 const anchoredPayload = registeredMacro.value();
-assert.match(anchoredPayload, /剧情记忆开始/u);
+assert.match(anchoredPayload, /最近完整剧情原文开始/u);
 assert.match(anchoredPayload, /当前确立的事实/u);
-assert.ok(anchoredPayload.indexOf('剧情记忆开始') < anchoredPayload.indexOf('当前确立的事实'),
-    'anchored payload must put chronological L2 before current-state L1');
+assert.ok(anchoredPayload.indexOf('当前确立的事实') < anchoredPayload.indexOf('最近完整剧情原文开始'),
+    'anchored payload must put current facts before recent raw chronology');
 assert.equal(anchoredPayload, renderCoreMemoryPayload(), 'macro and preview must use the same core payload');
 
 extensionPromptCalls.length = 0;
@@ -131,6 +134,8 @@ updateInjection();
 l1Call = extensionPromptCalls.find(([key]) => key === 'layered_memory_l1');
 l2Call = extensionPromptCalls.find(([key]) => key === 'layered_memory_l2');
 assert.match(l1Call?.[1], /仍持有旧宅钥匙/u, 'duplicate-anchor mode must send L1 once through compatibility injection');
-assert.match(l2Call?.[1], /<user>：钥匙还在我这里/u, 'duplicate-anchor mode must send L2 once through compatibility injection');
+assert.match(l1Call?.[1], /最近完整剧情原文开始/u,
+    'duplicate-anchor mode must send the complete ordered payload once through compatibility injection');
+assert.equal(l2Call?.[1], '');
 
 console.log('preset anchor smoke: exact macro, fallback, de-duplication, and payload order passed');

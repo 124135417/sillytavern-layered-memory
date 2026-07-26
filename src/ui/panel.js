@@ -30,8 +30,8 @@ import {
 } from '../queue.js';
 import { QUEUE_PRIORITY } from '../constants.js';
 import { getChatData, getSettings, saveChatData, saveSettings } from '../settings.js';
-import { getPresetAnchorStatus, renderCoreMemoryPayload, updateInjection } from '../inject.js';
-import { renderL1Block, renderL2Block, renderL4Block } from '../render.js';
+import { buildCoreMemoryParts, getPresetAnchorStatus, updateInjection } from '../inject.js';
+import { renderL4Block } from '../render.js';
 import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
@@ -1028,9 +1028,10 @@ function renderInjectionFooter() {
     const settings = getSettings();
     const context = SillyTavern.getContext();
     const pairs = getPairs();
-    const l1 = renderL1Block(data, settings.budgetL1, context);
-    const l2 = renderL2Block(data, { forInjection: true, pairs });
-    const coreMemory = renderCoreMemoryPayload({ data, settings, context, pairs });
+    const coreParts = buildCoreMemoryParts({ data, settings, context, pairs });
+    const l1 = coreParts.l1;
+    const l2 = coreParts.l2;
+    const coreMemory = [coreParts.l1, coreParts.l2, coreParts.raw].filter(Boolean).join('\n\n');
     const hits = settings.l4Enabled ? retrieveHits(data, settings.budgetL4) : [];
     const l4 = settings.l4Enabled ? renderL4Block(hits, settings.budgetL4) : '';
     const presentation = injectionPresentation(false);
@@ -1048,6 +1049,7 @@ function renderInjectionFooter() {
             <div class="lm-budget-chips">
                 <span>当前事实 ${estimateTokens(l1)} / ${settings.budgetL1}</span>
                 <span>剧情摘要 ${estimateTokens(l2)}</span>
+                <span>近期完整原文 ${coreParts.rawWindow.tokens} / ${settings.recentRawTokens}</span>
                 <span>相关旧记忆 ${settings.l4Enabled ? `${hits.length} 条` : '未开启'}</span>
                 <span>${escapeHtml(anchor.title)}</span>
             </div>
@@ -2004,6 +2006,7 @@ function renderSettingsTab() {
             <details class="lm-settings-section lm-settings-disclosure">
                 <summary><div><span class="fa-solid fa-sliders" aria-hidden="true"></span><div><h4>高级设置</h4><p>记忆容量和相关旧记忆的发送位置。不了解这些选项时，请保持默认。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
                 <div class="lm-settings-fields lm-field-grid lm-field-grid-three">
+                    <label>近期完整原文容量<small>按插件统一估算，固定保留连续完整楼层，不依赖模型上下文。推荐 16000。</small><select id="lm-raw-tokens"><option value="8000" ${s.recentRawTokens === 8000 ? 'selected' : ''}>8000</option><option value="16000" ${s.recentRawTokens === 16000 ? 'selected' : ''}>16000（推荐）</option><option value="32000" ${s.recentRawTokens === 32000 ? 'selected' : ''}>32000</option></select></label>
                     <label>当前事实容量<small>长期有效的人物状态、关系和约定。推荐 2000。</small><input type="number" id="lm-b1" min="200" value="${s.budgetL1}"/></label>
                     <label>剧情摘要容量<small>以前发生过的剧情。推荐 5000。</small><input type="number" id="lm-b2" min="500" value="${s.budgetL2}"/></label>
                     <label>相关旧记忆容量<small>临时找回的旧内容。推荐 1500。</small><input type="number" id="lm-b4" min="0" value="${s.budgetL4}"/></label>
@@ -2087,6 +2090,7 @@ function bindSettingsTab(body) {
             directBaseUrl: body.querySelector('#lm-direct-url').value.trim(),
             directModel: body.querySelector('#lm-direct-model').value.trim(),
             bodyExtractionRegex: body.querySelector('#lm-body-regex').value.trim(),
+            recentRawTokens: readNumber('#lm-raw-tokens', 16000, 8000),
             budgetL1: readNumber('#lm-b1', 2000, 200),
             budgetL2: readNumber('#lm-b2', 5000, 500),
             budgetL4: readNumber('#lm-b4', 1500, 0),

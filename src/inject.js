@@ -7,6 +7,7 @@ import { enqueue } from './queue.js';
 import { getChatData, getSettings } from './settings.js';
 import { estimateTokens } from './tokens.js';
 import { currentNarrativeSources, fallbackNarrativeSummary } from './narrative.js';
+import { selectRecentRawWindow } from './recent-raw.js';
 
 let presetMacroRegistered = false;
 
@@ -41,7 +42,7 @@ export function getPresetAnchorStatus(context = SillyTavern.getContext()) {
     };
 }
 
-export function renderCoreMemoryPayload({
+export function buildCoreMemoryParts({
     data = getChatData(),
     settings = getSettings(),
     context = SillyTavern.getContext(),
@@ -51,9 +52,21 @@ export function renderCoreMemoryPayload({
         fallbackSummary: fallbackNarrativeSummary(source),
     })),
 } = {}) {
-    const l2 = renderL2Block(data, { forInjection: true, pairs, narrativeSources });
     const l1 = renderL1Block(data, settings.budgetL1, context);
-    return [l2, l1].filter(Boolean).join('\n\n');
+    const rawWindow = selectRecentRawWindow(narrativeSources, settings.recentRawTokens);
+    const maxFloor = Number.isInteger(rawWindow.startFloor) ? rawWindow.startFloor - 1 : null;
+    const l2 = renderL2Block(data, {
+        forInjection: true,
+        pairs,
+        narrativeSources,
+        maxFloor,
+    });
+    return { l1, l2, raw: rawWindow.text, rawWindow, narrativeSources };
+}
+
+export function renderCoreMemoryPayload(options = {}) {
+    const { l1, l2, raw } = buildCoreMemoryParts(options);
+    return [l1, l2, raw].filter(Boolean).join('\n\n');
 }
 
 export function renderPresetMemoryMacro() {
@@ -102,10 +115,14 @@ export function updateInjection() {
         ...source,
         fallbackSummary: fallbackNarrativeSummary(source),
     }));
-    const l1 = renderL1Block(data, settings.budgetL1, context);
-    // L2 always sends the complete highest-available narrative coverage.
-    // budgetL2 triggers higher-level compression but never truncates injection.
-    const l2 = renderL2Block(data, { forInjection: true, pairs: getPairs(), narrativeSources });
+    const { l1, l2, raw } = buildCoreMemoryParts({
+        data,
+        settings,
+        context,
+        pairs: getPairs(),
+        narrativeSources,
+    });
+    const core = [l1, l2, raw].filter(Boolean).join('\n\n');
 
     if (estimateTokens(renderL2Block(data, { forBudget: true, narrativeSources })) > (settings.budgetL2 || 5000)) {
         enqueue('volume_compress', { reason: 'budget', narrative: true }, QUEUE_PRIORITY.volume_compress);
@@ -129,8 +146,10 @@ export function updateInjection() {
     // A preset anchor expands inside its host prompt, preserving that prompt's
     // exact text position and role. Otherwise keep the mandatory IN_PROMPT
     // fallback so presets without an anchor continue to receive core memory.
-    setExtensionPrompt(PROMPT_KEYS.L1, usePresetAnchor ? '' : l1, IN_PROMPT, 0, false, SYSTEM);
-    setExtensionPrompt(PROMPT_KEYS.L2, usePresetAnchor ? '' : l2, IN_PROMPT, 0, false, SYSTEM);
+    // Keep the compatibility fallback in one prompt so facts, older summaries,
+    // and recent raw floors cannot be reordered by prompt-manager keys.
+    setExtensionPrompt(PROMPT_KEYS.L1, usePresetAnchor ? '' : core, IN_PROMPT, 0, false, SYSTEM);
+    setExtensionPrompt(PROMPT_KEYS.L2, '', IN_PROMPT, 0, false, SYSTEM);
     setExtensionPrompt(PROMPT_KEYS.L4, l4, IN_CHAT, settings.depthL4 ?? 4, false, SYSTEM);
     return anchor;
 }

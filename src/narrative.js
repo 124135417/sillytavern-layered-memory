@@ -6,6 +6,8 @@ import { getMessageFloors } from './ids.js';
 import { NARRATIVE_FLOOR_JSON_SCHEMA, NARRATIVE_FLOOR_SYSTEM } from './prompts.js';
 import { enqueue } from './queue.js';
 import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
+import { normalizeStoryTime, storyTimeEvidencePosition } from './story-time.js';
+import { evidenceInSource } from './tokens.js';
 
 const MAX_BATCH_MESSAGES = 25;
 const MAX_BATCH_CHARS = 45_000;
@@ -97,7 +99,8 @@ function makeBatches(sources) {
     let batch = [];
     let chars = 0;
     for (const source of sources) {
-        const length = [...source.narrativeText].length;
+        const extraFullSource = source.text === source.narrativeText ? '' : source.text;
+        const length = [...source.narrativeText].length + [...extraFullSource].length;
         if (batch.length && (batch.length >= MAX_BATCH_MESSAGES || chars + length > MAX_BATCH_CHARS)) {
             batches.push(batch);
             batch = [];
@@ -130,8 +133,70 @@ export async function scheduleNarrativeMaintenance() {
 function batchPrompt(sources, retryNote = '') {
     return [
         retryNote ? `上次输出没有通过校验：${retryNote}\n请完整修正。\n\n` : '',
-        ...sources.map(source => `【第 ${source.messageIndex} 楼｜${source.role === 'user' ? '用户消息' : '角色消息'}】\n${source.narrativeText}`),
+        ...sources.map(source => [
+            `【第 ${source.messageIndex} 楼｜${source.role === 'user' ? '用户消息' : '角色消息'}】`,
+            '【剧情正文｜事件 evidence 只能引用这里】',
+            source.narrativeText,
+            '【完整楼层原文｜仅时间 evidence 可以额外引用这里】',
+            source.text === source.narrativeText ? '（与剧情正文相同）' : source.text,
+        ].join('\n')),
     ].join('\n\n');
+}
+
+function normalizeNarrativeSegments(rawSegments, source, floorErrors) {
+    if (!Array.isArray(rawSegments) || !rawSegments.length) {
+        floorErrors.push(`第 ${source.messageIndex} 楼缺少事件分段`);
+        return { segments: [], storyTime: null };
+    }
+    const segments = [];
+    let eventCount = 0;
+    let lastTimePosition = -1;
+    let storyTime = null;
+    for (const rawSegment of rawSegments) {
+        const rawTime = rawSegment?.time_change;
+        const timeChange = normalizeStoryTime(rawTime, source.text);
+        if (rawTime && !timeChange) {
+            floorErrors.push(`第 ${source.messageIndex} 楼包含无原文依据的剧情时间`);
+        }
+        if (timeChange) {
+            const position = storyTimeEvidencePosition(timeChange.evidence, source.text);
+            if (position < lastTimePosition) {
+                floorErrors.push(`第 ${source.messageIndex} 楼剧情时间顺序与原文不一致`);
+            }
+            lastTimePosition = Math.max(lastTimePosition, position);
+            storyTime = timeChange;
+        }
+        const events = [];
+        if (!Array.isArray(rawSegment?.events)) {
+            floorErrors.push(`第 ${source.messageIndex} 楼事件分段格式错误`);
+        } else {
+            for (const rawEvent of rawSegment.events) {
+                let text = String(rawEvent?.text || '').replace(/\s+/g, ' ').trim();
+                const evidence = String(rawEvent?.evidence || '').trim();
+                if ([...text].length < 2 || [...text].length > 240) {
+                    floorErrors.push(`第 ${source.messageIndex} 楼事件文字长度异常`);
+                    continue;
+                }
+                if ([...evidence].length < 1 || [...evidence].length > 120
+                    || !evidenceInSource(evidence, source.narrativeText ?? source.text)) {
+                    floorErrors.push(`第 ${source.messageIndex} 楼事件缺少剧情正文证据`);
+                    continue;
+                }
+                if (source.role === 'user' && !text.includes('<user>')) {
+                    text = `<user>${text.replace(/^(?:用户|你)/u, '')}`;
+                }
+                events.push({ text, evidence });
+                eventCount += 1;
+            }
+        }
+        if (!timeChange && !events.length) {
+            floorErrors.push(`第 ${source.messageIndex} 楼包含空事件分段`);
+            continue;
+        }
+        segments.push({ time_change: timeChange, events });
+    }
+    if (!eventCount) floorErrors.push(`第 ${source.messageIndex} 楼没有可核验事件`);
+    return { segments, storyTime };
 }
 
 export function validateNarrativeBatch(raw, sources) {
@@ -145,16 +210,18 @@ export function validateNarrativeBatch(raw, sources) {
             errors.push(`第 ${source.messageIndex} 楼${matches.length ? '返回重复结果' : '缺少结果'}`);
             continue;
         }
+        const floorErrors = [];
         let summary = String(matches[0]?.summary || '').replace(/\s+/g, ' ').trim();
         const length = [...summary].length;
         if (length < 4 || length > 240) {
-            errors.push(`第 ${source.messageIndex} 楼摘要长度异常`);
-            continue;
+            floorErrors.push(`第 ${source.messageIndex} 楼摘要长度异常`);
         }
         if (source.role === 'user' && !summary.includes('<user>')) {
             summary = `<user>${summary.replace(/^(?:用户|你)/u, '')}`;
         }
-        results.push({ source, summary });
+        const { segments, storyTime } = normalizeNarrativeSegments(matches[0]?.segments, source, floorErrors);
+        errors.push(...floorErrors);
+        if (!floorErrors.length) results.push({ source, summary, segments, storyTime });
     }
     const returned = floors.map(item => Number(item?.floor)).filter(Number.isInteger);
     if (returned.some(floor => !expected.includes(floor))) errors.push('返回了未请求的楼号');
@@ -185,13 +252,15 @@ export async function handleNarrativeSummaryJob(payload) {
             continue;
         }
         data.narrative_summaries = data.narrative_summaries || [];
-        for (const { source, summary } of checked.results) {
+        for (const { source, summary, segments, storyTime } of checked.results) {
             const next = {
                 messageKey: source.messageKey,
                 messageIndex: source.messageIndex,
                 role: source.role,
                 contentFingerprint: source.contentFingerprint,
                 summary,
+                segments,
+                story_time: storyTime,
                 updatedAt: Date.now(),
             };
             const index = data.narrative_summaries.findIndex(item => item.messageKey === source.messageKey);
@@ -251,7 +320,12 @@ export async function handleNarrativeChapterJob(payload) {
         .filter(item => item.messageIndex >= startFloor && item.messageIndex <= endFloor)
         .filter(item => matchesSource(item, sourceByFloor.get(item.messageIndex)))
         .sort((a, b) => a.messageIndex - b.messageIndex)
-        .map(item => ({ pairIndex: item.messageIndex, summary: item.summary }));
+        .map(item => ({
+            pairIndex: item.messageIndex,
+            summary: item.summary,
+            story_time: item.story_time || null,
+            segments: item.segments || [],
+        }));
     const result = await summarizeChapterNotes(notes, startFloor, endFloor, () => assertChatData(data), { unit: 'floor' });
     assertChatData(data);
     data.narrative_chapters = data.narrative_chapters || [];

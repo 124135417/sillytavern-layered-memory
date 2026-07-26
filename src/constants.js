@@ -52,6 +52,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     budgetL1: 2000,
     budgetL2: 5000,
     budgetL4: 1500,
+    /** Fixed plugin-owned allowance for a suffix of complete raw message floors. */
+    recentRawTokens: 16000,
     /** Empty means the complete AI reply. Capture group 1 is the narrative body. */
     bodyExtractionRegex: '',
     chapterSize: 25,

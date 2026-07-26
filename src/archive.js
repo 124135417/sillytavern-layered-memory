@@ -6,7 +6,10 @@ function promptForNotes(notes, retryNote = '', unit = 'turn') {
     const label = unit === 'floor' ? '楼' : '轮';
     return [
         retryNote ? `上次输出没有通过校验：${retryNote}\n请重新覆盖全部${label}号。\n\n` : '',
-        ...notes.map(item => `【第 ${item.pairIndex} ${label}${item.story_time?.label ? `｜剧情时间：${item.story_time.label}` : ''}】${item.summary}`),
+        ...notes.map(item => {
+            const time = storyTimeRange([item]);
+            return `【第 ${item.pairIndex} ${label}${time?.label ? `｜剧情时间：${time.label}` : ''}】${item.summary}`;
+        }),
     ].join('\n\n');
 }
 

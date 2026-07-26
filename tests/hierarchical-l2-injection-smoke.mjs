@@ -7,6 +7,7 @@ const settings = {
     budgetL4: 1500,
     depthL4: 4,
     l4Enabled: false,
+    recentRawTokens: 16000,
 };
 
 const data = {
@@ -139,12 +140,14 @@ assert.equal(count(emptyVolumeFallback, /TURN_/g), 10);
 
 data.volumes = [];
 updateInjection();
+const coreInjection = extensionPromptCalls.find(([key]) => key === 'layered_memory_l1');
 const l2Injection = extensionPromptCalls.find(([key]) => key === 'layered_memory_l2');
-assert.deepEqual(l2Injection?.slice(2), [0, 0, false, 0],
-    'L2 必须作为 IN_PROMPT system 提示发送');
-assert.equal(l2Injection?.[1], chapterAndTail,
-    'L2 注入必须使用完整的最高级覆盖结果');
-assert.doesNotMatch(l2Injection?.[1], /已截断/,
+assert.deepEqual(coreInjection?.slice(2), [0, 0, false, 0],
+    '核心记忆必须作为单个 IN_PROMPT system 提示发送');
+assert.equal(coreInjection?.[1], chapterAndTail,
+    '核心注入必须使用完整的最高级摘要覆盖结果');
+assert.equal(l2Injection?.[1], '', '独立 L2 key 必须清空，防止核心块被重排');
+assert.doesNotMatch(coreInjection?.[1], /已截断/,
     'budgetL2 再小也不得截断本轮 L2 注入');
 assert.equal(getQueueSnapshot().queued.some(job => job.type === 'volume_compress'), true,
     '超过 budgetL2 时仍应触发长期摘要压缩任务');
