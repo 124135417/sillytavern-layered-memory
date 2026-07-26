@@ -30,8 +30,8 @@ import {
 } from '../queue.js';
 import { QUEUE_PRIORITY } from '../constants.js';
 import { getChatData, getSettings, saveChatData, saveSettings } from '../settings.js';
-import { updateInjection } from '../inject.js';
-import { renderL1Block, renderL4Block } from '../render.js';
+import { getPresetAnchorStatus, renderCoreMemoryPayload, updateInjection } from '../inject.js';
+import { renderL1Block, renderL2Block, renderL4Block } from '../render.js';
 import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
@@ -45,6 +45,7 @@ import {
     FACT_VIEW_LABELS,
     factViewMeta,
     injectionPresentation,
+    presetAnchorPresentation,
     taskRailPresentation,
     workflowPresentation,
 } from './presentation.js';
@@ -1019,13 +1020,17 @@ function bindQueueControls(body) {
 function renderInjectionFooter() {
     const data = getChatData();
     const settings = getSettings();
-    const l1 = renderL1Block(data, settings.budgetL1, SillyTavern.getContext());
+    const context = SillyTavern.getContext();
+    const pairs = getPairs();
+    const l1 = renderL1Block(data, settings.budgetL1, context);
+    const l2 = renderL2Block(data, { forInjection: true, pairs });
+    const coreMemory = renderCoreMemoryPayload({ data, settings, context, pairs });
     const hits = settings.l4Enabled ? retrieveHits(data, settings.budgetL4) : [];
     const l4 = settings.l4Enabled ? renderL4Block(hits, settings.budgetL4) : '';
     const presentation = injectionPresentation(false);
+    const anchor = presetAnchorPresentation(getPresetAnchorStatus(context));
     const preview = [
-        l1 && `【当前仍然成立的事实】\n${l1}`,
-        '【剧情摘要】\n当前不发送；每轮记录、章节和卷仍保存在记忆中心，等待明确的发送规则。',
+        coreMemory && `【核心剧情记忆】\n${coreMemory}`,
         l4 && `【与当前剧情相关的旧记忆】\n${l4}`,
     ].filter(Boolean).join('\n\n');
     return `
@@ -1036,13 +1041,15 @@ function renderInjectionFooter() {
             </div>
             <div class="lm-budget-chips">
                 <span>当前事实 ${estimateTokens(l1)} / ${settings.budgetL1}</span>
-                <span>剧情摘要 当前不发送</span>
+                <span>剧情摘要 ${estimateTokens(l2)}</span>
                 <span>相关旧记忆 ${settings.l4Enabled ? `${hits.length} 条` : '未开启'}</span>
+                <span>${escapeHtml(anchor.title)}</span>
             </div>
             <button type="button" class="lm-text-button" id="lm-preview-injection">${presentation.action}</button>
             <dialog class="lm-dialog" id="lm-injection-dialog">
                 <form method="dialog" class="lm-dialog-frame">
                     <header><div><span class="lm-kicker">只读预览</span><h3>${presentation.dialogTitle}</h3></div><button value="cancel" class="lm-icon-button" aria-label="关闭">×</button></header>
+                    <p class="lm-muted">${escapeHtml(anchor.detail)}</p>
                     <p class="lm-muted">这里只显示插件补充的记忆。酒馆原有的角色设定、世界书和最近聊天也会照常发送。</p>
                     <pre>${escapeHtml(preview)}</pre>
                 </form>

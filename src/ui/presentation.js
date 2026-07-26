@@ -80,3 +80,33 @@ export function injectionPresentation(isActual) {
             action: '预览下次记忆内容',
         };
 }
+
+export function presetAnchorPresentation(status = {}) {
+    if (!status.supported || !status.registered) {
+        return {
+            state: 'unsupported',
+            title: '预设锚点不可用，正在使用兼容注入',
+            detail: '当前 SillyTavern 没有可用的宏注册接口，核心记忆仍会通过原有方式发送。',
+        };
+    }
+    if (status.state === 'active') {
+        const host = status.hosts?.[0]?.name || '未命名提示词';
+        return {
+            state: 'active',
+            title: `预设锚点已连接：${host}`,
+            detail: '核心记忆会在这条预设提示中原地展开，旧式 L1/L2 注入已自动停用。',
+        };
+    }
+    if (status.state === 'duplicate') {
+        return {
+            state: 'duplicate',
+            title: `预设锚点重复 ${status.activeCount || 0} 处，正在使用兼容注入`,
+            detail: '重复锚点会展开为空，核心记忆只通过兼容路径发送一次。请在当前启用的预设提示中只保留一个锚点。',
+        };
+    }
+    return {
+        state: 'missing',
+        title: '预设锚点未添加，正在使用兼容注入',
+        detail: `若预设提供“前文回顾”，可在目标位置加入 ${status.token || '{{layered_memory_context}}'}。`,
+    };
+}

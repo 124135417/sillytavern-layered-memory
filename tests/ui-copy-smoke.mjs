@@ -41,6 +41,9 @@ const requiredCopy = [
     '重建工具',
     '查看上次使用内容',
     '预览下次记忆内容',
+    '预设锚点已连接',
+    '预设锚点未添加',
+    '正在使用兼容注入',
 ];
 for (const copy of requiredCopy) {
     assert.ok(panel.includes(copy) || dialogs.includes(copy) || presentation.includes(copy), `missing UI copy: ${copy}`);
@@ -62,6 +65,7 @@ const retiredCopy = [
     '希望保留多少最近剧情',
     '至少保留最近几轮完整对话',
     '自定义聊天历史容量',
+    '剧情摘要 当前不发送',
 ];
 for (const copy of retiredCopy) {
     assert.ok(!panel.includes(copy) && !facts.includes(copy), `retired or misleading UI copy returned: ${copy}`);

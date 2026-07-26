@@ -4,6 +4,7 @@ import {
     FACT_VIEW_LABELS,
     factViewMeta,
     injectionPresentation,
+    presetAnchorPresentation,
     taskRailPresentation,
     workflowPresentation,
 } from '../src/ui/presentation.js';
@@ -52,5 +53,17 @@ assert.equal(injectionPresentation(true).action, '查看上次使用内容');
 assert.equal(injectionPresentation(false).action, '预览下次记忆内容');
 assert.match(injectionPresentation(true).dialogTitle, /实际/u);
 assert.match(injectionPresentation(false).dialogTitle, /预计/u);
+
+const anchorActive = presetAnchorPresentation({
+    supported: true,
+    registered: true,
+    state: 'active',
+    hosts: [{ name: '前文回顾开头' }],
+});
+assert.equal(anchorActive.state, 'active');
+assert.match(anchorActive.title, /前文回顾开头/u);
+assert.match(presetAnchorPresentation({ supported: true, registered: true, state: 'missing' }).title, /兼容注入/u);
+assert.match(presetAnchorPresentation({ supported: true, registered: true, state: 'duplicate', activeCount: 2 }).title, /重复 2 处/u);
+assert.equal(presetAnchorPresentation({ supported: false }).state, 'unsupported');
 
 console.log('UI presentation smoke: fact, workflow, task, and injection states passed');

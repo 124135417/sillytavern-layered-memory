@@ -7,7 +7,7 @@ import {
     handleMigrateFinalizeJob,
 } from './src/eval/migrate.js';
 import { ensureMessageIds, getPairs } from './src/ids.js';
-import { updateInjection } from './src/inject.js';
+import { registerPresetMemoryMacro, updateInjection } from './src/inject.js';
 import { handleProofreadJob } from './src/proofread.js';
 import { rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
 import { appendLog, getChatData, getSettings, saveChatData } from './src/settings.js';
@@ -75,6 +75,7 @@ async function onMessageEvents(mesId) {
 jQuery(async () => {
     wireHandlers();
     getSettings();
+    registerPresetMemoryMacro();
     injectPanel();
     registerMessageMenu();
     const { eventSource, event_types } = ctx();
@@ -133,9 +134,17 @@ jQuery(async () => {
         });
     }
 
+    const presetChangedEvent = event_types.OAI_PRESET_CHANGED_AFTER || event_types.PRESET_CHANGED;
+    if (presetChangedEvent) {
+        eventSource.on(presetChangedEvent, () => {
+            updateInjection();
+            renderActiveTab();
+        });
+    }
+
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.11.3`);
+    console.log(`[${MODULE}] 已加载 v0.11.5`);
 });
 
 export async function onActivate() {
