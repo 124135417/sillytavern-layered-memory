@@ -9,7 +9,7 @@ Prevent recent plot details from disappearing while keeping the plugin independe
 - The plugin owns a fixed recent-raw allowance. The default is 16,000 estimated tokens; settings offer 8,000, 16,000, and 32,000.
 - SillyTavern continues to own its normal chat context. The plugin neither inspects a claimed provider limit nor mutates SillyTavern's request chat.
 - During generation, the trailing user floor remains outside plugin memory because SillyTavern sends it as the current request.
-- Starting with the newest completed floor, the plugin selects the largest continuous suffix of whole floors that fits its allowance. It never cuts a floor. User floors use the full user message; assistant floors use the result of the configured AI body-extraction rule, so thinking chains, state panels, and other excluded wrappers are not reinjected. If the newest completed floor alone exceeds the allowance, the raw window is empty and summary coverage remains in place.
+- Starting with the newest completed floor, the plugin selects the largest continuous suffix of whole floors that fits its allowance. It never cuts a floor. User floors use the full user message; assistant floors use the result of the configured AI body-extraction rule, followed by removal of complete HTML comments, so thinking chains, embedded writing anchors, state panels, and other excluded wrappers are not reinjected. The original chat message is never modified. If the newest completed floor alone exceeds the allowance, the raw window is empty and summary coverage remains in place.
 
 ## One-call floor record
 

@@ -59,7 +59,7 @@ const { mergeExtractResult, rollbackFloor } = await import('../src/merge.js');
 const { renderL1Block, renderL2Block } = await import('../src/render.js');
 const { updateInjection } = await import('../src/inject.js');
 const { testAuxModelConnection } = await import('../src/aux-model.js');
-const { extractAiBody } = await import('../src/body.js');
+const { extractAiBody, stripHtmlComments } = await import('../src/body.js');
 
 settings.depthL1 = 7;
 settings.depthL2 = 9;
@@ -157,6 +157,19 @@ assert.equal(bodyMatch.mode, 'regex');
 const bodyFallback = extractAiBody('没有按标签输出的正文', '<content>([\\s\\S]*?)</content>');
 assert.equal(bodyFallback.text, '没有按标签输出的正文');
 assert.equal(bodyFallback.mode, 'fallback', '正文规则失配必须自动回退整条回复');
+const anchoredBody = extractAiBody([
+    '开头正文。',
+    '<!-- 第一次写作锚定\n- 下一段增加对话\n- 不要解释 -->',
+    '中间正文。',
+    '<!-- 第二次写作锚定 -->',
+    '结尾正文。',
+].join('\n'));
+assert.match(anchoredBody.text, /开头正文。[\s\S]*中间正文。[\s\S]*结尾正文。/u);
+assert.doesNotMatch(anchoredBody.text, /写作锚定|增加对话|不要解释|<!--|-->/u,
+    'HTML 写作注释不得进入提取后的 AI 正文');
+assert.equal(stripHtmlComments('正文<!--隐藏-->继续'), '正文继续');
+assert.equal(stripHtmlComments('正文<!--未闭合的注释'), '正文<!--未闭合的注释',
+    '未闭合注释不得吞掉后续全部正文');
 
 const invalid = validateEntry({ subject: '林晚', value: '错误事实', evidence: '不存在的证据' }, {
     pipeline: 'per_floor', sourceText: '本楼没有这句话', stateTable: chatData.state_table,

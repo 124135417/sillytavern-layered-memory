@@ -147,7 +147,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.13.1`);
+    console.log(`[${MODULE}] 已加载 v0.13.2`);
 });
 
 export async function onActivate() {

@@ -95,7 +95,7 @@ assert.match(parts.raw, /RAW_FLOOR_3[\s\S]*RAW_FLOOR_7/u);
 const extractionContext = {
     chat: [{
         is_user: false,
-        mes: '<thinking>不得注入的推理</thinking><content>应当注入的剧情正文</content><status>不得注入的状态</status>',
+        mes: '<thinking>不得注入的推理</thinking><content>正文开头<!-- 第一次写作锚定：下一段增加对话 -->正文结尾</content><status>不得注入的状态</status>',
         extra: { layered_memory_id: 'assistant-with-wrapper' },
     }, {
         is_user: true,
@@ -111,10 +111,12 @@ const extractionContext = {
 globalThis.SillyTavern = { getContext: () => extractionContext };
 const { currentNarrativeSources } = await import('../src/narrative.js');
 const extractedSources = currentNarrativeSources();
-assert.equal(extractedSources[0].narrativeText, '应当注入的剧情正文');
+assert.equal(extractedSources[0].narrativeText, '正文开头正文结尾');
+assert.doesNotMatch(extractedSources[0].timeSourceText, /写作锚定|增加对话|<!--|-->/u,
+    'HTML comments must not become background story-time evidence');
 const integratedRaw = selectRecentRawWindow(extractedSources, 16000).text;
-assert.match(integratedRaw, /应当注入的剧情正文/u);
-assert.doesNotMatch(integratedRaw, /不得注入的推理|不得注入的状态|<thinking>|<status>/u,
+assert.match(integratedRaw, /正文开头正文结尾/u);
+assert.doesNotMatch(integratedRaw, /不得注入的推理|不得注入的状态|写作锚定|增加对话|<thinking>|<status>|<!--|-->/u,
     'the real currentNarrativeSources -> raw-window path must honor bodyExtractionRegex');
 
 console.log('recent raw continuity smoke: fixed budgets, extraction rules, cutoff fallback, and payload order passed');

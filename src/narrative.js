@@ -1,6 +1,6 @@
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { summarizeChapterNotes } from './archive.js';
-import { extractAiBody } from './body.js';
+import { extractAiBody, stripHtmlComments } from './body.js';
 import { QUEUE_PRIORITY } from './constants.js';
 import { getMessageFloors } from './ids.js';
 import { NARRATIVE_FLOOR_JSON_SCHEMA, NARRATIVE_FLOOR_SYSTEM } from './prompts.js';
@@ -38,6 +38,7 @@ export function currentNarrativeSources(options = {}) {
     return getMessageFloors(options).map(source => ({
         ...source,
         narrativeText: narrativeText(source),
+        timeSourceText: stripHtmlComments(source.text),
     }));
 }
 
@@ -99,7 +100,8 @@ function makeBatches(sources) {
     let batch = [];
     let chars = 0;
     for (const source of sources) {
-        const extraFullSource = source.text === source.narrativeText ? '' : source.text;
+        const timeSourceText = source.timeSourceText ?? stripHtmlComments(source.text);
+        const extraFullSource = timeSourceText === source.narrativeText ? '' : timeSourceText;
         const length = [...source.narrativeText].length + [...extraFullSource].length;
         if (batch.length && (batch.length >= MAX_BATCH_MESSAGES || chars + length > MAX_BATCH_CHARS)) {
             batches.push(batch);
@@ -138,7 +140,9 @@ function batchPrompt(sources, retryNote = '') {
             '【剧情正文｜事件 evidence 只能引用这里】',
             source.narrativeText,
             '【完整楼层原文｜仅时间 evidence 可以额外引用这里】',
-            source.text === source.narrativeText ? '（与剧情正文相同）' : source.text,
+            (source.timeSourceText ?? stripHtmlComments(source.text)) === source.narrativeText
+                ? '（与剧情正文相同）'
+                : (source.timeSourceText ?? stripHtmlComments(source.text)),
         ].join('\n')),
     ].join('\n\n');
 }
@@ -154,12 +158,13 @@ function normalizeNarrativeSegments(rawSegments, source, floorErrors) {
     let storyTime = null;
     for (const rawSegment of rawSegments) {
         const rawTime = rawSegment?.time_change;
-        const timeChange = normalizeStoryTime(rawTime, source.text);
+        const timeSourceText = source.timeSourceText ?? stripHtmlComments(source.text);
+        const timeChange = normalizeStoryTime(rawTime, timeSourceText);
         if (rawTime && !timeChange) {
             floorErrors.push(`第 ${source.messageIndex} 楼包含无原文依据的剧情时间`);
         }
         if (timeChange) {
-            const position = storyTimeEvidencePosition(timeChange.evidence, source.text);
+            const position = storyTimeEvidencePosition(timeChange.evidence, timeSourceText);
             if (position < lastTimePosition) {
                 floorErrors.push(`第 ${source.messageIndex} 楼剧情时间顺序与原文不一致`);
             }
