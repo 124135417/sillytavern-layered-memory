@@ -1,8 +1,9 @@
 import { estimateTokens } from './tokens.js';
 
 function renderRawFloor(source) {
-    const role = source.role === 'user' ? '用户原文' : '角色原文';
-    return `### 第 ${source.messageIndex} 楼｜${role}\n${String(source.text || '').trim()}`;
+    const role = source.role === 'user' ? '用户原文' : '角色正文原文';
+    const narrativeText = source.narrativeText ?? source.text;
+    return `### 第 ${source.messageIndex} 楼｜${role}\n${String(narrativeText || '').trim()}`;
 }
 
 export function renderRecentRawBlock(sources = []) {
@@ -16,6 +17,7 @@ export function renderRecentRawBlock(sources = []) {
     return [
         '## 最近完整剧情原文开始',
         handoff,
+        '角色楼只包含按用户“AI 正文提取规则”识别出的正文；思考链、状态栏和其它附加内容不属于这里。',
         '原文比更早的摘要新；如两者存在差异，以后出现的原文为准。',
         '',
         ordered.map(renderRawFloor).join('\n\n'),

@@ -32,6 +32,14 @@ const oneFloorTokens = estimateTokens(renderRecentRawBlock([largeSources.at(-1)]
 assert.deepEqual(selectRecentRawWindow(largeSources, oneFloorTokens - 1).sources, [],
     'an oversized newest floor must fall back to summary coverage instead of being cut');
 
+const extractedAssistant = source(10, '<thinking>秘密思考链</thinking><content>真正的角色正文</content><status>隐藏状态栏</status>');
+extractedAssistant.narrativeText = '真正的角色正文';
+const extractedRaw = renderRecentRawBlock([extractedAssistant]);
+assert.match(extractedRaw, /真正的角色正文/u);
+assert.doesNotMatch(extractedRaw, /秘密思考链|隐藏状态栏|<thinking>|<status>/u,
+    'recent raw injection must honor the configured AI body extraction result');
+assert.match(extractedRaw, /AI 正文提取规则/u);
+
 const sources = Array.from({ length: 8 }, (_, index) => source(index));
 const data = {
     state_table: { version: 1, entries: [{
@@ -84,4 +92,29 @@ assert.match(parts.l2, /SUMMARY_0[\s\S]*SUMMARY_1[\s\S]*SUMMARY_2/u);
 assert.doesNotMatch(parts.l2, /SUMMARY_3/u);
 assert.match(parts.raw, /RAW_FLOOR_3[\s\S]*RAW_FLOOR_7/u);
 
-console.log('recent raw continuity smoke: fixed budgets, whole floors, cutoff fallback, and payload order passed');
+const extractionContext = {
+    chat: [{
+        is_user: false,
+        mes: '<thinking>不得注入的推理</thinking><content>应当注入的剧情正文</content><status>不得注入的状态</status>',
+        extra: { layered_memory_id: 'assistant-with-wrapper' },
+    }, {
+        is_user: true,
+        mes: '继续',
+        extra: { layered_memory_id: 'current-user' },
+    }],
+    extensionSettings: { layered_memory: { bodyExtractionRegex: '<content>([\\s\\S]*?)</content>' } },
+    chatMetadata: { layered_memory: data },
+    saveChat: async () => {},
+    saveMetadata: async () => {},
+    saveSettingsDebounced: () => {},
+};
+globalThis.SillyTavern = { getContext: () => extractionContext };
+const { currentNarrativeSources } = await import('../src/narrative.js');
+const extractedSources = currentNarrativeSources();
+assert.equal(extractedSources[0].narrativeText, '应当注入的剧情正文');
+const integratedRaw = selectRecentRawWindow(extractedSources, 16000).text;
+assert.match(integratedRaw, /应当注入的剧情正文/u);
+assert.doesNotMatch(integratedRaw, /不得注入的推理|不得注入的状态|<thinking>|<status>/u,
+    'the real currentNarrativeSources -> raw-window path must honor bodyExtractionRegex');
+
+console.log('recent raw continuity smoke: fixed budgets, extraction rules, cutoff fallback, and payload order passed');
