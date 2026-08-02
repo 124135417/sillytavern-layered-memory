@@ -456,21 +456,22 @@ function enqueueMissingChapters(getPairs, baseline) {
     return enqueued;
 }
 
-export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {}) {
+export async function rebuildAndEnqueuePending({ forceLastSealed = false, excludeTrailingAssistant = false } = {}) {
     hydrateCurrentScope();
     const originData = getChatData();
     const { getFrozenPairs, getPairs, ensureActivationBaseline } = await import('./ids.js');
     assertChatData(originData);
-    const baseline = ensureActivationBaseline();
+    const pairs = getPairs({ excludeTrailingAssistant });
+    const currentPairs = () => getPairs({ excludeTrailingAssistant });
+    const baseline = ensureActivationBaseline({ pairs });
     if (originData.branch_origin?.status === 'failed') return 0;
-    await rollbackOrphanExtracts(getPairs, originData);
+    await rollbackOrphanExtracts(currentPairs, originData);
     assertChatData(originData);
     const data = originData;
     const extracted = new Set(data.extracted_keys || []);
-    let candidates = getFrozenPairs().filter(p => p.pairIndex > baseline);
+    let candidates = getFrozenPairs({ excludeTrailingAssistant }).filter(p => p.pairIndex > baseline);
 
     if (forceLastSealed) {
-        const pairs = getPairs();
         const last = [...pairs].reverse().find(p => p.sealed && p.pairIndex > baseline);
         if (last && !candidates.some(c => c.floorKey === last.floorKey)) candidates = [...candidates, last];
     }
@@ -486,10 +487,10 @@ export async function rebuildAndEnqueuePending({ forceLastSealed = false } = {})
     assertChatData(originData);
     for (const item of pending) enqueue('extract', item, QUEUE_PRIORITY.extract);
 
-    const missingCh = enqueueMissingChapters(getPairs, baseline);
+    const missingCh = enqueueMissingChapters(currentPairs, baseline);
     if (missingCh) appendLog('info', `补偿入队缺失章节摘要 ×${missingCh}`);
     const { scheduleNarrativeMaintenance } = await import('./narrative.js');
-    await scheduleNarrativeMaintenance();
+    await scheduleNarrativeMaintenance({ excludeTrailingAssistant });
     void pump();
     return pending.length;
 }

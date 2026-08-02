@@ -43,6 +43,24 @@ export function messageStableKey(mes) {
     return `${mes.send_date ?? 'nodate'}::${swipeId}::${mes.is_user ? 'u' : 'a'}`;
 }
 
+/** A right-swipe generation slot exists, but SillyTavern has not saved its reply yet. */
+export function isPendingSwipeMessage(mes) {
+    return Boolean(mes
+        && !mes.is_user
+        && Array.isArray(mes.swipes)
+        && Number.isInteger(mes.swipe_id)
+        && mes.swipe_id >= mes.swipes.length);
+}
+
+function projectedChat(chat, { excludeTrailingAssistant = false } = {}) {
+    const rows = Array.isArray(chat) ? chat : [];
+    const last = rows.at(-1);
+    if (last && !last.is_user && (excludeTrailingAssistant || isPendingSwipeMessage(last))) {
+        return rows.slice(0, -1);
+    }
+    return rows;
+}
+
 function fnv1a(value, seed = 0x811c9dc5) {
     let hash = seed;
     for (let i = 0; i < value.length; i++) {
@@ -68,11 +86,12 @@ export function messageContentFingerprint(mes) {
  * message is normally excluded because SillyTavern already sends it verbatim
  * as the current request while the next assistant floor is being generated.
  */
-export function getMessageFloors({ includeTrailingUser = false } = {}) {
+export function getMessageFloors({ includeTrailingUser = false, excludeTrailingAssistant = false } = {}) {
     ensureMessageIds();
     const { chat } = getContext();
-    const lastIndex = chat.length - 1;
-    return chat.flatMap((message, messageIndex) => {
+    const visibleChat = projectedChat(chat, { excludeTrailingAssistant });
+    const lastIndex = visibleChat.length - 1;
+    return visibleChat.flatMap((message, messageIndex) => {
         if (!includeTrailingUser && messageIndex === lastIndex && message?.is_user) {
             return [];
         }
@@ -102,13 +121,14 @@ export function pairContentFingerprint(pair) {
 /**
  * Walk chat as pairs: each pair = one user message + following non-user reply (if any).
  */
-export function getPairs() {
+export function getPairs({ excludeTrailingAssistant = false } = {}) {
     ensureMessageIds();
     const { chat } = getContext();
+    const visibleChat = projectedChat(chat, { excludeTrailingAssistant });
     const pairs = [];
     let i = 0;
-    while (i < chat.length) {
-        const mes = chat[i];
+    while (i < visibleChat.length) {
+        const mes = visibleChat[i];
         if (!mes.is_user) {
             i += 1;
             continue;
@@ -116,11 +136,11 @@ export function getPairs() {
         const user = mes;
         let ai = null;
         let j = i + 1;
-        while (j < chat.length && chat[j].is_user) {
+        while (j < visibleChat.length && visibleChat[j].is_user) {
             break;
         }
-        if (j < chat.length && !chat[j].is_user) {
-            ai = chat[j];
+        if (j < visibleChat.length && !visibleChat[j].is_user) {
+            ai = visibleChat[j];
         }
         const pair = {
             pairIndex: pairs.length,
@@ -163,8 +183,8 @@ export function getPairTexts(pair) {
 /**
  * Pairs that are sealed and should be considered for extraction once "定格".
  */
-export function getFrozenPairs() {
-    const pairs = getPairs();
+export function getFrozenPairs(options = {}) {
+    const pairs = getPairs(options);
     const frozen = [];
     for (let i = 0; i < pairs.length; i++) {
         const p = pairs[i];
@@ -183,16 +203,16 @@ export function getFrozenPairs() {
  * Record activation baseline once per chat: max sealed pairIndex at first touch.
  * Live per-floor extract only processes pairIndex > baseline_pair.
  */
-export function ensureActivationBaseline() {
+export function ensureActivationBaseline({ pairs = getPairs() } = {}) {
     const data = getChatData();
     if (data.progress.baseline_pair !== null && data.progress.baseline_pair !== undefined) {
         return data.progress.baseline_pair;
     }
-    const sealed = getPairs().filter(p => p.sealed);
+    const sealed = pairs.filter(p => p.sealed);
     const baseline = sealed.length ? Math.max(...sealed.map(p => p.pairIndex)) : -1;
     data.progress.baseline_pair = baseline;
     if (baseline >= 0) {
-        const firstNewPair = getPairs().find(pair => pair.pairIndex === baseline + 1);
+        const firstNewPair = pairs.find(pair => pair.pairIndex === baseline + 1);
         const note = firstNewPair
             ? `插件将从第 ${firstNewPair.userFloor} 楼开始自动记录。更早的聊天不会自动整理；如果需要，请前往“设置 → 安全重建以前的聊天”。`
             : '插件会从下一条用户消息开始自动记录。更早的聊天不会自动整理；如果需要，请前往“设置 → 安全重建以前的聊天”。';

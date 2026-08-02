@@ -434,6 +434,14 @@ export function reconcileCurrentHistory(data = getChatData(), livePairs = getPai
     const previousOrigin = data.branch_origin ? clone(data.branch_origin) : null;
     const rebuilt = replayBranchData(data, livePairs, previousOrigin?.parentChat || '');
     if (!previousOrigin) rebuilt.branch_origin = null;
+    const metadata = getContext().chatMetadata;
+    if (metadata?.[MODULE_NAME] === data) {
+        // Replace the active object instead of mutating it. Any background job
+        // that captured the old swipe now fails the existing chat-scope guard
+        // before it can persist stale facts or summaries into this branch.
+        metadata[MODULE_NAME] = rebuilt;
+        return rebuilt;
+    }
     for (const key of Object.keys(data)) delete data[key];
     Object.assign(data, rebuilt);
     return data;

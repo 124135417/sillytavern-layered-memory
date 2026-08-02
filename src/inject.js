@@ -10,6 +10,15 @@ import { currentNarrativeSources, fallbackNarrativeSummary } from './narrative.j
 import { selectRecentRawWindow } from './recent-raw.js';
 
 let presetMacroRegistered = false;
+let activeGenerationType = null;
+
+export function setActiveGenerationType(type) {
+    activeGenerationType = typeof type === 'string' ? type : null;
+}
+
+export function clearActiveGenerationType() {
+    activeGenerationType = null;
+}
 
 function extensionPromptApi() {
     const ctx = SillyTavern.getContext();
@@ -46,22 +55,30 @@ export function buildCoreMemoryParts({
     data = getChatData(),
     settings = getSettings(),
     context = SillyTavern.getContext(),
-    pairs = getPairs(),
-    narrativeSources = currentNarrativeSources().map(source => ({
-        ...source,
-        fallbackSummary: fallbackNarrativeSummary(source),
-    })),
+    generationType = activeGenerationType,
+    pairs = null,
+    narrativeSources = null,
 } = {}) {
+    const excludeTrailingAssistant = generationType === 'swipe';
+    const resolvedPairs = Array.isArray(pairs)
+        ? pairs
+        : getPairs({ excludeTrailingAssistant });
+    const resolvedNarrativeSources = Array.isArray(narrativeSources)
+        ? narrativeSources
+        : currentNarrativeSources({ excludeTrailingAssistant }).map(source => ({
+            ...source,
+            fallbackSummary: fallbackNarrativeSummary(source),
+        }));
     const l1 = renderL1Block(data, settings.budgetL1, context);
-    const rawWindow = selectRecentRawWindow(narrativeSources, settings.recentRawTokens);
+    const rawWindow = selectRecentRawWindow(resolvedNarrativeSources, settings.recentRawTokens);
     const maxFloor = Number.isInteger(rawWindow.startFloor) ? rawWindow.startFloor - 1 : null;
     const l2 = renderL2Block(data, {
         forInjection: true,
-        pairs,
-        narrativeSources,
+        pairs: resolvedPairs,
+        narrativeSources: resolvedNarrativeSources,
         maxFloor,
     });
-    return { l1, l2, raw: rawWindow.text, rawWindow, narrativeSources };
+    return { l1, l2, raw: rawWindow.text, rawWindow, narrativeSources: resolvedNarrativeSources };
 }
 
 export function renderCoreMemoryPayload(options = {}) {
@@ -78,7 +95,7 @@ export function renderPresetMemoryMacro() {
     if (status.mode !== 'anchor') {
         return '';
     }
-    return renderCoreMemoryPayload({ settings });
+    return renderCoreMemoryPayload({ settings, generationType: activeGenerationType });
 }
 
 export function registerPresetMemoryMacro() {
@@ -97,7 +114,7 @@ export function registerPresetMemoryMacro() {
     return true;
 }
 
-export function updateInjection() {
+export function updateInjection({ generationType = activeGenerationType } = {}) {
     const settings = getSettings();
     const context = SillyTavern.getContext();
     const { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } = extensionPromptApi();
@@ -111,7 +128,8 @@ export function updateInjection() {
     }
 
     const data = getChatData();
-    const narrativeSources = currentNarrativeSources().map(source => ({
+    const excludeTrailingAssistant = generationType === 'swipe';
+    const narrativeSources = currentNarrativeSources({ excludeTrailingAssistant }).map(source => ({
         ...source,
         fallbackSummary: fallbackNarrativeSummary(source),
     }));
@@ -119,7 +137,8 @@ export function updateInjection() {
         data,
         settings,
         context,
-        pairs: getPairs(),
+        generationType,
+        pairs: getPairs({ excludeTrailingAssistant }),
         narrativeSources,
     });
     const core = [l1, l2, raw].filter(Boolean).join('\n\n');
@@ -133,7 +152,7 @@ export function updateInjection() {
 
     let l4 = '';
     if (settings.l4Enabled) {
-        const hits = retrieveHits(data, settings.budgetL4);
+        const hits = retrieveHits(data, settings.budgetL4, { excludeTrailingAssistant });
         l4 = renderL4Block(hits, settings.budgetL4);
     }
 

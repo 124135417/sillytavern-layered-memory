@@ -138,9 +138,9 @@ export function clearResolvedNarrativeFailures(data) {
     return removed;
 }
 
-export async function scheduleNarrativeMaintenance() {
+export async function scheduleNarrativeMaintenance({ excludeTrailingAssistant = false } = {}) {
     const data = getChatData();
-    const sources = currentNarrativeSources();
+    const sources = currentNarrativeSources({ excludeTrailingAssistant });
     const changed = reconcileNarrativeSummaries(data, sources);
     if (changed) await saveChatData(data);
 

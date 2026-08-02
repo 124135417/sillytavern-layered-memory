@@ -34,7 +34,7 @@ assert.doesNotMatch(renderSource, /throughPair|removed prefix/u,
     'L2 rendering must not depend on a removed-chat boundary');
 assert.doesNotMatch(panelSource, /希望保留多少最近剧情|自定义聊天历史容量|至少保留最近几轮完整对话/u,
     'settings must not expose removed trimming controls');
-assert.match(injectionSource, /selectRecentRawWindow\(narrativeSources, settings\.recentRawTokens\)/u,
+assert.match(injectionSource, /selectRecentRawWindow\(resolvedNarrativeSources, settings\.recentRawTokens\)/u,
     'the plugin must select a fixed whole-floor raw suffix without reading provider context');
 assert.match(injectionSource, /setExtensionPrompt\(PROMPT_KEYS\.L1, usePresetAnchor \? '' : core/u,
     'compatibility injection must preserve core-memory ordering in one prompt');

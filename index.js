@@ -6,8 +6,8 @@ import {
     handleMigrateExtractChapterJob,
     handleMigrateFinalizeJob,
 } from './src/eval/migrate.js';
-import { ensureMessageIds, getPairs } from './src/ids.js';
-import { registerPresetMemoryMacro, updateInjection } from './src/inject.js';
+import { ensureMessageIds, getPairs, isPendingSwipeMessage } from './src/ids.js';
+import { clearActiveGenerationType, registerPresetMemoryMacro, setActiveGenerationType, updateInjection } from './src/inject.js';
 import { handleProofreadJob } from './src/proofread.js';
 import { rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
 import { appendLog, getChatData, getSettings, saveChatData } from './src/settings.js';
@@ -59,20 +59,20 @@ async function onChatChanged() {
     renderActiveTab();
 }
 
-async function onMessageEvents(mesId) {
+async function onMessageEvents(mesId, { excludeTrailingAssistant = false } = {}) {
     const originMetadata = ctx().chatMetadata;
     await waitForBranchRecovery();
     if (ctx().chatMetadata !== originMetadata) return;
     ensureMessageIds();
     const data = getChatData();
-    const pairs = getPairs();
-    reconcileCurrentHistory(data, pairs);
-    await saveChatData(data);
+    const pairs = getPairs({ excludeTrailingAssistant });
+    const reconciled = reconcileCurrentHistory(data, pairs);
+    await saveChatData(reconciled);
     if (ctx().chatMetadata !== originMetadata) return;
     appendLog('info', `聊天历史已改变，已按当前分支重新核对记忆${mesId == null ? '' : `（消息 #${mesId}）`}`);
-    await rebuildAndEnqueuePending();
+    await rebuildAndEnqueuePending({ excludeTrailingAssistant });
     if (ctx().chatMetadata !== originMetadata) return;
-    updateInjection();
+    updateInjection(excludeTrailingAssistant ? { generationType: 'swipe' } : undefined);
 }
 
 jQuery(async () => {
@@ -84,10 +84,15 @@ jQuery(async () => {
     const { eventSource, event_types } = ctx();
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        clearActiveGenerationType();
         void onChatChanged();
     });
 
-    eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
+    eventSource.on(event_types.MESSAGE_RECEIVED, async (mesId, type) => {
+        if (type === 'swipe') {
+            await onMessageEvents(typeof mesId === 'number' ? mesId : Number(mesId));
+            return;
+        }
         const originMetadata = ctx().chatMetadata;
         await waitForBranchRecovery();
         if (ctx().chatMetadata !== originMetadata) return;
@@ -107,8 +112,11 @@ jQuery(async () => {
         updateInjection();
     });
 
-    const swipeHandler = (mesId) => {
-        void onMessageEvents(typeof mesId === 'number' ? mesId : Number(mesId));
+    const swipeHandler = async (mesId) => {
+        const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
+        const chat = ctx().chat || [];
+        const pendingNewSwipe = normalizedId === chat.length - 1 && isPendingSwipeMessage(chat[normalizedId]);
+        await onMessageEvents(normalizedId, { excludeTrailingAssistant: pendingNewSwipe });
     };
 
     if (event_types.MESSAGE_SWIPED) {
@@ -126,14 +134,42 @@ jQuery(async () => {
         });
     }
     if (event_types.GENERATION_STARTED) {
-        eventSource.on(event_types.GENERATION_STARTED, async () => {
+        eventSource.on(event_types.GENERATION_STARTED, async (type, _params, isDryRun) => {
+            setActiveGenerationType(type);
             const originMetadata = ctx().chatMetadata;
             await ensureCurrentBranchRecovery();
             await waitForBranchRecovery();
             if (ctx().chatMetadata !== originMetadata) return;
-            await rebuildAndEnqueuePending();
+            if (isDryRun) {
+                updateInjection({ generationType: type });
+                return;
+            }
+            const swipeGeneration = type === 'swipe';
+            if (swipeGeneration) {
+                ensureMessageIds();
+                const data = getChatData();
+                const reconciled = reconcileCurrentHistory(data, getPairs({ excludeTrailingAssistant: true }));
+                await saveChatData(reconciled);
+                if (ctx().chatMetadata !== originMetadata) return;
+            }
+            await rebuildAndEnqueuePending({ excludeTrailingAssistant: swipeGeneration });
             if (ctx().chatMetadata !== originMetadata) return;
-            updateInjection();
+            updateInjection({ generationType: type });
+        });
+    }
+    const clearGenerationState = () => {
+        clearActiveGenerationType();
+        updateInjection();
+    };
+    if (event_types.GENERATION_ENDED) {
+        eventSource.on(event_types.GENERATION_ENDED, clearGenerationState);
+    }
+    if (event_types.GENERATION_STOPPED) {
+        eventSource.on(event_types.GENERATION_STOPPED, clearGenerationState);
+    }
+    if (event_types.GENERATE_AFTER_DATA) {
+        eventSource.on(event_types.GENERATE_AFTER_DATA, (_data, isDryRun) => {
+            if (isDryRun) clearGenerationState();
         });
     }
 
@@ -147,7 +183,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.13.3`);
+    console.log(`[${MODULE}] 已加载 v0.13.4`);
 });
 
 export async function onActivate() {
