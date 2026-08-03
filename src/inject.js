@@ -11,13 +11,25 @@ import { selectRecentRawWindow } from './recent-raw.js';
 
 let presetMacroRegistered = false;
 let activeGenerationType = null;
+let activeGenerationExcludeTrailingAssistant = false;
 
-export function setActiveGenerationType(type) {
+function inferTrailingAssistantProjection(type, context = SillyTavern.getContext()) {
+    if (type === 'swipe') return true;
+    if (!type) return false;
+    const last = context?.chat?.at?.(-1);
+    return Boolean(last && !last.is_user);
+}
+
+export function setActiveGenerationType(type, { excludeTrailingAssistant } = {}) {
     activeGenerationType = typeof type === 'string' ? type : null;
+    activeGenerationExcludeTrailingAssistant = typeof excludeTrailingAssistant === 'boolean'
+        ? excludeTrailingAssistant
+        : inferTrailingAssistantProjection(activeGenerationType);
 }
 
 export function clearActiveGenerationType() {
     activeGenerationType = null;
+    activeGenerationExcludeTrailingAssistant = false;
 }
 
 function extensionPromptApi() {
@@ -56,16 +68,21 @@ export function buildCoreMemoryParts({
     settings = getSettings(),
     context = SillyTavern.getContext(),
     generationType = activeGenerationType,
+    excludeTrailingAssistant = null,
     pairs = null,
     narrativeSources = null,
 } = {}) {
-    const excludeTrailingAssistant = generationType === 'swipe';
+    const resolvedExcludeTrailingAssistant = typeof excludeTrailingAssistant === 'boolean'
+        ? excludeTrailingAssistant
+        : generationType === activeGenerationType
+            ? activeGenerationExcludeTrailingAssistant
+            : inferTrailingAssistantProjection(generationType, context);
     const resolvedPairs = Array.isArray(pairs)
         ? pairs
-        : getPairs({ excludeTrailingAssistant });
+        : getPairs({ excludeTrailingAssistant: resolvedExcludeTrailingAssistant });
     const resolvedNarrativeSources = Array.isArray(narrativeSources)
         ? narrativeSources
-        : currentNarrativeSources({ excludeTrailingAssistant }).map(source => ({
+        : currentNarrativeSources({ excludeTrailingAssistant: resolvedExcludeTrailingAssistant }).map(source => ({
             ...source,
             fallbackSummary: fallbackNarrativeSummary(source),
         }));
@@ -114,7 +131,10 @@ export function registerPresetMemoryMacro() {
     return true;
 }
 
-export function updateInjection({ generationType = activeGenerationType } = {}) {
+export function updateInjection({
+    generationType = activeGenerationType,
+    excludeTrailingAssistant = null,
+} = {}) {
     const settings = getSettings();
     const context = SillyTavern.getContext();
     const { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } = extensionPromptApi();
@@ -128,8 +148,14 @@ export function updateInjection({ generationType = activeGenerationType } = {}) 
     }
 
     const data = getChatData();
-    const excludeTrailingAssistant = generationType === 'swipe';
-    const narrativeSources = currentNarrativeSources({ excludeTrailingAssistant }).map(source => ({
+    const resolvedExcludeTrailingAssistant = typeof excludeTrailingAssistant === 'boolean'
+        ? excludeTrailingAssistant
+        : generationType === activeGenerationType
+            ? activeGenerationExcludeTrailingAssistant
+            : inferTrailingAssistantProjection(generationType, context);
+    const narrativeSources = currentNarrativeSources({
+        excludeTrailingAssistant: resolvedExcludeTrailingAssistant,
+    }).map(source => ({
         ...source,
         fallbackSummary: fallbackNarrativeSummary(source),
     }));
@@ -138,7 +164,8 @@ export function updateInjection({ generationType = activeGenerationType } = {}) 
         settings,
         context,
         generationType,
-        pairs: getPairs({ excludeTrailingAssistant }),
+        excludeTrailingAssistant: resolvedExcludeTrailingAssistant,
+        pairs: getPairs({ excludeTrailingAssistant: resolvedExcludeTrailingAssistant }),
         narrativeSources,
     });
     const core = [l1, l2, raw].filter(Boolean).join('\n\n');
@@ -152,7 +179,9 @@ export function updateInjection({ generationType = activeGenerationType } = {}) 
 
     let l4 = '';
     if (settings.l4Enabled) {
-        const hits = retrieveHits(data, settings.budgetL4, { excludeTrailingAssistant });
+        const hits = retrieveHits(data, settings.budgetL4, {
+            excludeTrailingAssistant: resolvedExcludeTrailingAssistant,
+        });
         l4 = renderL4Block(hits, settings.budgetL4);
     }
 

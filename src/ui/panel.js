@@ -1987,7 +1987,7 @@ function renderSettingsTab() {
                         <textarea id="lm-body-regex" rows="2" spellcheck="false" placeholder="例如：&lt;content&gt;([\\s\\S]*?)&lt;/content&gt;">${escapeHtml(s.bodyExtractionRegex)}</textarea>
                     </label>
                     <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-test-body">用最近一条回复测试</button><output id="lm-body-result" class="lm-connection-result" aria-live="polite"></output></div>
-                    <p class="lm-security-note"><span class="fa-solid fa-circle-info" aria-hidden="true"></span>如果要让插件完全接管摘要，请关闭预设中“每轮生成摘要”的指令和只发送旧摘要的配套正则。插件不会自动修改你的预设。</p>
+                    <p class="lm-security-note"><span class="fa-solid fa-circle-info" aria-hidden="true"></span>插件会自动从 Chat Completion 请求中隐藏已经接管的旧前文，不需要再为不同预设编写“删除历史”的正则。如果预设仍主动要求模型每轮另写一份摘要，可自行关闭那条生成指令；插件不会修改预设。</p>
                 </div>
             </section>
 

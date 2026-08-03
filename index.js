@@ -7,6 +7,7 @@ import {
     handleMigrateFinalizeJob,
 } from './src/eval/migrate.js';
 import { ensureMessageIds, getPairs, isPendingSwipeMessage } from './src/ids.js';
+import { handOffManagedHistory, requestExcludesTrailingAssistant } from './src/history-handoff.js';
 import { clearActiveGenerationType, registerPresetMemoryMacro, setActiveGenerationType, updateInjection } from './src/inject.js';
 import { handleProofreadJob } from './src/proofread.js';
 import { rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
@@ -74,6 +75,27 @@ async function onMessageEvents(mesId, { excludeTrailingAssistant = false } = {})
     if (ctx().chatMetadata !== originMetadata) return;
     updateInjection(excludeTrailingAssistant ? { generationType: 'swipe' } : undefined);
 }
+
+/**
+ * SillyTavern generate_interceptor: keep old request messages available to
+ * world-info/depth preprocessing, but mark the plugin-managed prefix so the
+ * Chat Completion formatter does not send it to the provider.
+ */
+globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, _contextSize, _abort, type) {
+    try {
+        const excludeTrailingAssistant = requestExcludesTrailingAssistant(chat, type);
+        setActiveGenerationType(type, { excludeTrailingAssistant });
+        updateInjection({ generationType: type, excludeTrailingAssistant });
+        const result = handOffManagedHistory(chat, type);
+        if (result.status === 'skipped' && !['plugin_disabled', 'unsupported_backend'].includes(result.reason)) {
+            console.warn(`[${MODULE}] 历史交接已安全跳过：${result.reason}`);
+        } else if (result.status === 'handed_off') {
+            console.debug(`[${MODULE}] 已由插件接管 ${result.ignoredMessages} 条旧 Chat History 消息`);
+        }
+    } catch (err) {
+        console.error(`[${MODULE}] 历史交接失败，已保留原生 Chat History`, err);
+    }
+};
 
 jQuery(async () => {
     wireHandlers();
@@ -183,7 +205,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.13.4`);
+    console.log(`[${MODULE}] 已加载 v0.14.0`);
 });
 
 export async function onActivate() {
