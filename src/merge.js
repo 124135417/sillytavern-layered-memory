@@ -30,7 +30,7 @@ function pushChangelog(data, record) {
  * Apply normalized extract result into state table.
  * @returns {{ applied: number, discarded: number, conflicts: number }}
  */
-export async function mergeExtractResult(normalized, ctx) {
+export function mergeExtractResult(normalized, ctx) {
     const data = getChatData();
     const table = data.state_table;
     table.entries = table.entries || [];
@@ -201,8 +201,9 @@ export async function mergeExtractResult(normalized, ctx) {
             contentFingerprint: ctx.contentFingerprint || '',
         });
     }
-    await saveChatData(data);
-    return { applied, discarded, conflicts };
+    const result = { applied, discarded, conflicts };
+    if (ctx.persist === false) return result;
+    return saveChatData(data).then(() => result);
 }
 
 /**

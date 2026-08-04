@@ -12,6 +12,7 @@ const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [2_000, 8_000];
 const MAX_CONCURRENT_JOBS = 3;
 const PARALLEL_JOB_TYPES = new Set([
+    'extract',
     'narrative_summary',
     'narrative_chapter',
     'chapter_summary',

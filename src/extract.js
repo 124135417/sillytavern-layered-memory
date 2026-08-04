@@ -8,6 +8,49 @@ import { QUEUE_PRIORITY } from './constants.js';
 import { enqueue } from './queue.js';
 import { extractAiBody } from './body.js';
 
+const extractCommitStateByChat = new WeakMap();
+const EXTRACT_MUTATION_KEYS = [
+    'state_table',
+    'turn_summaries',
+    'review_queue',
+    'fact_ledger',
+    'floor_events',
+    'progress',
+    'logs',
+];
+
+function reserveExtractCommit(data) {
+    let state = extractCommitStateByChat.get(data);
+    if (!state) {
+        state = { tail: Promise.resolve(), pending: 0 };
+        extractCommitStateByChat.set(data, state);
+    }
+    const previous = state.tail.catch(() => {});
+    let resolveCurrent;
+    const current = new Promise(resolve => { resolveCurrent = resolve; });
+    state.tail = previous.then(() => current);
+    state.pending += 1;
+    let released = false;
+    return {
+        previous,
+        release() {
+            if (released) return;
+            released = true;
+            resolveCurrent();
+            state.pending -= 1;
+            if (state.pending === 0) extractCommitStateByChat.delete(data);
+        },
+    };
+}
+
+function captureExtractMutationState(data) {
+    return Object.fromEntries(EXTRACT_MUTATION_KEYS.map(key => [key, structuredClone(data[key])]));
+}
+
+function restoreExtractMutationState(data, snapshot) {
+    for (const key of EXTRACT_MUTATION_KEYS) data[key] = snapshot[key];
+}
+
 async function runExtractOnce(pair, { retryNote = '' } = {}) {
     const data = getChatData();
     const { userText, aiText } = getPairTexts(pair);
@@ -39,6 +82,65 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
     return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode };
 }
 
+async function prepareExtract(pair, payload, retryNote = '') {
+    const { raw, sourceText, bodyMode } = await runExtractOnce(pair, { retryNote });
+    const normalized = normalizeExtractOutput(raw, 'per_floor');
+    if (!normalized.turnSummary) throw new Error('逐轮剧情记录为空或过长');
+    if (payload.summaryOnly) {
+        normalized.adds = [];
+        normalized.updates = [];
+        normalized.conflicts = [];
+    }
+    return { normalized, sourceText, bodyMode };
+}
+
+function extractionAlreadyComplete(data, pair, payload) {
+    const keys = data.extracted_keys || [];
+    const alreadyExtracted = keys.includes(pair.floorKey) || keys.includes(`migrated:${pair.floorKey}`);
+    const alreadySummarized = (data.turn_summaries || []).some(item => item.floorKey === pair.floorKey && item.summary);
+    return (alreadySummarized && alreadyExtracted)
+        || (alreadySummarized && payload.summaryOnly)
+        || (alreadyExtracted && !payload.summaryOnly);
+}
+
+async function commitPreparedExtract({ prepared, pair, payload, originData, attempt }) {
+    const snapshot = captureExtractMutationState(originData);
+    try {
+        const result = mergeExtractResult(prepared.normalized, {
+            pipeline: 'per_floor',
+            sourceText: prepared.sourceText,
+            stateTable: getChatData().state_table,
+            floorKey: pair.floorKey,
+            contentFingerprint: pair.contentFingerprint,
+            pairIndex: pair.pairIndex,
+            floorLabel: pair.pairIndex,
+            source: 'auto',
+            bodyMode: prepared.bodyMode,
+            persist: false,
+        });
+        assertChatData(originData);
+        if (!payload.summaryOnly && result.discarded > 0 && result.applied === 0 && attempt === 0) {
+            restoreExtractMutationState(originData, snapshot);
+            return {
+                retry: true,
+                retryNote: `有 ${result.discarded} 条未通过最新事实表校验（evidence/实体/旧值/长度）`,
+            };
+        }
+
+        if (!payload.summaryOnly) {
+            originData.extracted_keys = originData.extracted_keys || [];
+            if (!originData.extracted_keys.includes(pair.floorKey)) originData.extracted_keys.push(pair.floorKey);
+            originData.pending_floors = (originData.pending_floors || []).filter(x => x.floorKey !== pair.floorKey);
+            originData.progress.pairs_since_proofread = (originData.progress.pairs_since_proofread || 0) + 1;
+        }
+        await saveChatData(originData);
+        return { retry: false, result };
+    } catch (error) {
+        restoreExtractMutationState(originData, snapshot);
+        throw error;
+    }
+}
+
 export async function handleExtractJob(payload) {
     const originData = getChatData();
     const settings = getSettings();
@@ -60,83 +162,62 @@ export async function handleExtractJob(payload) {
         return;
     }
 
-    const data = getChatData();
-    const keys = data.extracted_keys || [];
-    const alreadyExtracted = keys.includes(pair.floorKey) || keys.includes(`migrated:${pair.floorKey}`);
-    const alreadySummarized = (data.turn_summaries || []).some(item => item.floorKey === pair.floorKey && item.summary);
     // Skip if already extracted live, or covered by migration (migrated:<floorKey>).
-    if ((alreadySummarized && alreadyExtracted)
-        || (alreadySummarized && payload.summaryOnly)
-        || (alreadyExtracted && !payload.summaryOnly)) {
-        return;
+    if (extractionAlreadyComplete(getChatData(), pair, payload)) return;
+
+    const commit = reserveExtractCommit(originData);
+    let prepared = null;
+    let preparationError = null;
+    try {
+        prepared = await prepareExtract(pair, payload);
+    } catch (error) {
+        preparationError = error;
     }
 
-    let retryNote = '';
+    await commit.previous;
+    try {
+        assertChatData(originData);
+        if (extractionAlreadyComplete(getChatData(), pair, payload)) return;
+        let retryNote = preparationError?.message ?? '';
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+                if (attempt === 0 && preparationError) throw preparationError;
+                const candidate = attempt === 0 ? prepared : await prepareExtract(pair, payload, retryNote);
+                const committed = await commitPreparedExtract({
+                    prepared: candidate,
+                    pair,
+                    payload,
+                    originData,
+                    attempt,
+                });
+                if (committed.retry) {
+                    retryNote = committed.retryNote;
+                    continue;
+                }
 
-    for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-            const { raw, sourceText, bodyMode } = await runExtractOnce(pair, { retryNote });
-            assertChatData(originData);
-            const normalized = normalizeExtractOutput(raw, 'per_floor');
-            if (!normalized.turnSummary) {
-                throw new Error('逐轮剧情记录为空或过长');
-            }
-            if (payload.summaryOnly) {
-                normalized.adds = [];
-                normalized.updates = [];
-                normalized.conflicts = [];
-            }
-            const result = await mergeExtractResult(normalized, {
-                pipeline: 'per_floor',
-                sourceText,
-                stateTable: getChatData().state_table,
-                floorKey: pair.floorKey,
-                contentFingerprint: pair.contentFingerprint,
-                pairIndex: pair.pairIndex,
-                floorLabel: pair.pairIndex,
-                source: 'auto',
-                bodyMode,
-            });
-            assertChatData(originData);
-
-            if (payload.summaryOnly) {
-                appendLog('info', `逐轮剧情补记完成 楼#${pair.pairIndex}`);
+                if (payload.summaryOnly) {
+                    appendLog('info', `逐轮剧情补记完成 楼#${pair.pairIndex}`);
+                    return;
+                }
+                appendLog('info', `提取完成 楼#${pair.pairIndex}: +${committed.result.applied} 丢${committed.result.discarded} 冲突${committed.result.conflicts}`);
+                if (!payload.ignoreBaseline) {
+                    maybeEnqueueChapter(pair.pairIndex);
+                    maybeEnqueueProofread();
+                }
                 return;
-            }
-
-            if (result.discarded > 0 && result.applied === 0 && attempt === 0) {
-                retryNote = `有 ${result.discarded} 条未通过校验（evidence/实体/长度）`;
-                continue;
-            }
-
-            const d = getChatData();
-            d.extracted_keys = d.extracted_keys || [];
-            if (!d.extracted_keys.includes(pair.floorKey)) {
-                d.extracted_keys.push(pair.floorKey);
-            }
-            d.pending_floors = (d.pending_floors || []).filter(x => x.floorKey !== pair.floorKey);
-            d.progress.pairs_since_proofread = (d.progress.pairs_since_proofread || 0) + 1;
-            await saveChatData(originData);
-
-            appendLog('info', `提取完成 楼#${pair.pairIndex}: +${result.applied} 丢${result.discarded} 冲突${result.conflicts}`);
-
-            if (!payload.ignoreBaseline) {
-                maybeEnqueueChapter(pair.pairIndex);
-                maybeEnqueueProofread();
-            }
-            return;
-        } catch (err) {
-            if (err?.code === 'CHAT_SCOPE_CHANGED') {
+            } catch (err) {
+                if (err?.code === 'CHAT_SCOPE_CHANGED') throw err;
+                assertChatData(originData);
+                if (attempt === 0) {
+                    retryNote = err?.message ?? String(err);
+                    continue;
+                }
+                appendLog('error', `提取失败 楼#${pair.pairIndex}: ${err?.message ?? err}`);
                 throw err;
             }
-            assertChatData(originData);
-            if (attempt === 0) {
-                retryNote = err?.message ?? String(err);
-                continue;
-            }
-            appendLog('error', `提取失败 楼#${pair.pairIndex}: ${err?.message ?? err}`);
-            throw err;
         }
+    } finally {
+        commit.release();
     }
 }
 

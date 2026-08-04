@@ -103,28 +103,28 @@ active = 'priority';
 const prioritySegmentStarted = [];
 const prioritySegmentReleases = new Map();
 const prioritySegmentCounters = { active: 0, max: 0 };
-let priorityExtractStarted = false;
-let releasePriorityExtract;
+let priorityProofreadStarted = false;
+let releasePriorityProofread;
 registerHandler('history_rebuild_segment', gatedHandler(
     prioritySegmentStarted, prioritySegmentReleases, prioritySegmentCounters));
-registerHandler('extract', async () => {
-    priorityExtractStarted = true;
-    await new Promise(resolve => { releasePriorityExtract = resolve; });
+registerHandler('proofread', async () => {
+    priorityProofreadStarted = true;
+    await new Promise(resolve => { releasePriorityProofread = resolve; });
 });
 enqueue('history_rebuild_segment', { startPair: 0, endPair: 9 }, 10);
 enqueue('history_rebuild_segment', { startPair: 10, endPair: 19 }, 10);
 await waitUntil(() => prioritySegmentStarted.length === 2, 'initial low-priority batch should start');
 enqueue('history_rebuild_segment', { startPair: 20, endPair: 29 }, 10);
-enqueue('extract', { floorKey: 'priority-floor', pairIndex: 99 }, 100);
+enqueue('proofread', { key: 'priority-proofread' }, 100);
 prioritySegmentReleases.get(prioritySegmentStarted[0])();
 await waitUntil(() => getQueueSnapshot().running.length === 1, 'one low-priority request should remain active');
 await new Promise(resolve => setTimeout(resolve, 20));
 assert.equal(prioritySegmentStarted.length, 2, 'a low-priority batch must not refill ahead of higher-priority work');
-assert.equal(priorityExtractStarted, false, 'exclusive high-priority work waits for the active batch to drain');
+assert.equal(priorityProofreadStarted, false, 'exclusive high-priority work waits for the active batch to drain');
 prioritySegmentReleases.get(prioritySegmentStarted[1])();
-await waitUntil(() => priorityExtractStarted, 'high-priority exclusive work should run next');
+await waitUntil(() => priorityProofreadStarted, 'high-priority exclusive work should run next');
 assert.equal(prioritySegmentStarted.length, 2);
-releasePriorityExtract();
+releasePriorityProofread();
 await waitUntil(() => prioritySegmentStarted.length === 3, 'remaining low-priority work should resume afterward');
 prioritySegmentReleases.get(prioritySegmentStarted[2])();
 await waitUntil(() => getQueueSnapshot().running.length === 0 && getQueueSnapshot().queued.length === 0,
@@ -157,15 +157,15 @@ active = 'exclusive';
 const exclusiveStarted = [];
 const exclusiveReleases = new Map();
 const exclusiveCounters = { active: 0, max: 0 };
-registerHandler('extract', gatedHandler(exclusiveStarted, exclusiveReleases, exclusiveCounters));
-enqueue('extract', { floorKey: 'floor-a', pairIndex: 1 }, 100);
-enqueue('extract', { floorKey: 'floor-b', pairIndex: 2 }, 100);
+registerHandler('proofread', gatedHandler(exclusiveStarted, exclusiveReleases, exclusiveCounters));
+enqueue('proofread', { key: 'proofread-a' }, 50);
+enqueue('proofread', { key: 'proofread-b' }, 50);
 await waitUntil(() => exclusiveStarted.length === 1, 'first exclusive job should start');
 assert.equal(getQueueSnapshot().running.length, 1);
 assert.equal(getQueueSnapshot().queued.length, 1);
 exclusiveReleases.get(exclusiveStarted[0])();
 await waitUntil(() => exclusiveStarted.length === 2, 'second exclusive job should start after the first');
-assert.equal(exclusiveCounters.max, 1, 'state-dependent extract jobs must remain serial');
+assert.equal(exclusiveCounters.max, 1, 'shared-state maintenance jobs must remain serial');
 exclusiveReleases.get(exclusiveStarted[1])();
 await waitUntil(() => getQueueSnapshot().running.length === 0 && getQueueSnapshot().queued.length === 0,
     'exclusive queue should drain');
@@ -178,7 +178,8 @@ registerHandler('narrative_summary', async () => {
     scopeSwitchHandlerFinished = true;
 });
 enqueue('narrative_summary', { messageKeys: ['switch'], fingerprints: ['switch'], validatorVersion: 2 }, 95);
-await waitUntil(() => getQueueSnapshot().running.length === 1, 'scope-switch job should start');
+await waitUntil(() => typeof releaseScopeSwitch === 'function', 'scope-switch handler should start');
+assert.equal(getQueueSnapshot().running.length, 1);
 chats.scope_switch.layered_memory.job_queue.paused = true;
 active = 'switch_target';
 releaseScopeSwitch();
