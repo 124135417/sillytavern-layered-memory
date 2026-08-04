@@ -16,11 +16,12 @@ const chats = {
     b: { layered_memory: emptyData('scope-b') },
 };
 let active = 'a';
+let metadataSaves = 0;
 const context = {
     chat: [],
     extensionSettings: { layered_memory: { enabled: true, chapterSize: 25 } },
     get chatMetadata() { return chats[active]; },
-    saveMetadata: async () => {},
+    saveMetadata: async () => { metadataSaves += 1; },
     saveSettingsDebounced: () => {},
 };
 globalThis.SillyTavern = { getContext: () => context, libs: {} };
@@ -31,6 +32,7 @@ const {
     getQueueSnapshot,
     isRetryableError,
     prioritizeNarrativeSummary,
+    rebuildAndEnqueuePending,
     retryFailedJob,
     setQueuePaused,
 } = await import('../src/queue.js');
@@ -106,5 +108,12 @@ assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 400'), 
 assert.equal(isRetryableError(new Error('模型服务 HTTP 422: invalid schema')), false);
 assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 429'), { status: 429 })), true);
 assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 503'), { status: 503 })), true);
+
+active = 'b';
+metadataSaves = 0;
+await rebuildAndEnqueuePending();
+assert.equal(metadataSaves, 0, 'unchanged pending floors must not trigger a redundant metadata save');
+await rebuildAndEnqueuePending({ forcePersist: true });
+assert.equal(metadataSaves, 1, 'history reconciliation must still be able to require one metadata save');
 
 console.log('queue smoke: retry, validator upgrade, scope isolation, and error classes passed');

@@ -1,9 +1,9 @@
 {
   "name": "sillytavern-layered-memory",
-  "version": "0.15.2",
+  "version": "0.15.3",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/history-handoff-smoke.mjs && node tests/recent-raw-continuity-smoke.mjs && node tests/style-reset-smoke.mjs && node tests/swipe-isolation-smoke.mjs && node tests/hierarchical-l2-injection-smoke.mjs && node tests/visible-floor-narrative-smoke.mjs && node tests/preset-anchor-smoke.mjs && node tests/core-smoke.mjs && node tests/queue-smoke.mjs && node tests/queue-concurrency-smoke.mjs && node tests/extract-concurrency-smoke.mjs && node tests/model-routing-smoke.mjs && node tests/fork-smoke.mjs && node tests/migration-progress-smoke.mjs && node tests/rebuild-quality-smoke.mjs && node tests/fact-ledger-smoke.mjs && node tests/ui-presentation-smoke.mjs && node tests/mobile-ui-smoke.mjs && node tests/ui-copy-smoke.mjs"
+    "test": "node tests/history-handoff-smoke.mjs && node tests/recent-raw-continuity-smoke.mjs && node tests/style-reset-smoke.mjs && node tests/swipe-isolation-smoke.mjs && node tests/history-mutation-barrier-smoke.mjs && node tests/hierarchical-l2-injection-smoke.mjs && node tests/visible-floor-narrative-smoke.mjs && node tests/preset-anchor-smoke.mjs && node tests/core-smoke.mjs && node tests/queue-smoke.mjs && node tests/queue-concurrency-smoke.mjs && node tests/extract-concurrency-smoke.mjs && node tests/model-routing-smoke.mjs && node tests/fork-smoke.mjs && node tests/migration-progress-smoke.mjs && node tests/rebuild-quality-smoke.mjs && node tests/fact-ledger-smoke.mjs && node tests/ui-presentation-smoke.mjs && node tests/mobile-ui-smoke.mjs && node tests/ui-copy-smoke.mjs"
   }
 }

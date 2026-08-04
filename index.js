@@ -8,10 +8,11 @@ import {
 } from './src/eval/migrate.js';
 import { ensureMessageIds, getPairs, isPendingSwipeMessage } from './src/ids.js';
 import { handOffManagedHistory, requestExcludesTrailingAssistant } from './src/history-handoff.js';
+import { createHistoryMutationCoordinator } from './src/history-mutation.js';
 import { clearActiveGenerationType, registerPresetMemoryMacro, setActiveGenerationType, updateInjection } from './src/inject.js';
 import { handleProofreadJob } from './src/proofread.js';
 import { rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
-import { appendLog, getChatData, getSettings, saveChatData } from './src/settings.js';
+import { appendLog, getChatData, getSettings } from './src/settings.js';
 import { handleStateGcJob } from './src/state-gc.js';
 import { injectPanel, registerMessageMenu, renderActiveTab } from './src/ui/panel.js';
 import { handleVolumeCompressJob } from './src/volume.js';
@@ -64,20 +65,64 @@ async function onChatChanged() {
     renderActiveTab();
 }
 
-async function onMessageEvents(mesId, { excludeTrailingAssistant = false } = {}) {
-    const originMetadata = ctx().chatMetadata;
+async function onMessageEvents(mesId, { excludeTrailingAssistant = false } = {}, originMetadata = ctx().chatMetadata) {
     await waitForBranchRecovery();
     if (ctx().chatMetadata !== originMetadata) return;
     ensureMessageIds();
     const data = getChatData();
     const pairs = getPairs({ excludeTrailingAssistant });
-    const reconciled = reconcileCurrentHistory(data, pairs);
-    await saveChatData(reconciled);
-    if (ctx().chatMetadata !== originMetadata) return;
+    reconcileCurrentHistory(data, pairs);
     appendLog('info', `聊天历史已改变，已按当前分支重新核对记忆${mesId == null ? '' : `（消息 #${mesId}）`}`);
-    await rebuildAndEnqueuePending({ excludeTrailingAssistant });
+    await rebuildAndEnqueuePending({ excludeTrailingAssistant, forcePersist: true });
     if (ctx().chatMetadata !== originMetadata) return;
     updateInjection(excludeTrailingAssistant ? { generationType: 'swipe' } : undefined);
+}
+
+const historyMutations = createHistoryMutationCoordinator((work, originMetadata) => (
+    onMessageEvents(work.mesId, work, originMetadata)
+));
+
+function historyMutationKey({ excludeTrailingAssistant = false } = {}) {
+    ensureMessageIds();
+    const pairs = getPairs({ excludeTrailingAssistant });
+    const projection = pairs.map(pair => [
+        pair.pairIndex,
+        pair.floorKey,
+        pair.contentFingerprint,
+        pair.sealed ? 1 : 0,
+    ].join(':')).join('|');
+    return `${excludeTrailingAssistant ? 'without-trailing-assistant' : 'current'}|${projection}`;
+}
+
+function queueHistoryMutation(mesId, { excludeTrailingAssistant = false } = {}) {
+    const originMetadata = ctx().chatMetadata;
+    const work = { mesId, excludeTrailingAssistant };
+    const pending = historyMutations.schedule(originMetadata, work, historyMutationKey(work));
+    void pending.catch(error => {
+        if (error?.code === 'CHAT_SCOPE_CHANGED') return;
+        console.error(`[${MODULE}] 聊天历史后台同步失败`, error);
+        globalThis.toastr?.error?.(`聊天历史同步失败：${error?.message ?? error}`);
+    });
+    return pending;
+}
+
+async function waitForGenerationHistory(chat, type) {
+    const originMetadata = ctx().chatMetadata;
+    const excludeTrailingAssistant = requestExcludesTrailingAssistant(chat, type);
+    const state = historyMutations.snapshot(originMetadata);
+    if (type === 'swipe') {
+        await queueHistoryMutation(null, { excludeTrailingAssistant: true });
+    } else if (state.failed) {
+        await queueHistoryMutation(null);
+    } else {
+        await historyMutations.wait(originMetadata);
+    }
+    if (ctx().chatMetadata !== originMetadata) {
+        const error = new Error('聊天已切换，已中止旧聊天的生成');
+        error.code = 'CHAT_SCOPE_CHANGED';
+        throw error;
+    }
+    return { excludeTrailingAssistant };
 }
 
 /**
@@ -86,7 +131,14 @@ async function onMessageEvents(mesId, { excludeTrailingAssistant = false } = {})
  * Chat Completion formatter does not send it to the provider.
  */
 globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, _contextSize, _abort, type) {
-    const excludeTrailingAssistant = requestExcludesTrailingAssistant(chat, type);
+    let excludeTrailingAssistant;
+    try {
+        ({ excludeTrailingAssistant } = await waitForGenerationHistory(chat, type));
+    } catch (err) {
+        console.error(`[${MODULE}] 聊天历史尚未安全同步，已中止本次生成`, err);
+        globalThis.toastr?.error?.(`生成前历史同步失败：${err?.message ?? err}`);
+        throw err;
+    }
     try {
         await ensureStyleResetNarrativeCoverage({ excludeTrailingAssistant });
     } catch (err) {
@@ -123,7 +175,7 @@ jQuery(async () => {
 
     eventSource.on(event_types.MESSAGE_RECEIVED, async (mesId, type) => {
         if (type === 'swipe') {
-            await onMessageEvents(typeof mesId === 'number' ? mesId : Number(mesId));
+            queueHistoryMutation(typeof mesId === 'number' ? mesId : Number(mesId));
             return;
         }
         const originMetadata = ctx().chatMetadata;
@@ -145,49 +197,39 @@ jQuery(async () => {
         updateInjection();
     });
 
-    const swipeHandler = async (mesId) => {
+    const historyMutationHandler = (mesId) => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         const chat = ctx().chat || [];
         const pendingNewSwipe = normalizedId === chat.length - 1 && isPendingSwipeMessage(chat[normalizedId]);
-        await onMessageEvents(normalizedId, { excludeTrailingAssistant: pendingNewSwipe });
+        queueHistoryMutation(normalizedId, { excludeTrailingAssistant: pendingNewSwipe });
     };
 
     if (event_types.MESSAGE_SWIPED) {
-        eventSource.on(event_types.MESSAGE_SWIPED, swipeHandler);
+        eventSource.on(event_types.MESSAGE_SWIPED, historyMutationHandler);
     }
     if (event_types.MESSAGE_EDITED) {
-        eventSource.on(event_types.MESSAGE_EDITED, swipeHandler);
+        eventSource.on(event_types.MESSAGE_EDITED, historyMutationHandler);
     }
     if (event_types.MESSAGE_DELETED) {
-        eventSource.on(event_types.MESSAGE_DELETED, async (mesId) => {
-            const originMetadata = ctx().chatMetadata;
-            await onMessageEvents(typeof mesId === 'number' ? mesId : Number(mesId));
-            if (ctx().chatMetadata !== originMetadata) return;
-            await saveChatData(getChatData());
+        eventSource.on(event_types.MESSAGE_DELETED, (mesId) => {
+            queueHistoryMutation(typeof mesId === 'number' ? mesId : Number(mesId));
         });
     }
     if (event_types.GENERATION_STARTED) {
         eventSource.on(event_types.GENERATION_STARTED, async (type, _params, isDryRun) => {
             setActiveGenerationType(type);
             const originMetadata = ctx().chatMetadata;
+            const { excludeTrailingAssistant } = await waitForGenerationHistory(ctx().chat, type);
             await ensureCurrentBranchRecovery();
             await waitForBranchRecovery();
             if (ctx().chatMetadata !== originMetadata) return;
             if (isDryRun) {
-                updateInjection({ generationType: type });
+                updateInjection({ generationType: type, excludeTrailingAssistant });
                 return;
             }
-            const swipeGeneration = type === 'swipe';
-            if (swipeGeneration) {
-                ensureMessageIds();
-                const data = getChatData();
-                const reconciled = reconcileCurrentHistory(data, getPairs({ excludeTrailingAssistant: true }));
-                await saveChatData(reconciled);
-                if (ctx().chatMetadata !== originMetadata) return;
-            }
-            await rebuildAndEnqueuePending({ excludeTrailingAssistant: swipeGeneration });
+            await rebuildAndEnqueuePending({ excludeTrailingAssistant });
             if (ctx().chatMetadata !== originMetadata) return;
-            updateInjection({ generationType: type });
+            updateInjection({ generationType: type, excludeTrailingAssistant });
         });
     }
     const clearGenerationState = () => {
@@ -216,7 +258,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.15.2`);
+    console.log(`[${MODULE}] 已加载 v0.15.3`);
 });
 
 export async function onActivate() {

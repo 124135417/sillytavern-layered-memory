@@ -676,7 +676,23 @@ function enqueueMissingChapters(getPairs, baseline) {
     return enqueued;
 }
 
-export async function rebuildAndEnqueuePending({ forceLastSealed = false, excludeTrailingAssistant = false } = {}) {
+function samePendingFloors(current, next) {
+    const left = Array.isArray(current) ? current : [];
+    const right = Array.isArray(next) ? next : [];
+    return left.length === right.length && left.every((item, index) => {
+        const candidate = right[index];
+        return item?.floorKey === candidate?.floorKey
+            && item?.pairIndex === candidate?.pairIndex
+            && item?.userKey === candidate?.userKey
+            && item?.aiKey === candidate?.aiKey;
+    });
+}
+
+export async function rebuildAndEnqueuePending({
+    forceLastSealed = false,
+    excludeTrailingAssistant = false,
+    forcePersist = false,
+} = {}) {
     hydrateCurrentScope();
     const originData = getChatData();
     const { getFrozenPairs, getPairs, ensureActivationBaseline } = await import('./ids.js');
@@ -702,8 +718,9 @@ export async function rebuildAndEnqueuePending({ forceLastSealed = false, exclud
             pending.push({ floorKey: p.floorKey, pairIndex: p.pairIndex, userKey: p.userKey, aiKey: p.aiKey });
         }
     }
+    const pendingChanged = !samePendingFloors(data.pending_floors, pending);
     data.pending_floors = pending;
-    await saveChatData(data);
+    if (forcePersist || pendingChanged) await saveChatData(data);
     assertChatData(originData);
     for (const item of pending) enqueue('extract', item, QUEUE_PRIORITY.extract);
 

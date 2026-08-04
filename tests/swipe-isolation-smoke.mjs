@@ -166,12 +166,14 @@ assert.match(completedParts.raw, new RegExp(newSwipeText), 'the completed new ca
 assert.doesNotMatch(completedParts.raw, new RegExp(oldSwipeText), 'the old candidate must remain isolated after completion');
 
 const indexSource = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-assert.match(indexSource, /const swipeHandler = async[\s\S]*await onMessageEvents/u,
-    'SillyTavern must be able to await swipe cleanup');
-assert.match(indexSource, /MESSAGE_RECEIVED[\s\S]*type === 'swipe'[\s\S]*await onMessageEvents/u,
+assert.match(indexSource, /const historyMutationHandler = \(mesId\) =>[\s\S]*queueHistoryMutation/u,
+    'swipe UI handling must return immediately after registering isolated cleanup');
+assert.match(indexSource, /MESSAGE_RECEIVED[\s\S]*type === 'swipe'[\s\S]*queueHistoryMutation/u,
     'a completed generated swipe must reconcile against its own fingerprint');
-assert.match(indexSource, /GENERATION_STARTED[\s\S]*async \(type,[\s\S]*excludeTrailingAssistant: true/u,
+assert.match(indexSource, /GENERATION_STARTED[\s\S]*async \(type,[\s\S]*waitForGenerationHistory/u,
     'generation start must consume the swipe type and project away the replaced assistant');
+assert.match(indexSource, /layeredMemoryIntercept[\s\S]*await waitForGenerationHistory/u,
+    'the final prompt interceptor must wait for swipe cleanup even if event timing changes');
 assert.match(indexSource, /GENERATE_AFTER_DATA[\s\S]*isDryRun[\s\S]*clearGenerationState/u,
     'a Prompt Manager dry run must clear its temporary swipe generation state after prompt assembly');
 
