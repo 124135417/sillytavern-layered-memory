@@ -121,8 +121,8 @@
                 scope_id: 'harness-chat', paused: false,
                 queued: [],
                 running: harnessMode === 'running'
-                    ? { id: 'running-extract', type: 'extract', payload: { pairIndex: 131 }, attempt: 1, maxAttempts: 3 }
-                    : null,
+                    ? [{ id: 'running-extract', type: 'extract', payload: { pairIndex: 131 }, attempt: 1, maxAttempts: 3 }]
+                    : [],
                 failed: harnessMode === 'chapter_error'
                     ? [{ id: 'failed-chapter', type: 'history_rebuild_chapter', payload: { startPair: 50, endPair: 74 }, attempt: 1, maxAttempts: 3, lastError: '章节生成失败，可继续处理' }]
                     : [],

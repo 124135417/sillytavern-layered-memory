@@ -2,6 +2,8 @@ import { DEFAULT_SETTINGS, EMPTY_CHAT_DATA, MODULE_NAME } from './constants.js';
 import { quarantineInvalidEntries } from './quality.js';
 import { ensureFactLedger } from './facts.js';
 
+let chatMetadataSaveChain = Promise.resolve();
+
 export function getContext() {
     return SillyTavern.getContext();
 }
@@ -122,12 +124,17 @@ export function assertChatData(data) {
 }
 
 export async function saveChatData(expectedData = null) {
-    if (expectedData) assertChatData(expectedData);
-    const { saveMetadata } = getContext();
-    await saveMetadata();
-    // Prevent callers from continuing their completion path against a newly
-    // opened chat if the switch happened while the save request was pending.
-    if (expectedData) assertChatData(expectedData);
+    const save = async () => {
+        if (expectedData) assertChatData(expectedData);
+        const { saveMetadata } = getContext();
+        await saveMetadata();
+        // Prevent callers from continuing their completion path against a newly
+        // opened chat if the switch happened while the save request was pending.
+        if (expectedData) assertChatData(expectedData);
+    };
+    const pending = chatMetadataSaveChain.catch(() => {}).then(save);
+    chatMetadataSaveChain = pending;
+    return pending;
 }
 
 /** Persist message-level fields such as extra.layered_memory_id. */

@@ -745,7 +745,8 @@ export function getHistoryRebuildSnapshot() {
     }
     const queue = getQueueSnapshot();
     const queued = queue.queued.filter(job => REBUILD_JOB_TYPES.includes(job.type));
-    const inFlight = REBUILD_JOB_TYPES.includes(queue.inFlight?.type) ? queue.inFlight : null;
+    const running = (queue.running || []).filter(job => REBUILD_JOB_TYPES.includes(job.type));
+    const inFlight = running[0] || null;
     const failed = queue.failed.filter(job => REBUILD_JOB_TYPES.includes(job.type));
     const stalePausedState = ['stopped', 'error', 'review'].includes(state.status)
         && Number(state.total) !== currentPairs.length;
@@ -758,7 +759,7 @@ export function getHistoryRebuildSnapshot() {
     const chapterSource = state.status === 'complete' || stalePausedState ? (data.chapters || []) : (state.chapters || []);
     const completeRanges = new Set(chapterSource.map(chapter => JSON.stringify(chapter.floor_range)));
     const chapterCompleted = expectedRanges.filter(range => completeRanges.has(JSON.stringify(range))).length;
-    const activeChapterJob = [inFlight, ...queued, ...failed].find(job => job?.type === 'history_rebuild_chapter');
+    const activeChapterJob = [...running, ...queued, ...failed].find(job => job?.type === 'history_rebuild_chapter');
     const tailStart = fullChapterTotal * size;
     const turnSource = state.status === 'complete' || stalePausedState ? (data.turn_summaries || []) : (state.turn_summaries || []);
     const completedTurns = matchingTurnSummaries(scopedPairs, turnSource).length;
@@ -781,6 +782,7 @@ export function getHistoryRebuildSnapshot() {
         warningCount: (state.warnings || []).length,
         queued: queued.length,
         inFlight,
+        running,
         failed,
         paused: queue.paused,
         stage: rebuildStage(inFlight || queued[0], state),
@@ -908,9 +910,9 @@ export async function requestHistoryRebuildAbort() {
     const state = rebuildState(data);
     if (!state) return null;
     const queue = getQueueSnapshot();
-    const running = REBUILD_JOB_TYPES.includes(queue.inFlight?.type);
-    state.status = running ? 'stopping' : 'stopped';
-    state.stoppedAt = running ? null : Date.now();
+    const hasRunning = (queue.running || []).some(job => REBUILD_JOB_TYPES.includes(job.type));
+    state.status = hasRunning ? 'stopping' : 'stopped';
+    state.stoppedAt = hasRunning ? null : Date.now();
     await cancelQueuedJobs(REBUILD_JOB_TYPES);
     await saveChatData(data);
     return getHistoryRebuildSnapshot();

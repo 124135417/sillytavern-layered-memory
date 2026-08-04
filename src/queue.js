@@ -10,11 +10,21 @@ import { waitForBranchRecovery } from './branch.js';
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [2_000, 8_000];
+const MAX_CONCURRENT_JOBS = 3;
+const PARALLEL_JOB_TYPES = new Set([
+    'narrative_summary',
+    'narrative_chapter',
+    'chapter_summary',
+    'history_rebuild_segment',
+    'history_rebuild_chapter',
+]);
 
 /** @type {Array<any>} */
 let memoryQueue = [];
-let inFlight = null;
+/** @type {Map<string, any>} */
+const inFlightJobs = new Map();
 let pumping = false;
+let pumpRequested = false;
 let wakeTimer = null;
 /** @type {Map<string, function>} */
 const handlers = new Map();
@@ -40,7 +50,14 @@ function ensureQueueState(data = getChatData()) {
     }
     if (!Array.isArray(state.queued)) state.queued = [];
     if (!Array.isArray(state.failed)) state.failed = [];
-    if (!Object.hasOwn(state, 'running')) state.running = null;
+    if (Array.isArray(state.running)) {
+        state.running = state.running.filter(job => job?.type);
+    } else if (state.running?.type) {
+        // <= 0.14.0 persisted a single running job.
+        state.running = [state.running];
+    } else {
+        state.running = [];
+    }
     if (!Object.hasOwn(state, 'paused')) state.paused = false;
     return state;
 }
@@ -78,7 +95,10 @@ function hydrateCurrentScope() {
     }
     hydratedScopes.add(scopeId);
 
-    const knownIds = new Set(memoryQueue.map(j => j.id));
+    const knownIds = new Set([
+        ...memoryQueue.map(j => j.id),
+        ...inFlightJobs.keys(),
+    ]);
     for (const raw of state.queued) {
         if (raw?.type && !knownIds.has(raw.id)) {
             const job = normalizeJob(raw, chatData, scopeId, 'queued');
@@ -86,21 +106,29 @@ function hydrateCurrentScope() {
             knownIds.add(job.id);
         }
     }
-    // A refresh cannot know whether a previously running network request
-    // finished. Requeue it; domain handlers are idempotent/deduplicated.
-    if (state.running?.type && !knownIds.has(state.running.id)) {
+    // A refresh cannot know whether previously running network requests
+    // finished. Requeue all of them; domain handlers are idempotent/deduplicated.
+    const stillRunning = [];
+    for (const raw of state.running) {
+        if (raw?.id && inFlightJobs.has(raw.id)) {
+            stillRunning.push(publicJob(inFlightJobs.get(raw.id)));
+            continue;
+        }
+        if (!raw?.type || knownIds.has(raw.id)) continue;
         const recovered = normalizeJob({
-            ...state.running,
-            lastError: state.running.lastError || '页面刷新后恢复未完成任务',
+            ...raw,
+            lastError: raw.lastError || '页面刷新后恢复未完成任务',
             nextRetryAt: Date.now(),
         }, chatData, scopeId, 'queued');
         if (recovered.attempt < recovered.maxAttempts) {
             memoryQueue.push(recovered);
+            knownIds.add(recovered.id);
         } else if (!state.failed.some(j => j.id === recovered.id)) {
             state.failed.push(publicJob({ ...recovered, status: 'failed', failedAt: Date.now() }));
         }
-        state.running = null;
     }
+    state.running = stillRunning;
+    sortQueue();
     return { chatData, state, scopeId };
 }
 
@@ -142,7 +170,7 @@ function sameWork(a, type, payload) {
 function isDuplicateJob(scopeId, type, payload) {
     const failed = ensureQueueState(chatDataByScope.get(scopeId)).failed;
     return memoryQueue.some(j => j.scopeId === scopeId && sameWork(j, type, payload))
-        || Boolean(inFlight && inFlight.scopeId === scopeId && sameWork(inFlight, type, payload))
+        || [...inFlightJobs.values()].some(j => j.scopeId === scopeId && sameWork(j, type, payload))
         || failed.some(j => sameWork(j, type, payload));
 }
 
@@ -151,7 +179,9 @@ function writeStateFor(scopeId, chatData) {
     state.queued = memoryQueue
         .filter(j => j.scopeId === scopeId)
         .map(publicJob);
-    state.running = inFlight?.scopeId === scopeId ? publicJob(inFlight) : null;
+    state.running = [...inFlightJobs.values()]
+        .filter(job => job.scopeId === scopeId)
+        .map(publicJob);
     state.updatedAt = Date.now();
 }
 
@@ -190,10 +220,15 @@ export function enqueue(type, payload = {}, priority = QUEUE_PRIORITY[type] ?? 5
 
 export function getQueueSnapshot() {
     const { state, scopeId } = hydrateCurrentScope();
+    const running = [...inFlightJobs.values()]
+        .filter(job => job.scopeId === scopeId)
+        .map(publicJob);
     return {
         scopeId,
         paused: Boolean(state.paused),
-        inFlight: inFlight?.scopeId === scopeId ? publicJob(inFlight) : null,
+        running,
+        // Compatibility for callers that only need one representative task.
+        inFlight: running[0] || null,
         queued: memoryQueue.filter(j => j.scopeId === scopeId).map(publicJob),
         failed: state.failed.map(j => ({ ...j, payload: { ...(j.payload || {}) } })),
     };
@@ -294,26 +329,158 @@ function safeJobError(error) {
         .slice(0, 500);
 }
 
+function runningForScope(scopeId) {
+    return [...inFlightJobs.values()].filter(job => job.scopeId === scopeId);
+}
+
+function parallelGroup(job) {
+    if (!PARALLEL_JOB_TYPES.has(job?.type)) return null;
+    if (job.type === 'chapter_summary' && (job.payload?.regenStale
+        || !Number.isInteger(job.payload?.startPair)
+        || !Number.isInteger(job.payload?.endPair))) return null;
+    return job.type;
+}
+
+function readyJobsForScope(scopeId) {
+    const now = Date.now();
+    return memoryQueue.filter(job => job.scopeId === scopeId
+        && (!job.nextRetryAt || job.nextRetryAt <= now));
+}
+
+function selectJobsToStart(scopeId) {
+    sortQueue();
+    const ready = readyJobsForScope(scopeId);
+    if (!ready.length) return [];
+    const running = runningForScope(scopeId);
+    if (running.length) {
+        const group = parallelGroup(running[0]);
+        if (!group || running.some(job => parallelGroup(job) !== group)) return [];
+        // Do not fill a low-priority batch after newer high-priority work
+        // arrives. Existing requests finish, then the queue re-evaluates.
+        if (parallelGroup(ready[0]) !== group) return [];
+        return ready
+            .filter(job => parallelGroup(job) === group)
+            .slice(0, Math.max(0, MAX_CONCURRENT_JOBS - running.length));
+    }
+    const first = ready[0];
+    const group = parallelGroup(first);
+    return group
+        ? ready.filter(job => parallelGroup(job) === group).slice(0, MAX_CONCURRENT_JOBS)
+        : [first];
+}
+
+async function settleStoppedWorkflow(job, chatData) {
+    if (job.type.startsWith('migrate_')) {
+        if (runningForScope(job.scopeId).some(candidate => candidate.type.startsWith('migrate_'))) return;
+        const { settleHistoryBackfillStop } = await import('./eval/migrate.js');
+        await settleHistoryBackfillStop(chatData);
+    }
+    if (job.type.startsWith('history_rebuild_')) {
+        if (runningForScope(job.scopeId).some(candidate => candidate.type.startsWith('history_rebuild_'))) return;
+        const { settleHistoryRebuildStop } = await import('./rebuild.js');
+        await settleHistoryRebuildStop(chatData);
+    }
+}
+
+async function finishJob(job, handler, scopeId, chatData, state) {
+    let error = null;
+    try {
+        assertChatData(chatData);
+        await handler(job.payload);
+        assertChatData(chatData);
+    } catch (err) {
+        error = err;
+    } finally {
+        inFlightJobs.delete(job.id);
+    }
+
+    try {
+        await settleStoppedWorkflow(job, chatData);
+    } catch (err) {
+        error = error || err;
+    }
+
+    if (!error) {
+        try {
+            const persisted = await persistScope(scopeId, chatData);
+            if (!persisted) {
+                error = new Error('聊天已切换，已保留原聊天任务等待恢复');
+                error.code = 'CHAT_SCOPE_CHANGED';
+            }
+        } catch (err) {
+            error = err;
+        }
+    }
+
+    if (error?.code === 'CHAT_SCOPE_CHANGED') {
+        // A final persist may already have projected this job out of `running`
+        // before noticing the chat switch. Put it back in the origin object so
+        // returning to that chat safely replays the idempotent handler.
+        const running = ensureQueueState(chatData).running;
+        if (!running.some(candidate => candidate.id === job.id)) running.push(publicJob(job));
+        hydratedScopes.delete(scopeId);
+        void pump();
+        return;
+    }
+    if (!error) {
+        void pump();
+        return;
+    }
+
+    const retryable = isRetryableError(error);
+    job.lastError = safeJobError(error);
+    job.finishedAt = Date.now();
+    if (job.attempt < job.maxAttempts && retryable) {
+        job.status = 'queued';
+        job.nextRetryAt = Date.now() + (RETRY_DELAYS_MS[job.attempt - 1] ?? RETRY_DELAYS_MS.at(-1));
+        memoryQueue.push(job);
+        appendLog('warn', `任务失败，等待重试 ${job.type} (${job.attempt}/${job.maxAttempts}): ${job.lastError}`);
+    } else {
+        job.status = 'failed';
+        job.failedAt = Date.now();
+        state.failed.push(publicJob(job));
+        appendLog('error', `任务失败 ${job.type} (${job.attempt}/${job.maxAttempts}): ${job.lastError}`);
+        if (job.type.startsWith('migrate_')) {
+            const { markHistoryBackfillError } = await import('./eval/migrate.js');
+            await markHistoryBackfillError(job.lastError, chatData);
+        }
+        if (job.type.startsWith('history_rebuild_')) {
+            const { markHistoryRebuildError } = await import('./rebuild.js');
+            await markHistoryRebuildError(job.lastError, chatData);
+        }
+    }
+    sortQueue();
+    await persistScope(scopeId, chatData);
+    void pump();
+}
+
 async function pump() {
-    if (pumping) return;
+    if (pumping) {
+        pumpRequested = true;
+        return;
+    }
     pumping = true;
     try {
         await waitForBranchRecovery();
         if (getChatData().branch_origin?.status === 'failed') return;
-        while (true) {
-            const { chatData, state, scopeId } = activeScope();
-            hydrateCurrentScope();
-            if (state.paused) break;
+        const { chatData, state, scopeId } = activeScope();
+        hydrateCurrentScope();
+        if (state.paused) return;
 
-            sortQueue();
-            const candidates = memoryQueue.filter(j => j.scopeId === scopeId);
-            const job = candidates.find(j => !j.nextRetryAt || j.nextRetryAt <= Date.now());
-            if (!job) {
-                const next = candidates.map(j => j.nextRetryAt).filter(Boolean).sort((a, b) => a - b)[0];
-                if (next) scheduleWake(next);
-                break;
-            }
-            memoryQueue = memoryQueue.filter(j => j.id !== job.id);
+        const jobs = selectJobsToStart(scopeId);
+        if (!jobs.length) {
+            const next = memoryQueue
+                .filter(job => job.scopeId === scopeId)
+                .map(job => job.nextRetryAt)
+                .filter(timestamp => timestamp && timestamp > Date.now())
+                .sort((a, b) => a - b)[0];
+            if (next) scheduleWake(next);
+            return;
+        }
+
+        const runnable = [];
+        for (const job of jobs) {
+            memoryQueue = memoryQueue.filter(candidate => candidate.id !== job.id);
             const handler = handlers.get(job.type);
             if (!handler) {
                 job.status = 'failed';
@@ -321,82 +488,49 @@ async function pump() {
                 job.failedAt = Date.now();
                 state.failed.push(publicJob(job));
                 appendLog('warn', job.lastError);
-                await persistScope(scopeId, chatData);
                 continue;
             }
-
             job.attempt += 1;
             job.status = 'running';
             job.startedAt = Date.now();
             job.nextRetryAt = null;
-            inFlight = job;
-            await persistScope(scopeId, chatData);
-            try {
-                assertChatData(chatData);
-            } catch {
-                inFlight = null;
-                hydratedScopes.delete(scopeId);
-                // The origin metadata already records this job as running; it
-                // will be recovered when that chat becomes active again.
-                continue;
-            }
-
-            let error = null;
-            try {
-                await handler(job.payload);
-                assertChatData(chatData);
-            } catch (err) {
-                error = err;
-            } finally {
-                inFlight = null;
-            }
-
-            if (job.type.startsWith('migrate_')) {
-                const { settleHistoryBackfillStop } = await import('./eval/migrate.js');
-                await settleHistoryBackfillStop(chatData);
-            }
-            if (job.type.startsWith('history_rebuild_')) {
-                const { settleHistoryRebuildStop } = await import('./rebuild.js');
-                await settleHistoryRebuildStop(chatData);
-            }
-
-            if (!error) {
-                await persistScope(scopeId, chatData);
-                continue;
-            }
-
-            const retryable = isRetryableError(error);
-            job.lastError = safeJobError(error);
-            job.finishedAt = Date.now();
-            if (error?.code === 'CHAT_SCOPE_CHANGED') {
-                // The persisted state still says "running". On returning to the
-                // origin chat (or refreshing), hydration safely recovers it.
-                hydratedScopes.delete(scopeId);
-                continue;
-            }
-            if (job.attempt < job.maxAttempts && retryable) {
-                job.status = 'queued';
-                job.nextRetryAt = Date.now() + (RETRY_DELAYS_MS[job.attempt - 1] ?? RETRY_DELAYS_MS.at(-1));
-                memoryQueue.push(job);
-                appendLog('warn', `任务失败，等待重试 ${job.type} (${job.attempt}/${job.maxAttempts}): ${job.lastError}`);
-            } else {
-                job.status = 'failed';
-                job.failedAt = Date.now();
-                state.failed.push(publicJob(job));
-                appendLog('error', `任务失败 ${job.type} (${job.attempt}/${job.maxAttempts}): ${job.lastError}`);
-                if (job.type.startsWith('migrate_')) {
-                    const { markHistoryBackfillError } = await import('./eval/migrate.js');
-                    await markHistoryBackfillError(job.lastError, chatData);
-                }
-                if (job.type.startsWith('history_rebuild_')) {
-                    const { markHistoryRebuildError } = await import('./rebuild.js');
-                    await markHistoryRebuildError(job.lastError, chatData);
-                }
-            }
-            await persistScope(scopeId, chatData);
+            inFlightJobs.set(job.id, job);
+            runnable.push([job, handler]);
         }
+        let persisted = false;
+        try {
+            persisted = await persistScope(scopeId, chatData);
+        } catch (error) {
+            for (const [job] of runnable) {
+                inFlightJobs.delete(job.id);
+                job.attempt = Math.max(0, job.attempt - 1);
+                job.status = 'queued';
+                job.nextRetryAt = Date.now() + RETRY_DELAYS_MS[0];
+                memoryQueue.push(job);
+            }
+            sortQueue();
+            appendLog('warn', `任务队列保存失败，稍后重试：${safeJobError(error)}`);
+            scheduleWake(Date.now() + RETRY_DELAYS_MS[0]);
+            return;
+        }
+        if (!persisted) {
+            for (const [job] of runnable) inFlightJobs.delete(job.id);
+            hydratedScopes.delete(scopeId);
+            return;
+        }
+        for (const [job, handler] of runnable) {
+            void finishJob(job, handler, scopeId, chatData, state).catch(error => {
+                console.error('[layered-memory] 后台任务收尾失败', error);
+                void pump();
+            });
+        }
+        if (!runnable.length) pumpRequested = true;
     } finally {
         pumping = false;
+        if (pumpRequested) {
+            pumpRequested = false;
+            queueMicrotask(() => void pump());
+        }
     }
 }
 

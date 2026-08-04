@@ -46,6 +46,10 @@ assert.equal(failed.canRetry, true);
 
 assert.equal(taskRailPresentation({}).expandedByDefault, false);
 assert.equal(taskRailPresentation({ running: { id: 'x' } }).expandedByDefault, true);
+assert.equal(taskRailPresentation({ running: [{ id: 'x' }], queued: Array.from({ length: 7 }, (_, id) => ({ id })) }).summary,
+    '共 8 项：1 项处理中，7 项等待');
+assert.equal(taskRailPresentation({ running: [{ id: 'x' }, { id: 'y' }], failed: [{ id: 'z' }] }).summary,
+    '共 3 项：2 项处理中，1 项需要处理');
 assert.equal(taskRailPresentation({ paused: true }).state, 'paused');
 assert.equal(taskRailPresentation({ failed: [{ id: 'x' }] }).state, 'error');
 

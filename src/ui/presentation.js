@@ -55,12 +55,19 @@ export function workflowPresentation({ status = 'idle', completed = 0, total = 0
 
 export function taskRailPresentation({ paused = false, queued = [], running = null, failed = [] } = {}) {
     const queuedCount = Array.isArray(queued) ? queued.length : Number(queued) || 0;
+    const runningCount = Array.isArray(running) ? running.length : Number(Boolean(running));
     const failedCount = Array.isArray(failed) ? failed.length : Number(failed) || 0;
-    const working = Boolean(running) || queuedCount > 0;
+    const working = runningCount > 0 || queuedCount > 0;
     const state = failedCount > 0 ? 'error' : paused ? 'paused' : working ? 'working' : 'idle';
-    const summary = failedCount > 0 ? `${failedCount} 个任务需要处理`
-        : paused ? '后台整理已暂停'
-            : working ? `${queuedCount + (running ? 1 : 0)} 个任务正在处理`
+    const total = queuedCount + runningCount + failedCount;
+    const counts = [
+        runningCount ? `${runningCount} 项处理中` : '',
+        queuedCount ? `${queuedCount} 项等待` : '',
+        failedCount ? `${failedCount} 项需要处理` : '',
+    ].filter(Boolean).join('，');
+    const summary = failedCount > 0 ? `共 ${total} 项：${counts}`
+        : paused ? `已暂停领取新任务${counts ? ` · ${counts}` : ''}`
+            : working ? `共 ${total} 项：${counts}`
                 : '后台整理已完成';
     return { state, summary, expandedByDefault: state !== 'idle' };
 }

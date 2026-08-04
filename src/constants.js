@@ -73,7 +73,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const EMPTY_CHAT_DATA = () => ({
-    version: 5,
+    version: 6,
     state_table: {
         version: 1,
         entries: [],
@@ -119,7 +119,7 @@ export const EMPTY_CHAT_DATA = () => ({
         scope_id: null,
         paused: false,
         queued: [],
-        running: null,
+        running: [],
         failed: [],
         updatedAt: null,
     },

@@ -909,14 +909,12 @@ function renderTaskRail() {
         ? Math.max(0, rebuild.turnProgress.total - rebuild.turnProgress.completed)
         : 0;
     const recent = [...(data.logs || [])].reverse().filter(x => /完成|更新|回滚/.test(x.message || '')).slice(0, 4);
-    const inFlight = q.inFlight;
-    const taskView = taskRailPresentation({ paused: q.paused, queued, running: inFlight, failed });
-    const activeCount = Number(Boolean(inFlight)) + queued.length + failed.length;
-    const summary = failed.length
-        ? `${activeCount} 项工作 · ${failed.length} 项需要处理`
-        : activeCount
-            ? `正在处理 ${activeCount} 项工作`
-            : missingTurns ? `还有 ${missingTurns} 条对话尚未整理` : '已全部处理完成';
+    const running = q.running?.length ? q.running : (q.inFlight ? [q.inFlight] : []);
+    const taskView = taskRailPresentation({ paused: q.paused, queued, running, failed });
+    const activeCount = running.length + queued.length + failed.length;
+    const summary = activeCount
+        ? taskView.summary
+        : missingTurns ? `还有 ${missingTurns} 条对话尚未整理` : '已全部处理完成';
     const summaryState = missingTurns && taskView.state === 'idle' ? 'attention' : taskView.state;
     const expanded = summaryState !== 'idle';
     const idleTask = missingTurns
@@ -932,7 +930,7 @@ function renderTaskRail() {
                 </div>
             </header>
             <div class="lm-task-list" id="lm-task-list">
-                ${inFlight ? renderTask(inFlight, 'running') : (!queued.length && !failed.length ? idleTask : '')}
+                ${running.length ? running.map(job => renderTask(job, 'running')).join('') : (!queued.length && !failed.length ? idleTask : '')}
                 ${queued.slice(0, 4).map(job => renderTask(job, 'queued')).join('')}
                 ${queued.length > 4 ? `<p class="lm-task-overflow">另有 ${queued.length - 4} 个任务等待</p>` : ''}
                 ${failed.map(job => renderTask(job, 'failed')).join('')}
@@ -2018,7 +2016,7 @@ function renderSettingsTab() {
                 <summary><div><span class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></span><div><h4>开发者工具</h4><p>查看纠错记录和后台处理状态。普通使用不需要打开。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
                 <div class="lm-settings-fields">
                     <label class="lm-switch-row"><span><b>整理旧聊天后收集我的修改</b><small>把手动修改保存成纠错参考，方便以后检查记忆效果。</small></span><input type="checkbox" id="lm-mig-review" ${s.migrationReviewMode ? 'checked' : ''}/></label>
-                    <p>纠错记录 ${listEvalCases().length} 条 · 正在处理 ${q.inFlight ? '1' : '0'} 项 · 等待 ${q.queued?.length || 0} 项 · 需要处理 ${q.failed?.length || 0} 项</p>
+                    <p>纠错记录 ${listEvalCases().length} 条 · 正在处理 ${q.running?.length || Number(Boolean(q.inFlight))} 项 · 等待 ${q.queued?.length || 0} 项 · 需要处理 ${q.failed?.length || 0} 项</p>
                     <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-eval-export">下载纠错记录</button><button type="button" class="lm-text-button" id="lm-eval-rerun">重新检查全部记录</button></div>
                     <ul class="lm-diagnostic-list">${listEvalCases().slice(-10).reverse().map(c =>
         `<li><span>${escapeHtml(formatEvalCaseLabel(c))}</span><span><button type="button" class="lm-text-button lm-rerun-one" data-id="${escapeHtml(c.id)}">重新检查</button><button type="button" class="lm-text-button lm-del-case" data-id="${escapeHtml(c.id)}">删除</button></span></li>`).join('')}</ul>
