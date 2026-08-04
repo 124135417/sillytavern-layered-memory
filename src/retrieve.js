@@ -1,5 +1,6 @@
 import { getPairTexts, getPairs, isPendingSwipeMessage } from './ids.js';
 import { getSettings } from './settings.js';
+import { stripStyleResetCommands } from './style-reset.js';
 
 /**
  * Lexical retrieval over keyword_index.
@@ -14,7 +15,7 @@ export function retrieveHits(data, budgetTokens = 1500, { excludeTrailingAssista
     let scan = '';
     if (last) {
         const t = getPairTexts(last);
-        scan += `${t.userText}\n${t.aiText}\n`;
+        scan += `${stripStyleResetCommands(t.userText).text}\n${t.aiText}\n`;
     }
     // Current user input: last message if user
     const ctx = SillyTavern.getContext();
@@ -26,7 +27,7 @@ export function retrieveHits(data, budgetTokens = 1500, { excludeTrailingAssista
         : chat;
     const lastMes = projectedChat.at(-1);
     if (lastMes?.is_user) {
-        scan += lastMes.mes || '';
+        scan += stripStyleResetCommands(lastMes.mes || '').text;
     }
 
     const index = data.keyword_index || {};

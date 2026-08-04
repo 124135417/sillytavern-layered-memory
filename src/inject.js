@@ -8,6 +8,7 @@ import { getChatData, getSettings } from './settings.js';
 import { estimateTokens } from './tokens.js';
 import { currentNarrativeSources, fallbackNarrativeSummary } from './narrative.js';
 import { selectRecentRawWindow } from './recent-raw.js';
+import { resolveStyleReset } from './style-reset.js';
 
 let presetMacroRegistered = false;
 let activeGenerationType = null;
@@ -87,15 +88,31 @@ export function buildCoreMemoryParts({
             fallbackSummary: fallbackNarrativeSummary(source),
         }));
     const l1 = renderL1Block(data, settings.budgetL1, context);
-    const rawWindow = selectRecentRawWindow(resolvedNarrativeSources, settings.recentRawTokens);
-    const maxFloor = Number.isInteger(rawWindow.startFloor) ? rawWindow.startFloor - 1 : null;
+    const styleReset = resolveStyleReset({ context, excludeTrailingAssistant: resolvedExcludeTrailingAssistant });
+    const rawWindow = selectRecentRawWindow(resolvedNarrativeSources, settings.recentRawTokens, {
+        minimumFloor: styleReset?.messageIndex ?? null,
+    });
+    const latestNarrativeFloor = resolvedNarrativeSources.at(-1)?.messageIndex;
+    const maxFloor = Number.isInteger(rawWindow.startFloor)
+        ? rawWindow.startFloor - 1
+        : Number.isInteger(styleReset?.messageIndex)
+            && (!Number.isInteger(latestNarrativeFloor) || latestNarrativeFloor < styleReset.messageIndex)
+            ? styleReset.messageIndex - 1
+            : null;
     const l2 = renderL2Block(data, {
         forInjection: true,
         pairs: resolvedPairs,
         narrativeSources: resolvedNarrativeSources,
         maxFloor,
     });
-    return { l1, l2, raw: rawWindow.text, rawWindow, narrativeSources: resolvedNarrativeSources };
+    return {
+        l1,
+        l2,
+        raw: rawWindow.text,
+        rawWindow,
+        narrativeSources: resolvedNarrativeSources,
+        styleReset,
+    };
 }
 
 export function renderCoreMemoryPayload(options = {}) {

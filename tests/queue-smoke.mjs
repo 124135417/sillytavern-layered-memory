@@ -30,6 +30,7 @@ const {
     enqueue,
     getQueueSnapshot,
     isRetryableError,
+    prioritizeNarrativeSummary,
     retryFailedJob,
     setQueuePaused,
 } = await import('../src/queue.js');
@@ -76,6 +77,30 @@ assert.ok(upgradedNarrative, '新版 validator 必须能绕过旧版失败任务
 assert.equal(enqueue('narrative_summary', {
     messageKeys: ['m44'], fingerprints: ['fp44'], validatorVersion: 2,
 }, 95), null, '同一新版 validator 任务仍必须去重');
+
+enqueue('narrative_summary', {
+    messageKeys: ['m50', 'm51'], fingerprints: ['fp50', 'fp51'], validatorVersion: 2,
+}, 95);
+const promoted = prioritizeNarrativeSummary('m51', 'fp51', 1000);
+assert.equal(promoted.status, 'queued');
+const narrativeJobs = getQueueSnapshot().queued.filter(job => job.type === 'narrative_summary');
+assert.ok(narrativeJobs.some(job => job.priority === 1000
+    && JSON.stringify(job.payload.messageKeys) === JSON.stringify(['m51'])),
+    '文风重置必须把紧邻上一层拆成独立最高优先任务');
+assert.ok(narrativeJobs.some(job => JSON.stringify(job.payload.messageKeys) === JSON.stringify(['m50'])),
+    '拆分优先楼层时不得丢掉同批其它后台工作');
+
+chats.a.layered_memory.job_queue.failed.push({
+    id: 'failed-reset-batch', type: 'narrative_summary',
+    payload: { messageKeys: ['m60', 'm61'], fingerprints: ['fp60', 'fp61'], validatorVersion: 2 },
+    priority: 95, status: 'failed', attempt: 3, maxAttempts: 3, lastError: '旧批次失败',
+});
+prioritizeNarrativeSummary('m61', 'fp61', 1000);
+assert.ok(getQueueSnapshot().queued.some(job => job.priority === 1000
+    && JSON.stringify(job.payload.messageKeys) === JSON.stringify(['m61'])),
+    '重置所需楼层此前失败时必须拆出并重新尝试');
+assert.deepEqual(getQueueSnapshot().failed.find(job => job.id === 'failed-reset-batch')?.payload.messageKeys, ['m60'],
+    '重试目标楼层时不得清除同批其它失败记录');
 
 assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 400'), { status: 400 })), false);
 assert.equal(isRetryableError(new Error('模型服务 HTTP 422: invalid schema')), false);

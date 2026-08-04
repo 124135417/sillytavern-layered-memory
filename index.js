@@ -21,7 +21,11 @@ import {
     handleHistoryRebuildSegment,
 } from './src/rebuild.js';
 import { beginBranchRecovery, ensureBranchCheckpoint, ensureCurrentBranchRecovery, reconcileCurrentHistory, waitForBranchRecovery } from './src/branch.js';
-import { handleNarrativeChapterJob, handleNarrativeSummaryJob } from './src/narrative.js';
+import {
+    ensureStyleResetNarrativeCoverage,
+    handleNarrativeChapterJob,
+    handleNarrativeSummaryJob,
+} from './src/narrative.js';
 
 const MODULE = 'layered-memory';
 
@@ -82,8 +86,15 @@ async function onMessageEvents(mesId, { excludeTrailingAssistant = false } = {})
  * Chat Completion formatter does not send it to the provider.
  */
 globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, _contextSize, _abort, type) {
+    const excludeTrailingAssistant = requestExcludesTrailingAssistant(chat, type);
     try {
-        const excludeTrailingAssistant = requestExcludesTrailingAssistant(chat, type);
+        await ensureStyleResetNarrativeCoverage({ excludeTrailingAssistant });
+    } catch (err) {
+        console.error(`[${MODULE}] 文风重置未能安全接管旧原文，已中止本次生成`, err);
+        globalThis.toastr?.error?.(`文风重置失败：${err?.message ?? err}`);
+        throw err;
+    }
+    try {
         setActiveGenerationType(type, { excludeTrailingAssistant });
         updateInjection({ generationType: type, excludeTrailingAssistant });
         const result = handOffManagedHistory(chat, type);
@@ -205,7 +216,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.15.1`);
+    console.log(`[${MODULE}] 已加载 v0.15.2`);
 });
 
 export async function onActivate() {

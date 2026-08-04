@@ -19,6 +19,8 @@ export const SLOT_LABELS = {
 export const SLOTS = Object.keys(SLOT_LABELS);
 
 export const QUEUE_PRIORITY = {
+    /** A generation is waiting for this exact floor before resetting raw style. */
+    style_reset_narrative: 1000,
     extract: 100,
     narrative_summary: 95,
     narrative_chapter: 85,

@@ -4,9 +4,10 @@ import { extractAiBody, stripHtmlComments } from './body.js';
 import { QUEUE_PRIORITY } from './constants.js';
 import { getMessageFloors } from './ids.js';
 import { NARRATIVE_FLOOR_JSON_SCHEMA, NARRATIVE_FLOOR_SYSTEM } from './prompts.js';
-import { enqueue } from './queue.js';
+import { enqueue, getQueueSnapshot, prioritizeNarrativeSummary } from './queue.js';
 import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
 import { normalizeStoryTime, storyTimeEvidencePosition } from './story-time.js';
+import { resolveStyleReset, stripStyleResetCommands } from './style-reset.js';
 import { evidenceSpansInSource } from './tokens.js';
 
 const MAX_BATCH_MESSAGES = 25;
@@ -17,7 +18,7 @@ function narrativeText(source) {
     if (source.role === 'assistant') {
         return extractAiBody(source.text, getSettings().bodyExtractionRegex).text;
     }
-    return source.text;
+    return stripStyleResetCommands(source.text).text;
 }
 
 function boundedText(value, limit = 320) {
@@ -39,7 +40,9 @@ export function currentNarrativeSources(options = {}) {
     return getMessageFloors(options).map(source => ({
         ...source,
         narrativeText: narrativeText(source),
-        timeSourceText: stripHtmlComments(source.text),
+        timeSourceText: stripHtmlComments(source.role === 'user'
+            ? stripStyleResetCommands(source.text).text
+            : source.text),
     }));
 }
 
@@ -154,6 +157,102 @@ export async function scheduleNarrativeMaintenance({ excludeTrailingAssistant = 
     }
     enqueueMissingNarrativeChapters(data, sources);
     return { total: sources.length, missing: missing.length };
+}
+
+function failedCoverageJob(snapshot, sources) {
+    const wanted = new Map(sources.map(source => [source.messageKey, source.contentFingerprint]));
+    return (snapshot.failed || []).find(job => {
+        if (job?.type !== 'narrative_summary') return false;
+        const keys = Array.isArray(job.payload?.messageKeys) ? job.payload.messageKeys : [];
+        const fingerprints = Array.isArray(job.payload?.fingerprints) ? job.payload.fingerprints : [];
+        return keys.some((key, index) => wanted.get(key) === fingerprints[index]);
+    }) || null;
+}
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * A reset may hide every earlier raw assistant floor only after the existing
+ * per-floor narrative records cover that prefix. The immediately preceding
+ * floor is split out and promoted ahead of ordinary background work.
+ */
+export async function ensureStyleResetNarrativeCoverage({
+    excludeTrailingAssistant = false,
+    timeoutMs = 180_000,
+} = {}) {
+    const initial = resolveStyleReset({ excludeTrailingAssistant });
+    if (!initial?.active) return { status: 'inactive' };
+    if (!getSettings().enabled) return { status: 'inactive', reason: 'plugin_disabled' };
+
+    const context = SillyTavern.getContext();
+    if ((context?.mainApi && context.mainApi !== 'openai')
+        || typeof context?.setExtensionPrompt !== 'function'
+        || typeof context?.symbols?.ignore !== 'symbol') {
+        const error = new Error('当前后端不能安全隐藏旧 Chat History，无法执行文风重置');
+        error.code = 'STYLE_RESET_UNSUPPORTED_HANDOFF';
+        throw error;
+    }
+
+    const originData = getChatData();
+    const deadline = Date.now() + Math.max(1_000, Number(timeoutMs) || 180_000);
+    let promotedKey = null;
+    await scheduleNarrativeMaintenance({ excludeTrailingAssistant });
+
+    while (true) {
+        assertChatData(originData);
+        const current = resolveStyleReset({ excludeTrailingAssistant });
+        if (!current?.active
+            || current.messageKey !== initial.messageKey
+            || current.messageIndex !== initial.messageIndex
+            || current.directive !== initial.directive) {
+            const error = new Error('等待楼层总结时，文风重置消息或当前分支已经改变');
+            error.code = 'STYLE_RESET_CHANGED';
+            throw error;
+        }
+
+        const sources = currentNarrativeSources({ excludeTrailingAssistant })
+            .filter(source => source.messageIndex < current.messageIndex);
+        const missing = missingSources(originData, sources);
+        if (!missing.length) {
+            return {
+                status: 'ready',
+                resetFloor: current.messageIndex,
+                coveredThrough: current.messageIndex - 1,
+            };
+        }
+
+        const previous = missing.find(source => source.messageIndex === current.messageIndex - 1);
+        if (previous && promotedKey !== `${previous.messageKey}\0${previous.contentFingerprint}`) {
+            prioritizeNarrativeSummary(
+                previous.messageKey,
+                previous.contentFingerprint,
+                QUEUE_PRIORITY.style_reset_narrative,
+            );
+            promotedKey = `${previous.messageKey}\0${previous.contentFingerprint}`;
+            appendLog('info', `文风重置正在优先等待第 ${previous.messageIndex} 楼剧情记录`);
+        }
+
+        const snapshot = getQueueSnapshot();
+        if (snapshot.paused) {
+            const error = new Error('后台任务已暂停，无法在文风重置前完成上一层剧情记录');
+            error.code = 'STYLE_RESET_QUEUE_PAUSED';
+            throw error;
+        }
+        const failed = failedCoverageJob(snapshot, missing);
+        if (failed) {
+            const error = new Error(`文风重置所需的楼层总结失败：${failed.lastError || '未知错误'}`);
+            error.code = 'STYLE_RESET_SUMMARY_FAILED';
+            throw error;
+        }
+        if (Date.now() >= deadline) {
+            const error = new Error('等待文风重置所需的楼层总结超时');
+            error.code = 'STYLE_RESET_SUMMARY_TIMEOUT';
+            throw error;
+        }
+        await delay(100);
+    }
 }
 
 function batchPrompt(sources, retryNote = '') {

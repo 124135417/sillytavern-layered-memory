@@ -219,6 +219,91 @@ export function enqueue(type, payload = {}, priority = QUEUE_PRIORITY[type] ?? 5
     return job.id;
 }
 
+function narrativeSourceIndex(job, messageKey, fingerprint) {
+    if (job?.type !== 'narrative_summary') return -1;
+    const keys = Array.isArray(job.payload?.messageKeys) ? job.payload.messageKeys : [];
+    const fingerprints = Array.isArray(job.payload?.fingerprints) ? job.payload.fingerprints : [];
+    return keys.findIndex((key, index) => key === messageKey && fingerprints[index] === fingerprint);
+}
+
+function removeNarrativeSourceFromJob(job, index) {
+    const keys = Array.isArray(job.payload?.messageKeys) ? [...job.payload.messageKeys] : [];
+    const fingerprints = Array.isArray(job.payload?.fingerprints) ? [...job.payload.fingerprints] : [];
+    keys.splice(index, 1);
+    fingerprints.splice(index, 1);
+    job.payload = { ...job.payload, messageKeys: keys, fingerprints };
+    return keys.length;
+}
+
+/**
+ * Move one exact narrative floor ahead of ordinary background work. A queued
+ * multi-floor batch is split so generation waits only for the required floor;
+ * an already running request is joined instead of duplicated.
+ */
+export function prioritizeNarrativeSummary(messageKey, fingerprint, priority = QUEUE_PRIORITY.style_reset_narrative) {
+    const { chatData, state, scopeId } = hydrateCurrentScope();
+    const running = [...inFlightJobs.values()].find(job =>
+        job.scopeId === scopeId && narrativeSourceIndex(job, messageKey, fingerprint) >= 0);
+    if (running) {
+        return { jobId: running.id, scopeId, status: 'running' };
+    }
+
+    const queued = memoryQueue.find(job =>
+        job.scopeId === scopeId && narrativeSourceIndex(job, messageKey, fingerprint) >= 0);
+    if (queued) {
+        const index = narrativeSourceIndex(queued, messageKey, fingerprint);
+        const keys = Array.isArray(queued.payload?.messageKeys) ? queued.payload.messageKeys : [];
+        if (keys.length === 1) {
+            queued.priority = Math.max(Number(queued.priority) || 0, Number(priority) || 0);
+            queued.nextRetryAt = null;
+            sortQueue();
+            void persistScope(scopeId, chatData).then(() => pump());
+            return { jobId: queued.id, scopeId, status: 'queued' };
+        }
+        removeNarrativeSourceFromJob(queued, index);
+        const promoted = normalizeJob({
+            type: 'narrative_summary',
+            priority,
+            payload: {
+                ...queued.payload,
+                messageKeys: [messageKey],
+                fingerprints: [fingerprint],
+            },
+        }, chatData, scopeId);
+        memoryQueue.push(promoted);
+        sortQueue();
+        void persistScope(scopeId, chatData).then(() => pump());
+        return { jobId: promoted.id, scopeId, status: 'queued' };
+    }
+
+    const failedIndex = state.failed.findIndex(job => narrativeSourceIndex(job, messageKey, fingerprint) >= 0);
+    let validatorVersion = 1;
+    if (failedIndex >= 0) {
+        const failed = state.failed[failedIndex];
+        validatorVersion = Number(failed.payload?.validatorVersion || 1);
+        const sourceIndex = narrativeSourceIndex(failed, messageKey, fingerprint);
+        if (removeNarrativeSourceFromJob(failed, sourceIndex)) {
+            state.failed[failedIndex] = failed;
+        } else {
+            state.failed.splice(failedIndex, 1);
+        }
+    }
+
+    const promoted = normalizeJob({
+        type: 'narrative_summary',
+        priority,
+        payload: {
+            messageKeys: [messageKey],
+            fingerprints: [fingerprint],
+            validatorVersion,
+        },
+    }, chatData, scopeId);
+    memoryQueue.push(promoted);
+    sortQueue();
+    void persistScope(scopeId, chatData).then(() => pump());
+    return { jobId: promoted.id, scopeId, status: 'queued' };
+}
+
 export function getQueueSnapshot() {
     const { state, scopeId } = hydrateCurrentScope();
     const running = [...inFlightJobs.values()]

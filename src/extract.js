@@ -7,6 +7,7 @@ import { normalizeExtractOutput } from './validate.js';
 import { QUEUE_PRIORITY } from './constants.js';
 import { enqueue } from './queue.js';
 import { extractAiBody } from './body.js';
+import { stripStyleResetCommands } from './style-reset.js';
 
 const extractCommitStateByChat = new WeakMap();
 const EXTRACT_MUTATION_KEYS = [
@@ -53,7 +54,9 @@ function restoreExtractMutationState(data, snapshot) {
 
 async function runExtractOnce(pair, { retryNote = '' } = {}) {
     const data = getChatData();
-    const { userText, aiText } = getPairTexts(pair);
+    const pairTexts = getPairTexts(pair);
+    const userText = stripStyleResetCommands(pairTexts.userText).text;
+    const { aiText } = pairTexts;
     const body = extractAiBody(aiText, getSettings().bodyExtractionRegex);
     const sourceText = `${userText}\n${body.text}`;
     const tableRender = renderStateTableCompact(data.state_table);

@@ -12,6 +12,7 @@ import { appendLog, assertChatData, getChatData, getContext, getSettings, saveCh
 import { evidenceInSource } from './tokens.js';
 import { factIdentityKey, makeFactCandidate, upsertFactCandidate } from './facts.js';
 import { normalizeStoryTime, storyTimeRange } from './story-time.js';
+import { stripStyleResetCommands } from './style-reset.js';
 
 export const REBUILD_JOB_TYPES = ['history_rebuild_segment', 'history_rebuild_chapter', 'history_rebuild_commit'];
 const SEGMENT_SIZE = 13;
@@ -183,7 +184,9 @@ function backupCurrent(data) {
 }
 
 function pairSource(pair) {
-    const { userText, aiText } = getPairTexts(pair);
+    const pairTexts = getPairTexts(pair);
+    const userText = stripStyleResetCommands(pairTexts.userText).text;
+    const { aiText } = pairTexts;
     const body = extractAiBody(aiText, getSettings().bodyExtractionRegex);
     return {
         pair,

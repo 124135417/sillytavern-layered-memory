@@ -28,10 +28,11 @@ export function renderRecentRawBlock(sources = []) {
 }
 
 /** Select a continuous suffix of complete visible floors without cutting one. */
-export function selectRecentRawWindow(sources = [], budget = 16_000) {
+export function selectRecentRawWindow(sources = [], budget = 16_000, { minimumFloor = null } = {}) {
     const allowance = Math.max(0, Number(budget) || 0);
     const ordered = sources
         .filter(source => Number.isInteger(source?.messageIndex))
+        .filter(source => !Number.isInteger(minimumFloor) || source.messageIndex >= minimumFloor)
         .slice()
         .sort((a, b) => a.messageIndex - b.messageIndex);
     let selected = [];
@@ -51,5 +52,6 @@ export function selectRecentRawWindow(sources = [], budget = 16_000) {
         tokens: estimateTokens(text),
         startFloor: selected[0]?.messageIndex ?? null,
         endFloor: selected.at(-1)?.messageIndex ?? null,
+        minimumFloor: Number.isInteger(minimumFloor) ? minimumFloor : null,
     };
 }
