@@ -1,4 +1,4 @@
-/* v0.16.1 filename is versioned so extension/CDN updates cannot retain stale modal geometry. */
+/* v0.16.2 filename is versioned so extension/CDN updates cannot retain stale backstage geometry. */
 :root {
     --lm-bg: #121212;
     --lm-surface: #1b1b1b;
@@ -1030,7 +1030,7 @@ body.lm-memory-center-open {
     border: 0;
     font-family: var(--mainFontFamily, "Avenir Next", "PingFang SC", sans-serif);
     opacity: 0;
-    transition: width 300ms cubic-bezier(.25, 1, .5, 1), height 300ms cubic-bezier(.25, 1, .5, 1), opacity 180ms cubic-bezier(.25, 1, .5, 1);
+    transition: width 210ms cubic-bezier(.25, 1, .5, 1), height 210ms cubic-bezier(.25, 1, .5, 1), opacity 160ms cubic-bezier(.25, 1, .5, 1);
 }
 
 .lm-backstage-dialog[open] { display: block; }
@@ -1040,7 +1040,7 @@ body.lm-memory-center-open {
     background: color-mix(in oklab, oklch(10% .018 300) 78%, transparent);
     backdrop-filter: blur(8px) saturate(.78);
     opacity: 0;
-    transition: opacity 280ms cubic-bezier(.25, 1, .5, 1);
+    transition: opacity 200ms cubic-bezier(.25, 1, .5, 1);
 }
 .lm-backstage-dialog.is-open::backdrop { opacity: 1; }
 .lm-backstage-dialog.is-closing { opacity: 0; }
@@ -1060,10 +1060,18 @@ body.lm-memory-center-open {
     box-shadow: 0 30px 90px color-mix(in oklab, oklch(8% .02 300) 72%, transparent), 0 1px 0 color-mix(in oklab, var(--lm-bk-text) 8%, transparent) inset;
     opacity: 0;
     transform: translateY(22px) scale(.975);
-    transition: opacity 320ms cubic-bezier(.22, 1, .36, 1), transform 320ms cubic-bezier(.22, 1, .36, 1);
+    transition: opacity 210ms cubic-bezier(.22, 1, .36, 1), transform 210ms cubic-bezier(.22, 1, .36, 1);
 }
 
-.lm-backstage-dialog.is-open .lm-backstage-frame { opacity: 1; transform: translateY(0) scale(1); }
+.lm-backstage-dialog.is-open .lm-backstage-frame {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    animation: lm-backstage-dialog-in 210ms cubic-bezier(.22, 1, .36, 1) both;
+}
+@keyframes lm-backstage-dialog-in {
+    from { opacity: .35; transform: translateY(10px) scale(.986); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
 .lm-backstage-dialog.is-closing .lm-backstage-frame {
     opacity: 0;
     transform: translateY(10px) scale(.987);
@@ -1202,8 +1210,9 @@ body.lm-memory-center-open {
     min-height: 0;
     padding: 28px clamp(22px, 5vw, 54px) 34px;
     overflow: auto;
+    overflow-x: hidden;
     overscroll-behavior: contain;
-    scrollbar-gutter: stable;
+    scrollbar-gutter: stable both-edges;
 }
 
 .lm-backstage-empty {
@@ -1222,6 +1231,38 @@ body.lm-memory-center-open {
 }
 .lm-backstage-empty p { margin: 8px 0 0; color: var(--lm-bk-muted); font-size: .95rem; line-height: 1.7; }
 
+.lm-backstage-hydrating {
+    display: grid;
+    min-height: 100%;
+    place-content: center;
+    justify-items: center;
+    gap: 13px;
+    color: var(--lm-bk-muted);
+    font-size: .88rem;
+    letter-spacing: .025em;
+}
+.lm-backstage-hydrating[hidden] { display: none; }
+.lm-backstage-dialog.is-hydrating .lm-backstage-rejected,
+.lm-backstage-dialog.is-hydrating .lm-backstage-empty,
+.lm-backstage-dialog.is-hydrating .lm-backstage-turns,
+.lm-backstage-dialog.is-hydrating .lm-backstage-thinking { display: none; }
+.lm-backstage-hydrating-mark {
+    display: grid;
+    width: 42px;
+    height: 42px;
+    place-items: center;
+    color: var(--lm-bk-accent);
+    background: var(--lm-bk-surface-raised);
+    border: 1px solid var(--lm-bk-border);
+    border-radius: 50%;
+    box-shadow: 0 0 0 7px color-mix(in oklab, var(--lm-bk-accent) 7%, transparent);
+    animation: lm-backstage-hydrating 1.15s ease-in-out infinite alternate;
+}
+@keyframes lm-backstage-hydrating {
+    from { opacity: .58; transform: scale(.94); }
+    to { opacity: 1; transform: scale(1); }
+}
+
 .lm-backstage-rejected {
     max-width: 62ch;
     margin: 0 auto 26px;
@@ -1235,7 +1276,8 @@ body.lm-memory-center-open {
 
 .lm-backstage-turns {
     display: grid;
-    max-width: 66ch;
+    width: 100%;
+    max-width: 88ch;
     margin: 0 auto;
     padding: 0;
     list-style: none;
@@ -1244,8 +1286,8 @@ body.lm-memory-center-open {
 .lm-backstage-turn {
     position: relative;
     display: grid;
-    grid-template-columns: 68px minmax(0, 1fr);
-    gap: 18px;
+    grid-template-columns: minmax(52px, 1fr) minmax(0, 58ch) minmax(52px, 1fr);
+    column-gap: 18px;
     padding: 18px 0 20px;
     border-bottom: 1px solid color-mix(in oklab, var(--lm-bk-border) 68%, transparent);
     opacity: 0;
@@ -1256,34 +1298,84 @@ body.lm-memory-center-open {
 
 @keyframes lm-backstage-turn-in { to { opacity: 1; transform: translateY(0); } }
 
-.lm-backstage-turn.is-player { margin-left: clamp(12px, 4vw, 44px); }
-.lm-backstage-turn.is-player::before {
+.lm-backstage-turn.is-player .lm-backstage-content::before {
     position: absolute;
-    top: 22px;
-    bottom: 22px;
-    left: -16px;
+    top: .25em;
+    bottom: .25em;
+    left: -14px;
     width: 2px;
     background: var(--lm-bk-accent-deep);
     content: '';
 }
 .lm-backstage-speaker {
+    grid-column: 1;
     padding-top: 2px;
     color: var(--lm-bk-faint);
     font-size: .75rem;
     font-weight: 700;
     letter-spacing: .08em;
     line-height: 1.6;
+    text-align: right;
 }
 .lm-backstage-turn.is-narrator .lm-backstage-speaker { color: var(--lm-bk-accent); }
-.lm-backstage-turn p {
-    max-width: 58ch;
+.lm-backstage-content {
+    position: relative;
+    grid-column: 2;
+    min-width: 0;
+    width: 100%;
     margin: 0;
     color: var(--lm-bk-text);
     font-size: 1rem;
     line-height: 1.75;
-    white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+.lm-backstage-content.is-plain,
+.lm-backstage-plain-fallback { white-space: pre-wrap; }
+.lm-backstage-content > :first-child { margin-top: 0; }
+.lm-backstage-content > :last-child { margin-bottom: 0; }
+.lm-backstage-content p { margin: 0 0 .72em; line-height: inherit; }
+.lm-backstage-content ul,
+.lm-backstage-content ol { margin: .55em 0 .8em; padding-inline-start: 1.45em; }
+.lm-backstage-content li { margin: .2em 0; }
+.lm-backstage-content blockquote {
+    margin: .75em 0;
+    padding: .12em 0 .12em 1em;
+    color: var(--lm-bk-muted);
+    border-left: 2px solid var(--lm-bk-accent-deep);
+}
+.lm-backstage-content code {
+    padding: .12em .34em;
+    background: var(--lm-bk-surface-raised);
+    border: 1px solid var(--lm-bk-border);
+    border-radius: 5px;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: .88em;
+}
+.lm-backstage-content pre {
+    max-width: 100%;
+    margin: .8em 0;
+    padding: 12px 14px;
+    overflow: auto;
+    background: var(--lm-bk-surface-raised);
+    border: 1px solid var(--lm-bk-border);
+    border-radius: 9px;
+    line-height: 1.55;
+}
+.lm-backstage-content pre code { padding: 0; background: transparent; border: 0; }
+.lm-backstage-content h1,
+.lm-backstage-content h2,
+.lm-backstage-content h3,
+.lm-backstage-content h4 {
+    margin: 1em 0 .42em;
+    color: var(--lm-bk-text);
+    font-family: inherit;
+    font-size: 1.04em;
+    font-weight: 720;
+    line-height: 1.4;
+}
+.lm-backstage-content a { overflow-wrap: anywhere; }
+.lm-backstage-content img { max-width: 100%; height: auto; }
+.lm-backstage-content table { display: block; max-width: 100%; overflow-x: auto; }
 
 .lm-backstage-thinking {
     display: flex;
@@ -1443,10 +1535,10 @@ body.lm-memory-center-open {
     .lm-backstage-expand { display: none; }
     .lm-backstage-icon { width: 44px; height: 44px; }
     .lm-backstage-transcript { padding: 20px 16px 26px; }
-    .lm-backstage-turn { grid-template-columns: 52px minmax(0, 1fr); gap: 10px; padding: 15px 0 17px; }
-    .lm-backstage-turn.is-player { margin-left: 10px; }
-    .lm-backstage-turn.is-player::before { left: -10px; }
-    .lm-backstage-turn p { font-size: 1rem; line-height: 1.7; }
+    .lm-backstage-turn { grid-template-columns: minmax(0, 1fr); gap: 5px; padding: 15px 0 17px; }
+    .lm-backstage-speaker { grid-column: 1; padding-top: 0; text-align: left; }
+    .lm-backstage-content { grid-column: 1; font-size: 1rem; line-height: 1.7; }
+    .lm-backstage-turn.is-player .lm-backstage-content::before { left: -9px; }
     .lm-backstage-footer { padding: 10px 10px max(10px, env(safe-area-inset-bottom)); }
     .lm-backstage-error { grid-template-columns: auto minmax(0, 1fr); }
     .lm-backstage-retry { grid-column: 2; width: fit-content; min-height: 38px; }
@@ -1461,6 +1553,15 @@ body.lm-memory-center-open {
     .lm-backstage-header { min-height: 78px; padding-block: 10px; }
     .lm-backstage-mark { height: 44px; }
     .lm-backstage-transcript { padding-block: 16px; }
+}
+
+@media (max-width: 340px) {
+    .lm-backstage-header { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .lm-backstage-mark { display: none; }
+    .lm-backstage-kicker { font-size: .68rem; letter-spacing: .1em; }
+    .lm-backstage-heading h2 { font-size: 1.2rem; }
+    .lm-backstage-heading p { max-width: 46vw; }
+    .lm-backstage-clear { padding-inline: 4px; font-size: .68rem; }
 }
 
 @media (pointer: coarse) {
@@ -1478,6 +1579,7 @@ body.lm-memory-center-open {
     .lm-backstage-frame,
     .lm-backstage-turn,
     .lm-backstage-dots i,
+    .lm-backstage-hydrating-mark,
     #leftSendForm > #lm-backstage-trigger { animation: none !important; transition-duration: .01ms !important; }
     .lm-backstage-frame,
     .lm-backstage-dialog.is-closing .lm-backstage-frame { transform: none; }

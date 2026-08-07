@@ -22,6 +22,10 @@ let isComposing = false;
 let draftSaveTimer = null;
 let decorationFrame = null;
 let uiInjected = false;
+let dialogReady = false;
+let hydrationGeneration = 0;
+let tokenEstimateGeneration = 0;
+let lastOpenRequest = null;
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -40,11 +44,31 @@ function activeMessages(snapshot) {
     return snapshot.session?.working?.messages || [];
 }
 
+function renderNarratorText(text) {
+    const value = String(text ?? '');
+    try {
+        const context = getContext();
+        if (typeof context.messageFormatting === 'function') {
+            return String(context.messageFormatting(value, context.name2 || '叙述者', false, false, -1, {}, false));
+        }
+    } catch (error) {
+        console.warn('[Layered Memory] Backstage Markdown formatting failed; using plain text.', error);
+    }
+    return `<span class="lm-backstage-plain-fallback">${escapeHtml(value)}</span>`;
+}
+
+export function renderBackstageMessageBody(message) {
+    return message?.role === 'narrator'
+        ? renderNarratorText(message.text)
+        : escapeHtml(message?.text);
+}
+
 function renderMessage(message, index) {
     const narrator = message.role === 'narrator';
+    const content = renderBackstageMessageBody(message);
     return `<li class="lm-backstage-turn ${narrator ? 'is-narrator' : 'is-player'}" data-message-id="${escapeHtml(message.id)}" style="--turn-index:${Math.min(index, 8)}">
         <span class="lm-backstage-speaker">${narrator ? '叙述者' : '你'}</span>
-        <p>${escapeHtml(message.text)}</p>
+        <div class="lm-backstage-content${narrator ? '' : ' is-plain'}">${content}</div>
     </li>`;
 }
 
@@ -57,6 +81,28 @@ function syncTranscriptList(list, messages) {
     for (let index = list.children.length; index < messages.length; index += 1) {
         list.insertAdjacentHTML('beforeend', renderMessage(messages[index], index));
     }
+}
+
+function scheduleTokenEstimate({ readOnly, messages }) {
+    const root = dialog();
+    const token = root?.querySelector('.lm-backstage-token-count');
+    const generation = ++tokenEstimateGeneration;
+    if (!token) return;
+    if (readOnly) {
+        token.textContent = `${messages.length} 条对话`;
+        return;
+    }
+    token.textContent = '正在估算…';
+    requestAnimationFrame(() => {
+        setTimeout(() => {
+            if (generation !== tokenEstimateGeneration || !dialogReady || !root.open) return;
+            try {
+                token.textContent = `约 ${backstageInputTokenEstimate().toLocaleString('zh-CN')} token`;
+            } catch {
+                token.textContent = 'token 暂不可用';
+            }
+        }, 0);
+    });
 }
 
 function renderTranscript(snapshot, { preserveScroll = false } = {}) {
@@ -72,6 +118,8 @@ function renderTranscript(snapshot, { preserveScroll = false } = {}) {
     const distanceFromBottom = scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight : 0;
     const list = root.querySelector('.lm-backstage-turns');
     const empty = root.querySelector('.lm-backstage-empty');
+    const hydrating = root.querySelector('.lm-backstage-hydrating');
+    if (hydrating) hydrating.hidden = true;
     syncTranscriptList(list, messages);
     if (empty) empty.hidden = messages.length > 0;
 
@@ -120,10 +168,7 @@ function renderTranscript(snapshot, { preserveScroll = false } = {}) {
         continueButton.disabled = loading || !hasNarratorReply || messages.at(-1)?.role !== 'narrator';
         continueButton.textContent = working?.baseRevisionId ? '好了，重写这段' : '可以了，继续！';
     }
-    const token = root.querySelector('.lm-backstage-token-count');
-    if (token) token.textContent = readOnly
-        ? `${messages.length} 条对话`
-        : `约 ${backstageInputTokenEstimate().toLocaleString('zh-CN')} token`;
+    scheduleTokenEstimate({ readOnly, messages });
 
     if (scroller) {
         if (preserveScroll && distanceFromBottom > 80) {
@@ -134,19 +179,22 @@ function renderTranscript(snapshot, { preserveScroll = false } = {}) {
     }
 }
 
-function setError(message = '') {
+function setError(message = '', { retryMode = 'reply', retryLabel = '重新询问' } = {}) {
     const root = dialog();
     const row = root?.querySelector('.lm-backstage-error');
     if (!row) return;
     row.hidden = !message;
     row.querySelector('span').textContent = message;
+    row.dataset.retryMode = retryMode;
+    const retry = row.querySelector('.lm-backstage-retry');
+    if (retry) retry.textContent = retryLabel;
 }
 
 async function flushComposerDraft() {
     clearTimeout(draftSaveTimer);
     draftSaveTimer = null;
     const textarea = dialog()?.querySelector('#lm-backstage-input');
-    if (!archivedView && textarea) await saveBackstageComposerDraft(textarea.value);
+    if (dialogReady && !archivedView && textarea) await saveBackstageComposerDraft(textarea.value);
 }
 
 function scheduleDraftSave() {
@@ -160,7 +208,7 @@ async function sendBackstageMessage() {
     const root = dialog();
     const textarea = root?.querySelector('#lm-backstage-input');
     const text = textarea?.value.trim();
-    if (!text || isBackstageDiscussionInFlight()) return;
+    if (!dialogReady || !text || isBackstageDiscussionInFlight()) return;
     setError('');
     try {
         const reply = submitBackstageUserMessage(text);
@@ -180,6 +228,7 @@ async function sendBackstageMessage() {
 }
 
 function clearCurrentBackstage() {
+    if (!dialogReady) return;
     clearTimeout(draftSaveTimer);
     draftSaveTimer = null;
     setError('');
@@ -204,14 +253,28 @@ async function retryBackstageReply() {
     }
 }
 
+function retryBackstageError() {
+    const row = dialog()?.querySelector('.lm-backstage-error');
+    if (row?.dataset.retryMode === 'hydrate') {
+        void openBackstageDialog(lastOpenRequest || {});
+        return;
+    }
+    void retryBackstageReply();
+}
+
 function closeBackstageDialog({ restoreFocus = true } = {}) {
     const root = dialog();
     if (!root?.open || root.classList.contains('is-closing')) return Promise.resolve();
-    void flushComposerDraft();
+    const shouldSaveDraft = dialogReady;
+    if (shouldSaveDraft) void flushComposerDraft();
+    dialogReady = false;
+    hydrationGeneration += 1;
+    tokenEstimateGeneration += 1;
     root.classList.add('is-closing');
     return new Promise(resolve => {
         const finish = () => {
-            root.classList.remove('is-closing', 'is-open');
+            root.classList.remove('is-closing', 'is-open', 'is-hydrating');
+            root.removeAttribute('aria-busy');
             root.close();
             if (restoreFocus) lastTrigger?.focus?.({ preventScroll: true });
             resolve();
@@ -235,49 +298,120 @@ async function continueStory() {
     } catch (error) {
         await closePromise;
         globalThis.toastr?.error?.(`没有继续成功：${error?.message ?? error}`);
-        archivedView = null;
-        const snapshot = getBackstageSnapshot();
-        if (snapshot.session) {
-            root.showModal();
-            requestAnimationFrame(() => root.classList.add('is-open'));
-            renderTranscript(snapshot);
+        await openBackstageDialog({ trigger: lastTrigger });
+        if (dialogReady) {
             setError(`没有继续成功：${error?.message ?? error}。幕间讨论仍然保留。`);
         }
     }
 }
 
-function showDialog() {
+function showDialogShell() {
     const root = dialog();
     if (!root) return;
     if (!root.open) root.showModal();
     root.classList.remove('is-closing');
-    requestAnimationFrame(() => root.classList.add('is-open'));
-    renderTranscript(getBackstageSnapshot());
+    root.classList.add('is-open', 'is-hydrating');
+    root.setAttribute('aria-busy', 'true');
+    dialogReady = false;
+    tokenEstimateGeneration += 1;
     setError('');
-    requestAnimationFrame(() => {
-        const focusTarget = archivedView
-            ? root.querySelector('.lm-backstage-close')
-            : root.querySelector('#lm-backstage-input');
-        focusTarget?.focus();
+    const rejected = root.querySelector('.lm-backstage-rejected');
+    if (rejected) rejected.hidden = true;
+    const empty = root.querySelector('.lm-backstage-empty');
+    if (empty) empty.hidden = true;
+    const hydrating = root.querySelector('.lm-backstage-hydrating');
+    if (hydrating) hydrating.hidden = false;
+    const thinking = root.querySelector('.lm-backstage-thinking');
+    if (thinking) thinking.hidden = true;
+    const mode = root.querySelector('.lm-backstage-mode');
+    if (mode) mode.textContent = '正在接上这段剧情…';
+    const composer = root.querySelector('.lm-backstage-compose');
+    if (composer) composer.hidden = false;
+    const textarea = root.querySelector('#lm-backstage-input');
+    if (textarea) {
+        textarea.value = '';
+        textarea.disabled = true;
+    }
+    const send = root.querySelector('.lm-backstage-send');
+    if (send) send.disabled = true;
+    const stop = root.querySelector('.lm-backstage-stop');
+    if (stop) stop.hidden = true;
+    const clear = root.querySelector('.lm-backstage-clear');
+    if (clear) {
+        clear.hidden = false;
+        clear.disabled = true;
+    }
+    const continueButton = root.querySelector('.lm-backstage-continue');
+    if (continueButton) {
+        continueButton.hidden = false;
+        continueButton.disabled = true;
+        continueButton.textContent = '可以了，继续！';
+    }
+    const token = root.querySelector('.lm-backstage-token-count');
+    if (token) token.textContent = '正在准备…';
+}
+
+function waitForFirstPaint() {
+    return new Promise(resolve => {
+        requestAnimationFrame(() => setTimeout(resolve, 0));
     });
 }
 
-export function openBackstageDialog({ messageIndex = null, trigger = null } = {}) {
-    lastTrigger = trigger || document.activeElement;
-    archivedView = null;
-    if (Number.isInteger(messageIndex)) {
-        const linked = backstageSessionForMessage(messageIndex);
-        const isLast = messageIndex === (getContext().chat?.length || 0) - 1;
-        if (!linked) throw new Error('找不到这条消息关联的幕间讨论');
-        if (linked.output && isLast) {
-            beginBackstageSession({ messageIndex });
+async function hydrateDialog({ messageIndex }, generation) {
+    await waitForFirstPaint();
+    const root = dialog();
+    if (generation !== hydrationGeneration || !root?.open) return false;
+    try {
+        archivedView = null;
+        if (Number.isInteger(messageIndex)) {
+            const linked = backstageSessionForMessage(messageIndex);
+            const isLast = messageIndex === (getContext().chat?.length || 0) - 1;
+            if (!linked) throw new Error('找不到这条消息关联的幕间讨论');
+            if (linked.output && isLast) beginBackstageSession({ messageIndex });
+            else archivedView = linked;
         } else {
-            archivedView = linked;
+            beginBackstageSession();
         }
-    } else {
-        beginBackstageSession();
+        if (generation !== hydrationGeneration || !root.open) return false;
+        dialogReady = true;
+        root.classList.remove('is-hydrating');
+        root.removeAttribute('aria-busy');
+        renderTranscript(getBackstageSnapshot());
+        requestAnimationFrame(() => {
+            if (generation !== hydrationGeneration || !root.open) return;
+            const focusTarget = archivedView
+                ? root.querySelector('.lm-backstage-close')
+                : root.querySelector('#lm-backstage-input');
+            focusTarget?.focus();
+        });
+        return true;
+    } catch (error) {
+        if (generation !== hydrationGeneration || !root.open) return false;
+        root.querySelector('.lm-backstage-turns')?.replaceChildren();
+        root.classList.remove('is-hydrating');
+        root.removeAttribute('aria-busy');
+        const hydrating = root.querySelector('.lm-backstage-hydrating');
+        if (hydrating) hydrating.hidden = true;
+        const mode = root.querySelector('.lm-backstage-mode');
+        if (mode) mode.textContent = '这段剧情暂时没有接上';
+        const token = root.querySelector('.lm-backstage-token-count');
+        if (token) token.textContent = '尚未就绪';
+        setError(`幕间没有准备好：${error?.message ?? error}`, {
+            retryMode: 'hydrate',
+            retryLabel: '重新连接',
+        });
+        root.querySelector('.lm-backstage-close')?.focus();
+        return false;
     }
-    showDialog();
+}
+
+export async function openBackstageDialog({ messageIndex = null, trigger = null } = {}) {
+    lastTrigger = trigger || document.activeElement;
+    lastOpenRequest = { messageIndex, trigger: lastTrigger };
+    archivedView = null;
+    const generation = ++hydrationGeneration;
+    showDialogShell();
+    return hydrateDialog({ messageIndex }, generation);
 }
 
 function toggleExpanded(button) {
@@ -309,6 +443,10 @@ function makeDialog() {
                 </div>
             </header>
             <main class="lm-backstage-transcript">
+                <div class="lm-backstage-hydrating" role="status" aria-live="polite" hidden>
+                    <span class="lm-backstage-hydrating-mark" aria-hidden="true"><i class="fa-solid fa-masks-theater"></i></span>
+                    <span>正在接上这段剧情…</span>
+                </div>
                 <details class="lm-backstage-rejected" hidden>
                     <summary>上一版正文</summary>
                     <p></p>
@@ -351,7 +489,7 @@ function makeDialog() {
     root.querySelector('.lm-backstage-expand')?.addEventListener('click', event => toggleExpanded(event.currentTarget));
     root.querySelector('.lm-backstage-clear')?.addEventListener('click', clearCurrentBackstage);
     root.querySelector('.lm-backstage-send')?.addEventListener('click', sendBackstageMessage);
-    root.querySelector('.lm-backstage-retry')?.addEventListener('click', retryBackstageReply);
+    root.querySelector('.lm-backstage-retry')?.addEventListener('click', retryBackstageError);
     root.querySelector('.lm-backstage-stop')?.addEventListener('click', stopBackstageNarratorReply);
     root.querySelector('.lm-backstage-continue')?.addEventListener('click', continueStory);
     const textarea = root.querySelector('#lm-backstage-input');
@@ -477,7 +615,12 @@ export function injectBackstageUi() {
         triggerObserver.observe(document.body, { childList: true, subtree: true });
         setTimeout(() => triggerObserver.disconnect(), 15_000);
     }
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver(records => {
+        const onlyBackstageChanges = records.length > 0 && records.every(record => {
+            const element = record.target?.nodeType === 1 ? record.target : record.target?.parentElement;
+            return Boolean(element?.closest?.(`#${DIALOG_ID}`));
+        });
+        if (onlyBackstageChanges) return;
         updateTriggerState();
         scheduleDecorate();
     });
@@ -504,7 +647,7 @@ export function injectBackstageUi() {
     });
     subscribeBackstage(snapshot => {
         updateTriggerState();
-        if (dialog()?.open && !archivedView) renderTranscript(snapshot, { preserveScroll: true });
+        if (dialog()?.open && dialogReady && !archivedView) renderTranscript(snapshot, { preserveScroll: true });
         scheduleDecorate();
     });
     scheduleDecorate();

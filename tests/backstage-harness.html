@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>幕间界面验收</title>
-    <link rel="stylesheet" href="../style-v0.16.1.css?backstage-harness=3">
+    <link rel="stylesheet" href="../style-v0.16.2.css?backstage-harness=4">
     <style>
         :root {
             color-scheme: dark;
@@ -39,15 +39,21 @@
     </div>
     <form id="leftSendForm"><textarea id="send_textarea" aria-label="玩家输入"></textarea></form>
     <script type="module">
+        const params = new URLSearchParams(location.search);
+        const hydrateDelay = Math.max(0, Number(params.get('hydrateDelay')) || 0);
         const chat = [
             { is_user: true, mes: '我推开宗门的山门，沿着石阶向上。', send_date: 'u0', extra: { layered_memory_id: 'u0' } },
             { is_user: false, mes: '山道安静得有些反常，只有檐角铜铃偶尔轻响。', send_date: 'a0', extra: { layered_memory_id: 'a0' } },
         ];
         let replyIndex = 0;
         const replies = [
-            '可以。现在这段确实缺少一个会迫使人物表态的外部压力。下一段我可以让几名来历不明的修士出现在山门外，但先不揭晓幕后主使。',
+            '### 可以这样走\n\n现在这段确实缺少一个会迫使人物表态的外部压力。\n\n- 让几名来历不明的修士出现在山门外\n- 先不揭晓幕后主使\n\n> 核心是增加压力，但不给你代做决定。\n\n我会把 `行动权` 留给你。\n\n```text\n门外先传来叩门声。\n```',
             '这个边界很清楚：他们先用言语施压，留下你观察和选择的空间，不会替你决定是否动手。冲突会有张力，但行动权仍然在你。',
         ];
+        const escapeHtml = value => String(value)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;');
         const context = {
             chat,
             chatMetadata: {},
@@ -58,6 +64,12 @@
             name2: '玄微',
             eventSource: { emit: async () => {} },
             event_types: { MESSAGE_EDITED: 'message_edited' },
+            messageFormatting(value) {
+                if (value.startsWith('### 可以这样走')) {
+                    return '<h3>可以这样走</h3><p>现在这段确实缺少一个会迫使人物表态的<strong>外部压力</strong>。</p><ul><li>让几名来历不明的修士出现在山门外</li><li>先不揭晓幕后主使</li></ul><blockquote>核心是增加压力，但不给你代做决定。</blockquote><p>我会把 <code>行动权</code> 留给你。</p><pre><code>门外先传来叩门声。</code></pre>';
+                }
+                return `<p>${escapeHtml(value)}</p>`;
+            },
             generateRaw: async () => {
                 await new Promise(resolve => setTimeout(resolve, 500));
                 return replies[Math.min(replyIndex++, replies.length - 1)];
@@ -77,7 +89,52 @@
 
         const ui = await import('../src/ui/backstage.js');
         ui.injectBackstageUi();
-        await ui.openBackstageDialog({ trigger: document.querySelector('#lm-backstage-trigger') });
+        await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+        globalThis.__backstageTelemetry = {
+            openedAt: performance.now(),
+            dataReadAt: null,
+            firstPaint: null,
+            readyAt: null,
+        };
+        if (hydrateDelay) {
+            let storedData = context.chatMetadata.layered_memory;
+            let delayed = false;
+            Object.defineProperty(context.chatMetadata, 'layered_memory', {
+                configurable: true,
+                get() {
+                    if (!delayed) {
+                        delayed = true;
+                        globalThis.__backstageTelemetry.dataReadAt = performance.now();
+                        document.body.dataset.backstageDataReadAt = String(performance.now());
+                        const deadline = performance.now() + hydrateDelay;
+                        while (performance.now() < deadline) { /* deliberate synchronous hydration stall */ }
+                    }
+                    return storedData;
+                },
+                set(value) { storedData = value; },
+            });
+        }
+        document.body.dataset.backstageOpenedAt = String(performance.now());
+        const opening = ui.openBackstageDialog({ trigger: document.querySelector('#lm-backstage-trigger') });
+        requestAnimationFrame(() => {
+            const dialog = document.querySelector('#lm-backstage-dialog');
+            dialog.dataset.firstPaintAt = String(performance.now());
+            dialog.dataset.firstPaintOpen = String(Boolean(dialog?.open));
+            dialog.dataset.firstPaintBusy = dialog?.getAttribute('aria-busy') || '';
+            dialog.dataset.firstPaintInputDisabled = String(Boolean(dialog?.querySelector('#lm-backstage-input')?.disabled));
+            dialog.dataset.firstPaintStatus = dialog?.querySelector('.lm-backstage-hydrating')?.textContent.trim() || '';
+            globalThis.__backstageTelemetry.firstPaint = {
+                at: performance.now(),
+                open: dialog?.open,
+                busy: dialog?.getAttribute('aria-busy'),
+                status: dialog?.querySelector('.lm-backstage-hydrating')?.textContent.trim(),
+                inputDisabled: dialog?.querySelector('#lm-backstage-input')?.disabled,
+                opacity: dialog ? getComputedStyle(dialog).opacity : null,
+            };
+        });
+        await opening;
+        globalThis.__backstageTelemetry.readyAt = performance.now();
+        document.querySelector('#lm-backstage-dialog').dataset.readyAt = String(performance.now());
     </script>
 </body>
 </html>

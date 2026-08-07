@@ -83,8 +83,10 @@ await runtime.requestBackstageNarratorReply();
 assert.match(rawRequest.systemPrompt, /同一个叙述者/u);
 assert.match(rawRequest.systemPrompt, /最近完整正文/u);
 assert.match(JSON.stringify(rawRequest.prompt), /来点人闯入宗门找麻烦/u);
-assert.match(rawRequest.systemPrompt, /只回复玩家能看到的自然对话。不要输出 JSON/u,
+assert.match(rawRequest.systemPrompt, /只回复玩家能看到的自然纯文本对话。不要输出 JSON/u,
     '幕间应要求自然对话而不是结构化选项');
+assert.match(rawRequest.systemPrompt, /不要使用 Markdown 标题、列表、粗体、引用、行内代码或代码块/u,
+    '模型提示词应主动要求纯文本，Markdown 渲染只作为显示兜底');
 assert.equal(rawRequest.responseLength, 768, '幕间回复必须使用独立短输出上限');
 assert.deepEqual(rawRequest.prompt.map(message => message.role), ['user'],
     '幕间消息必须以真实角色数组发送，而不是拼进完整正文预设');
