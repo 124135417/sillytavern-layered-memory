@@ -1,6 +1,10 @@
 import { estimateTokens } from './tokens.js';
+import { isBackstageMarker } from './backstage.js';
 
 function renderRawFloor(source) {
+    if (isBackstageMarker(source.message)) {
+        return `### 第 ${source.messageIndex} 楼｜幕间控制楼\n（此处发生过一次幕间讨论；讨论全文只用于紧随其后的正文生成，不属于剧情事件。）`;
+    }
     const role = source.role === 'user' ? '用户原文' : '角色正文原文';
     const narrativeText = source.narrativeText ?? source.text;
     return `### 第 ${source.messageIndex} 楼｜${role}\n${String(narrativeText || '').trim()}`;

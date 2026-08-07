@@ -76,6 +76,7 @@ const {
 } = await import('../src/backstage.js');
 const { getPairTexts, getPairs } = await import('../src/ids.js');
 const { currentNarrativeSources, fallbackNarrativeSummary } = await import('../src/narrative.js');
+const { renderRecentRawBlock } = await import('../src/recent-raw.js');
 
 await runtime.beginBackstageSession();
 await runtime.appendBackstageUserMessage('这段太平了。可以来点人闯入宗门找麻烦，但暂时别揭晓幕后主使吗？');
@@ -119,6 +120,11 @@ const markerSource = currentNarrativeSources().find(source => source.messageInde
 assert.equal(markerSource.narrativeText, '', '幕间全文不得进入逐楼剧情正文');
 assert.equal(markerSource.timeSourceText, '', '幕间全文不得成为剧情时间证据');
 assert.match(fallbackNarrativeSummary(markerSource), /不属于剧情事件/u);
+const recentRawAfterBackstage = renderRecentRawBlock(currentNarrativeSources());
+assert.match(recentRawAfterBackstage, /角色正文原文[\s\S]*幕间控制楼[\s\S]*角色正文原文/u,
+    '后续最近原文必须保留正文、幕间、正文的角色边界');
+assert.doesNotMatch(recentRawAfterBackstage, /来点人闯入宗门找麻烦/u,
+    '幕间全文只能影响紧随其后的一轮，不能长期重复注入');
 
 const firstMeta = structuredClone(firstOutput.extra[BACKSTAGE_OUTPUT_EXTRA]);
 await runtime.beginBackstageSession({ messageIndex: 3 });
