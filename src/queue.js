@@ -34,6 +34,34 @@ const hydratedScopes = new Set();
 /** @type {Map<string, any>} */
 const chatDataByScope = new Map();
 
+function scopeHasRetainedWork(scopeId) {
+    if (memoryQueue.some(job => job.scopeId === scopeId)) return true;
+    if ([...inFlightJobs.values()].some(job => job.scopeId === scopeId)) return true;
+    const state = chatDataByScope.get(scopeId)?.job_queue;
+    return Boolean(state?.queued?.length || state?.running?.length);
+}
+
+/**
+ * Release inactive, idle chat scopes from the page runtime. Persisted queue
+ * state remains in chat metadata and is hydrated again if the chat is opened.
+ * Scopes with queued/running work stay resident so switching chats cannot lose
+ * an unfinished task.
+ */
+export function releaseInactiveQueueScopes() {
+    const activeData = getChatData();
+    const activeScopeId = ensureQueueState(activeData).scope_id;
+    let released = 0;
+
+    for (const scopeId of chatDataByScope.keys()) {
+        if (scopeId === activeScopeId || scopeHasRetainedWork(scopeId)) continue;
+        chatDataByScope.delete(scopeId);
+        hydratedScopes.delete(scopeId);
+        released += 1;
+    }
+
+    return { activeScopeId, released, retained: chatDataByScope.size };
+}
+
 export function registerHandler(type, fn) {
     handlers.set(type, fn);
     // wireHandlers() registers synchronously; the microtask runs after the full

@@ -11,7 +11,7 @@ import { handOffManagedHistory, requestExcludesTrailingAssistant } from './src/h
 import { createHistoryMutationCoordinator } from './src/history-mutation.js';
 import { clearActiveGenerationType, registerPresetMemoryMacro, setActiveGenerationType, updateInjection } from './src/inject.js';
 import { handleProofreadJob } from './src/proofread.js';
-import { rebuildAndEnqueuePending, registerHandler } from './src/queue.js';
+import { rebuildAndEnqueuePending, registerHandler, releaseInactiveQueueScopes } from './src/queue.js';
 import { appendLog, getChatData, getSettings } from './src/settings.js';
 import { handleStateGcJob } from './src/state-gc.js';
 import { injectPanel, registerMessageMenu, renderActiveTab } from './src/ui/panel.js';
@@ -62,6 +62,7 @@ function wireHandlers() {
 
 async function onChatChanged() {
     handleBackstageChatChanged();
+    releaseInactiveQueueScopes();
     const originMetadata = ctx().chatMetadata;
     const recovery = await beginBranchRecovery();
     if (ctx().chatMetadata !== originMetadata) return;
@@ -281,7 +282,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.16.2`);
+    console.log(`[${MODULE}] 已加载 v0.16.3`);
 });
 
 export async function onActivate() {

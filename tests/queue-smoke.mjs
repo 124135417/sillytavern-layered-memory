@@ -32,6 +32,7 @@ const {
     getQueueSnapshot,
     isRetryableError,
     prioritizeNarrativeSummary,
+    releaseInactiveQueueScopes,
     rebuildAndEnqueuePending,
     retryFailedJob,
     setQueuePaused,
@@ -52,6 +53,9 @@ assert.equal(getQueueSnapshot().queued.length, 0, '切聊后不得看到旧聊�
 
 active = 'a';
 assert.equal(getQueueSnapshot().queued.length, 1, '切回后应恢复原聊天队列');
+const releasedIdleScopes = releaseInactiveQueueScopes();
+assert.equal(releasedIdleScopes.released, 1, '切聊后应释放没有后台工作的旧聊天运行时引用');
+assert.equal(releasedIdleScopes.retained, 1, '有等待任务的聊天必须继续保留运行时引用');
 chats.a.layered_memory.job_queue.failed.push({
     id: 'failed-1', type: 'proofread', payload: {}, priority: 50,
     status: 'failed', attempt: 3, maxAttempts: 3, lastError: '超时',
