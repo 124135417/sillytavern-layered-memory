@@ -1,5 +1,6 @@
 export const BACKSTAGE_MARKER_EXTRA = 'layered_memory_backstage_marker';
 export const BACKSTAGE_OUTPUT_EXTRA = 'layered_memory_backstage';
+export const BACKSTAGE_RESPONSE_TOKENS = 768;
 
 const BACKSTAGE_STATE_VERSION = 1;
 
@@ -174,6 +175,23 @@ export function setBackstageComposerDraft(data, sessionId, text) {
     return true;
 }
 
+export function clearBackstageWorkingCopy(data, sessionId) {
+    const session = getBackstageSession(data, sessionId);
+    if (!session?.working) return false;
+    const working = session.working;
+    const changed = Boolean(
+        working.messages.length
+        || working.composerDraft
+        || working.rejectedDraft,
+    );
+    working.messages = [];
+    working.composerDraft = '';
+    working.rejectedDraft = '';
+    working.updatedAt = Date.now();
+    session.updatedAt = Date.now();
+    return changed;
+}
+
 export function createBackstageRevision(data, sessionId) {
     const session = getBackstageSession(data, sessionId);
     if (!session?.working?.messages?.length) throw new Error('还没有可以带回剧情的幕间讨论');
@@ -223,14 +241,22 @@ export function formatBackstagePlayerInput(revision) {
     return sections.filter(Boolean).join('\n\n');
 }
 
-export function formatBackstageDiscussionPrompt(session, { narratorName = '叙述者' } = {}) {
+export function buildBackstageDiscussionRequest(session, {
+    narratorName = '叙述者',
+    l2 = '',
+    raw = '',
+} = {}) {
     const working = session?.working;
     if (!working?.messages?.length) throw new Error('还没有幕间对话');
     const sections = [
         `你是刚才讲述这段故事的同一个叙述者${narratorName ? `（${narratorName}）` : ''}。剧情现在暂停，玩家正在幕间直接和你说话。`,
         '摘下叙事面具，以叙述者本人的口吻坦率交流：可以解释你刚才的叙事意图、承认连续性问题、提出走向，也必须接受玩家的否定和修改。此刻不要续写剧情，不要扮演剧情中的角色，不要替玩家作决定。',
         '只回复玩家能看到的自然对话。不要输出 JSON、标签、状态说明或正文。',
+        '你只能依据下面的剧情摘要、最近完整正文和本次幕间对话回答。不要假设你还收到了角色卡、世界书、作者注释、正文预设、事实表、关键词召回或更早的原生聊天记录。',
     ];
+    if (l2) sections.push(`【前文剧情摘要】\n${String(l2).trim()}`);
+    if (raw) sections.push(`【最近完整正文】\n${String(raw).trim()}`);
+    if (!l2 && !raw) sections.push('【剧情资料】\n当前没有可用的前文摘要或最近正文。');
     if (working.rejectedDraft) {
         sections.push([
             '下面是玩家刚刚没有采用的正文草稿。它不是正史；请帮助玩家说清哪里没有对上。',
@@ -238,8 +264,16 @@ export function formatBackstageDiscussionPrompt(session, { narratorName = '叙�
             working.rejectedDraft,
         ].join('\n'));
     }
-    sections.push('【本次幕间对话】', renderTranscript(working.messages));
-    return sections.join('\n\n');
+    return {
+        systemPrompt: sections.join('\n\n'),
+        prompt: working.messages.map(message => ({
+            role: message.role === 'narrator' ? 'assistant' : 'user',
+            content: cleanText(message.text),
+        })),
+        responseLength: BACKSTAGE_RESPONSE_TOKENS,
+        quietToLoud: true,
+        trimNames: false,
+    };
 }
 
 export function markBackstageMarkerMessage(message, session, revision) {

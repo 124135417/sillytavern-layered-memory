@@ -28,6 +28,7 @@ import {
     handleNarrativeSummaryJob,
 } from './src/narrative.js';
 import {
+    handleBackstageChatChanged,
     handleBackstageGenerationStarted,
     handleBackstageGenerationStopped,
     handleBackstageMessageReceived,
@@ -60,6 +61,7 @@ function wireHandlers() {
 }
 
 async function onChatChanged() {
+    handleBackstageChatChanged();
     const originMetadata = ctx().chatMetadata;
     const recovery = await beginBranchRecovery();
     if (ctx().chatMetadata !== originMetadata) return;
@@ -279,7 +281,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.16.0`);
+    console.log(`[${MODULE}] 已加载 v0.16.1`);
 });
 
 export async function onActivate() {

@@ -3,11 +3,12 @@ import {
     appendBackstageMessage,
     backstageMarkerMeta,
     backstageOutputMeta,
+    buildBackstageDiscussionRequest,
+    clearBackstageWorkingCopy,
     closeBackstageSessions,
     createBackstageRevision,
     createBackstageSession,
     ensureBackstageState,
-    formatBackstageDiscussionPrompt,
     formatBackstagePlayerInput,
     getBackstageRevision,
     getBackstageSession,
@@ -19,12 +20,53 @@ import {
     setBackstageWorkingCopy,
 } from './backstage.js';
 import { ensureMessageIds, getActiveMesText, messageStableKey } from './ids.js';
+import { buildCoreMemoryParts } from './inject.js';
 import { getChatData, getContext, saveChatData, saveChatMessages } from './settings.js';
 import { estimateTokens } from './tokens.js';
 
 const subscribers = new Set();
-let discussionInFlight = false;
+let activeDiscussion = null;
+let discussionEpoch = 0;
 let pendingSubmission = null;
+let lastPersistenceErrorAt = 0;
+
+function queueBackstageSave(data) {
+    const pending = saveChatData(data).catch(error => {
+        if (error?.code === 'CHAT_SCOPE_CHANGED') return false;
+        console.error('[layered-memory] 幕间状态后台保存失败', error);
+        const now = Date.now();
+        if (now - lastPersistenceErrorAt > 5_000) {
+            lastPersistenceErrorAt = now;
+            globalThis.toastr?.error?.(`幕间状态保存失败：${error?.message ?? error}`);
+        }
+        return false;
+    });
+    return pending;
+}
+
+function discussionIsCurrent(request) {
+    return Boolean(
+        request
+        && activeDiscussion === request
+        && request.epoch === discussionEpoch
+        && request.data === getChatData(),
+    );
+}
+
+function invalidateDiscussion({ stop = false, notifyChange = true } = {}) {
+    const request = activeDiscussion;
+    discussionEpoch += 1;
+    activeDiscussion = null;
+    if (notifyChange) notify();
+    if (stop && request) {
+        try {
+            getContext().stopGeneration?.();
+        } catch (error) {
+            console.warn('[layered-memory] 无法停止已经失效的幕间请求', error);
+        }
+    }
+    return Boolean(request);
+}
 
 function notify() {
     const detail = getBackstageSnapshot();
@@ -102,16 +144,20 @@ export function subscribeBackstage(listener) {
 
 export function getBackstageSnapshot() {
     const data = getChatData();
+    if (activeDiscussion && activeDiscussion.data !== data) {
+        discussionEpoch += 1;
+        activeDiscussion = null;
+    }
     const state = ensureBackstageState(data);
     const session = getBackstageSession(data, state.activeSessionId);
     return {
         session: session ? clone(session) : null,
-        discussionInFlight,
+        discussionInFlight: Boolean(activeDiscussion),
         pendingGeneration: state.pendingGeneration ? clone(state.pendingGeneration) : null,
     };
 }
 
-export async function beginBackstageSession({ messageIndex = null } = {}) {
+export function beginBackstageSession({ messageIndex = null } = {}) {
     const data = getChatData();
     const state = ensureBackstageState(data);
     const chat = getContext().chat || [];
@@ -129,8 +175,8 @@ export async function beginBackstageSession({ messageIndex = null } = {}) {
             rejectedDraft: getActiveMesText(source),
         });
         state.activeSessionId = session.id;
-        await saveChatData(data);
         notify();
+        void queueBackstageSave(data);
         return clone(session);
     }
 
@@ -141,59 +187,137 @@ export async function beginBackstageSession({ messageIndex = null } = {}) {
         return clone(existing);
     }
     const session = createBackstageSession(data, { anchorMessageKey: anchor });
-    await saveChatData(data);
     notify();
+    void queueBackstageSave(data);
     return clone(session);
 }
 
-export async function appendBackstageUserMessage(text) {
+export function appendBackstageUserMessage(text) {
     const data = getChatData();
     const session = activeWorkingSession();
     if (!session) throw new Error('先打开幕间窗口');
     const message = appendBackstageMessage(data, session.id, 'user', text);
-    await saveChatData(data);
     notify();
+    void queueBackstageSave(data);
     return clone(message);
 }
 
-export async function saveBackstageComposerDraft(text) {
+export function saveBackstageComposerDraft(text) {
     const data = getChatData();
     const session = activeWorkingSession();
     if (!session || !setBackstageComposerDraft(data, session.id, text)) return false;
-    await saveChatData(data);
+    void queueBackstageSave(data);
     return true;
 }
 
-export async function requestBackstageNarratorReply() {
+async function runBackstageNarratorReply(request) {
+    const { data, sessionId, userMessageId, context } = request;
+    try {
+        const session = getBackstageSession(data, sessionId);
+        const { l2, raw } = buildCoreMemoryParts({ data, context });
+        const generation = buildBackstageDiscussionRequest(session, {
+            narratorName: context.name2 || '叙述者',
+            l2,
+            raw,
+        });
+        const text = cleanModelReply(await context.generateRaw(generation));
+        if (!discussionIsCurrent(request)) return null;
+        if (!text) throw new Error('叙述者没有返回可显示的内容');
+        const currentSession = getBackstageSession(data, sessionId);
+        if (!currentSession?.working || currentSession.working.messages.at(-1)?.id !== userMessageId) {
+            return null;
+        }
+        const message = appendBackstageMessage(data, sessionId, 'narrator', text);
+        void queueBackstageSave(data);
+        return clone(message);
+    } catch (error) {
+        if (!discussionIsCurrent(request)) return null;
+        throw error;
+    } finally {
+        if (activeDiscussion === request) {
+            activeDiscussion = null;
+            notify();
+        }
+    }
+}
+
+function startBackstageNarratorReply({ userText = null } = {}) {
+    if (isBackstageDiscussionInFlight()) return activeDiscussion.promise;
     const data = getChatData();
     const session = activeWorkingSession();
-    if (!session?.working?.messages?.length) throw new Error('先写下想对叙述者说的话');
-    if (session.working.messages.at(-1)?.role !== 'user') throw new Error('叙述者已经回应了这句话');
     const context = getContext();
-    if (hostIsGenerating() && !discussionInFlight) {
+    if (!session?.working) throw new Error('先打开幕间窗口');
+    if (hostIsGenerating()) {
         throw new Error('酒馆正在生成正文，请等这一轮结束后再询问叙述者');
     }
-    if (typeof context.generateQuietPrompt !== 'function') {
+    if (typeof context.generateRaw !== 'function') {
         throw new Error('当前 SillyTavern 版本没有提供幕间所需的主模型调用接口');
     }
-    discussionInFlight = true;
-    notify();
+    const request = {
+        id: globalThis.crypto?.randomUUID?.() || `backstage-request-${Date.now()}-${discussionEpoch + 1}`,
+        epoch: discussionEpoch + 1,
+        data,
+        sessionId: session.id,
+        userMessageId: null,
+        context,
+        promise: null,
+    };
+    discussionEpoch = request.epoch;
+    activeDiscussion = request;
     try {
-        const text = cleanModelReply(await context.generateQuietPrompt({
-            quietPrompt: formatBackstageDiscussionPrompt(session, { narratorName: context.name2 || '叙述者' }),
-            quietToLoud: true,
-            skipWIAN: false,
-            quietName: context.name2 || '叙述者',
-            removeReasoning: true,
-        }));
-        if (!text) throw new Error('叙述者没有返回可显示的内容');
-        const message = appendBackstageMessage(data, session.id, 'narrator', text);
-        await saveChatData(data);
-        return clone(message);
-    } finally {
-        discussionInFlight = false;
+        if (userText != null) appendBackstageMessage(data, session.id, 'user', userText);
+        const latest = session.working.messages.at(-1);
+        if (!latest) throw new Error('先写下想对叙述者说的话');
+        if (latest.role !== 'user') throw new Error('叙述者已经回应了这句话');
+        request.userMessageId = latest.id;
+        request.promise = Promise.resolve().then(() => runBackstageNarratorReply(request));
         notify();
+        void queueBackstageSave(data);
+        return request.promise;
+    } catch (error) {
+        if (activeDiscussion === request) activeDiscussion = null;
+        notify();
+        throw error;
     }
+}
+
+export function submitBackstageUserMessage(text) {
+    const value = String(text ?? '').trim();
+    if (!value) throw new Error('先写下想对叙述者说的话');
+    return startBackstageNarratorReply({ userText: value });
+}
+
+export function requestBackstageNarratorReply() {
+    return startBackstageNarratorReply();
+}
+
+export function stopBackstageNarratorReply() {
+    return invalidateDiscussion({ stop: true });
+}
+
+export function clearBackstageSession() {
+    const data = getChatData();
+    const session = activeWorkingSession();
+    if (!session) return false;
+    const stopped = activeDiscussion?.sessionId === session.id
+        ? invalidateDiscussion({ stop: false, notifyChange: false })
+        : false;
+    const changed = clearBackstageWorkingCopy(data, session.id);
+    notify();
+    void queueBackstageSave(data);
+    if (stopped) {
+        try {
+            getContext().stopGeneration?.();
+        } catch (error) {
+            console.warn('[layered-memory] 清空后无法停止旧幕间请求', error);
+        }
+    }
+    return changed || stopped;
+}
+
+export function handleBackstageChatChanged() {
+    pendingSubmission = null;
+    return invalidateDiscussion({ stop: true });
 }
 
 export function backstageInputTokenEstimate() {
@@ -206,7 +330,7 @@ export function backstageInputTokenEstimate() {
     return estimateTokens(formatBackstagePlayerInput(preview));
 }
 
-async function restoreTextarea(textarea, originalValue) {
+function restoreTextarea(textarea, originalValue) {
     if (!textarea) return;
     if (!textarea.value || textarea.value === pendingSubmission?.prompt) {
         textarea.value = originalValue;
@@ -260,6 +384,7 @@ export async function continueBackstageToStory() {
     const data = getChatData();
     const session = activeWorkingSession();
     if (!session) throw new Error('没有正在进行的幕间讨论');
+    if (isBackstageDiscussionInFlight()) throw new Error('叙述者还在回应，请稍等片刻');
     if (!session.working.messages.some(message => message.role === 'narrator')) {
         throw new Error('先让叙述者回应，再继续剧情');
     }
@@ -269,15 +394,16 @@ export async function continueBackstageToStory() {
     const textarea = session.markerMessageKey ? null : document.querySelector('#send_textarea');
     if (!session.markerMessageKey && !textarea) throw new Error('找不到 SillyTavern 玩家输入框');
 
-    const revision = createBackstageRevision(data, session.id);
     const state = ensureBackstageState(data);
+    if (state.pendingGeneration) throw new Error('这一版剧情已经在生成');
+    const revision = createBackstageRevision(data, session.id);
     state.pendingGeneration = {
         sessionId: session.id,
         revisionId: revision.id,
         startedAt: Date.now(),
     };
-    await saveChatData(data);
     notify();
+    void queueBackstageSave(data);
 
     if (session.markerMessageKey) {
         try {
@@ -286,8 +412,8 @@ export async function continueBackstageToStory() {
             await restoreInterruptedSwipe();
             revision.status = 'interrupted';
             state.pendingGeneration = null;
-            await saveChatData(data);
             notify();
+            void queueBackstageSave(data);
             throw error;
         }
     }
@@ -302,16 +428,16 @@ export async function continueBackstageToStory() {
     } catch (error) {
         revision.status = 'interrupted';
         state.pendingGeneration = null;
-        await saveChatData(data);
         notify();
+        void queueBackstageSave(data);
         throw error;
     } finally {
-        await restoreTextarea(textarea, originalValue);
+        restoreTextarea(textarea, originalValue);
         pendingSubmission = null;
     }
 }
 
-export async function handleBackstageMessageSent(messageIndex) {
+export function handleBackstageMessageSent(messageIndex) {
     const data = getChatData();
     const state = ensureBackstageState(data);
     const message = getContext().chat?.[messageIndex];
@@ -326,20 +452,20 @@ export async function handleBackstageMessageSent(messageIndex) {
         session.markerMessageKey = messageStableKey(message);
         revision.markerMessageKey = session.markerMessageKey;
         session.updatedAt = Date.now();
-        await saveChatData(data);
         notify();
+        void queueBackstageSave(data);
         return true;
     }
     if (!isBackstageMarker(message)) {
         closeBackstageSessions(data);
         state.pendingGeneration = null;
-        await saveChatData(data);
         notify();
+        void queueBackstageSave(data);
     }
     return false;
 }
 
-export async function handleBackstageGenerationStarted(type, isDryRun = false) {
+export function handleBackstageGenerationStarted(type, isDryRun = false) {
     if (isDryRun || type !== 'swipe') return;
     const data = getChatData();
     const state = ensureBackstageState(data);
@@ -356,11 +482,11 @@ export async function handleBackstageGenerationStarted(type, isDryRun = false) {
         startedAt: Date.now(),
         nativeSwipe: true,
     };
-    await saveChatData(data);
     notify();
+    void queueBackstageSave(data);
 }
 
-export async function handleBackstageMessageReceived(messageIndex, type) {
+export function handleBackstageMessageReceived(messageIndex, type) {
     if (!['normal', 'swipe', undefined, null].includes(type)) return false;
     const data = getChatData();
     const state = ensureBackstageState(data);
@@ -378,21 +504,22 @@ export async function handleBackstageMessageReceived(messageIndex, type) {
     session.updatedAt = Date.now();
     state.activeSessionId = null;
     state.pendingGeneration = null;
-    await saveChatData(data);
     notify();
+    void queueBackstageSave(data);
     return true;
 }
 
-export async function handleBackstageGenerationStopped({ includeDiscussion = true } = {}) {
+export function handleBackstageGenerationStopped({ includeDiscussion = true } = {}) {
     const data = getChatData();
     const state = ensureBackstageState(data);
-    if (!state.pendingGeneration && (!includeDiscussion || !discussionInFlight)) return false;
+    const stoppedDiscussion = includeDiscussion && isBackstageDiscussionInFlight();
+    if (!state.pendingGeneration && !stoppedDiscussion) return false;
     const { revision } = pendingRevision(data);
     if (revision?.status === 'pending') revision.status = 'interrupted';
     state.pendingGeneration = null;
-    if (includeDiscussion) discussionInFlight = false;
-    await saveChatData(data);
+    if (stoppedDiscussion) invalidateDiscussion({ notifyChange: false });
     notify();
+    void queueBackstageSave(data);
     return true;
 }
 
@@ -409,7 +536,13 @@ export function backstageSessionForMessage(messageIndex) {
 }
 
 export function isBackstageDiscussionInFlight() {
-    return discussionInFlight;
+    if (!activeDiscussion) return false;
+    if (activeDiscussion.data !== getChatData()) {
+        discussionEpoch += 1;
+        activeDiscussion = null;
+        return false;
+    }
+    return true;
 }
 
 export { BACKSTAGE_MARKER_EXTRA, markerDisplayText };

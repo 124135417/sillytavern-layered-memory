@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>幕间界面验收</title>
-    <link rel="stylesheet" href="../style-v0.16.0.css?backstage-harness=2">
+    <link rel="stylesheet" href="../style-v0.16.1.css?backstage-harness=3">
     <style>
         :root {
             color-scheme: dark;
@@ -58,7 +58,10 @@
             name2: '玄微',
             eventSource: { emit: async () => {} },
             event_types: { MESSAGE_EDITED: 'message_edited' },
-            generateQuietPrompt: async () => replies[Math.min(replyIndex++, replies.length - 1)],
+            generateRaw: async () => {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                return replies[Math.min(replyIndex++, replies.length - 1)];
+            },
             generate: async () => {},
             stopGeneration: () => {},
         };

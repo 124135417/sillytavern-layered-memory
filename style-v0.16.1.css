@@ -1,4 +1,4 @@
-/* Filename is versioned so extension/CDN updates cannot retain stale modal geometry. */
+/* v0.16.1 filename is versioned so extension/CDN updates cannot retain stale modal geometry. */
 :root {
     --lm-bg: #121212;
     --lm-surface: #1b1b1b;
@@ -1142,6 +1142,23 @@ body.lm-memory-center-open {
 }
 
 .lm-backstage-window-actions { display: flex; align-items: center; gap: 4px; }
+.lm-backstage-clear {
+    min-height: 36px;
+    margin: 0 6px 0 0;
+    padding: 6px 10px;
+    color: var(--lm-bk-muted);
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    font: inherit;
+    font-size: .76rem;
+    font-weight: 650;
+    letter-spacing: .01em;
+    cursor: pointer;
+    transition: color 120ms cubic-bezier(.25, 1, .5, 1), background-color 120ms cubic-bezier(.25, 1, .5, 1), opacity 120ms cubic-bezier(.25, 1, .5, 1);
+}
+.lm-backstage-clear[hidden] { display: none; }
+.lm-backstage-clear:disabled { opacity: .34; cursor: not-allowed; }
 .lm-backstage-icon,
 .lm-backstage-send,
 .lm-backstage-stop {
@@ -1160,6 +1177,7 @@ body.lm-memory-center-open {
 }
 
 @media (hover: hover) {
+    .lm-backstage-clear:hover:not(:disabled) { color: var(--lm-bk-danger); background: color-mix(in oklab, var(--lm-bk-danger) 10%, transparent); }
     .lm-backstage-icon:hover,
     .lm-backstage-send:hover,
     .lm-backstage-stop:hover { color: var(--lm-bk-text); background: var(--lm-bk-surface-soft); }
@@ -1170,6 +1188,7 @@ body.lm-memory-center-open {
 .lm-backstage-stop:active { transform: scale(.92); }
 
 .lm-backstage-icon:focus-visible,
+.lm-backstage-clear:focus-visible,
 .lm-backstage-send:focus-visible,
 .lm-backstage-stop:focus-visible,
 .lm-backstage-continue:focus-visible,
@@ -1420,6 +1439,7 @@ body.lm-memory-center-open {
     .lm-backstage-mark { width: 38px; height: 46px; }
     .lm-backstage-heading h2 { font-size: 1.28rem; }
     .lm-backstage-heading p { max-width: 58vw; font-size: .78rem; }
+    .lm-backstage-clear { min-height: 44px; margin-right: 0; padding-inline: 8px; font-size: .72rem; }
     .lm-backstage-expand { display: none; }
     .lm-backstage-icon { width: 44px; height: 44px; }
     .lm-backstage-transcript { padding: 20px 16px 26px; }
@@ -1446,6 +1466,7 @@ body.lm-memory-center-open {
 @media (pointer: coarse) {
     #leftSendForm > #lm-backstage-trigger,
     .lm-backstage-icon,
+    .lm-backstage-clear,
     .lm-backstage-send,
     .lm-backstage-stop,
     .lm-backstage-continue { min-width: 44px; min-height: 44px; }

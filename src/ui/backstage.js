@@ -1,13 +1,15 @@
 import {
-    appendBackstageUserMessage,
     backstageInputTokenEstimate,
     backstageSessionForMessage,
     beginBackstageSession,
+    clearBackstageSession,
     continueBackstageToStory,
     getBackstageSnapshot,
     isBackstageDiscussionInFlight,
     requestBackstageNarratorReply,
     saveBackstageComposerDraft,
+    stopBackstageNarratorReply,
+    submitBackstageUserMessage,
     subscribeBackstage,
 } from '../backstage-runtime.js';
 import { getContext } from '../settings.js';
@@ -101,6 +103,16 @@ function renderTranscript(snapshot, { preserveScroll = false } = {}) {
     if (send) send.disabled = loading;
     const stop = root.querySelector('.lm-backstage-stop');
     if (stop) stop.hidden = !loading;
+    const clear = root.querySelector('.lm-backstage-clear');
+    if (clear) {
+        const hasClearableContent = Boolean(
+            messages.length
+            || working?.composerDraft
+            || working?.rejectedDraft,
+        );
+        clear.hidden = readOnly;
+        clear.disabled = !hasClearableContent;
+    }
     const continueButton = root.querySelector('.lm-backstage-continue');
     if (continueButton) {
         const hasNarratorReply = messages.some(message => message.role === 'narrator');
@@ -151,18 +163,32 @@ async function sendBackstageMessage() {
     if (!text || isBackstageDiscussionInFlight()) return;
     setError('');
     try {
-        await appendBackstageUserMessage(text);
+        const reply = submitBackstageUserMessage(text);
         if (textarea) {
             textarea.value = '';
-            await saveBackstageComposerDraft('');
         }
-        await requestBackstageNarratorReply();
+        clearTimeout(draftSaveTimer);
+        draftSaveTimer = null;
+        renderTranscript(getBackstageSnapshot());
+        await reply;
     } catch (error) {
         setError(`叙述者没有回应：${error?.message ?? error}。刚才的话仍然保留，可以再试一次。`);
     } finally {
         renderTranscript(getBackstageSnapshot());
         textarea?.focus();
     }
+}
+
+function clearCurrentBackstage() {
+    clearTimeout(draftSaveTimer);
+    draftSaveTimer = null;
+    setError('');
+    const root = dialog();
+    const textarea = root?.querySelector('#lm-backstage-input');
+    if (textarea) textarea.value = '';
+    clearBackstageSession();
+    renderTranscript(getBackstageSnapshot());
+    textarea?.focus();
 }
 
 async function retryBackstageReply() {
@@ -202,10 +228,12 @@ async function continueStory() {
     setError('');
     button.disabled = true;
     button.textContent = '正在回到剧情…';
-    await closeBackstageDialog({ restoreFocus: false });
+    const closePromise = closeBackstageDialog({ restoreFocus: false });
     try {
-        await continueBackstageToStory();
+        const generation = continueBackstageToStory();
+        await Promise.all([closePromise, generation]);
     } catch (error) {
+        await closePromise;
         globalThis.toastr?.error?.(`没有继续成功：${error?.message ?? error}`);
         archivedView = null;
         const snapshot = getBackstageSnapshot();
@@ -234,7 +262,7 @@ function showDialog() {
     });
 }
 
-export async function openBackstageDialog({ messageIndex = null, trigger = null } = {}) {
+export function openBackstageDialog({ messageIndex = null, trigger = null } = {}) {
     lastTrigger = trigger || document.activeElement;
     archivedView = null;
     if (Number.isInteger(messageIndex)) {
@@ -242,12 +270,12 @@ export async function openBackstageDialog({ messageIndex = null, trigger = null 
         const isLast = messageIndex === (getContext().chat?.length || 0) - 1;
         if (!linked) throw new Error('找不到这条消息关联的幕间讨论');
         if (linked.output && isLast) {
-            await beginBackstageSession({ messageIndex });
+            beginBackstageSession({ messageIndex });
         } else {
             archivedView = linked;
         }
     } else {
-        await beginBackstageSession();
+        beginBackstageSession();
     }
     showDialog();
 }
@@ -275,6 +303,7 @@ function makeDialog() {
                     <p class="lm-backstage-mode">剧情暂停在这里。直接说说你的想法。</p>
                 </div>
                 <div class="lm-backstage-window-actions">
+                    <button type="button" class="lm-backstage-clear" disabled>清空本次幕间</button>
                     <button type="button" class="lm-backstage-icon lm-backstage-expand fa-solid fa-expand" aria-label="展开幕间窗口" aria-pressed="false" title="展开窗口"></button>
                     <button type="button" class="lm-backstage-icon lm-backstage-close fa-solid fa-xmark" aria-label="关闭幕间窗口" title="关闭窗口"></button>
                 </div>
@@ -320,9 +349,10 @@ function makeDialog() {
     });
     root.querySelector('.lm-backstage-close')?.addEventListener('click', () => closeBackstageDialog());
     root.querySelector('.lm-backstage-expand')?.addEventListener('click', event => toggleExpanded(event.currentTarget));
+    root.querySelector('.lm-backstage-clear')?.addEventListener('click', clearCurrentBackstage);
     root.querySelector('.lm-backstage-send')?.addEventListener('click', sendBackstageMessage);
     root.querySelector('.lm-backstage-retry')?.addEventListener('click', retryBackstageReply);
-    root.querySelector('.lm-backstage-stop')?.addEventListener('click', () => getContext().stopGeneration?.());
+    root.querySelector('.lm-backstage-stop')?.addEventListener('click', stopBackstageNarratorReply);
     root.querySelector('.lm-backstage-continue')?.addEventListener('click', continueStory);
     const textarea = root.querySelector('#lm-backstage-input');
     textarea?.addEventListener('compositionstart', () => { isComposing = true; });

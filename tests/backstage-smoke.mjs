@@ -14,7 +14,7 @@ const chat = [
     { is_user: true, mes: '我推开宗门的山门。', send_date: 'u0', extra: { layered_memory_id: 'u0' } },
     { is_user: false, mes: '山道安静得有些反常。', send_date: 'a0', extra: { layered_memory_id: 'a0' } },
 ];
-let quietPrompt = '';
+let rawRequest = null;
 let generatedCount = 0;
 let failNextSwipe = false;
 let runtime;
@@ -29,8 +29,8 @@ const context = {
     name2: '玄微叙述者',
     eventSource: { emit: async () => {} },
     event_types: { MESSAGE_EDITED: 'message_edited' },
-    async generateQuietPrompt(options) {
-        quietPrompt = options.quietPrompt;
+    async generateRaw(options) {
+        rawRequest = structuredClone(options);
         return generatedCount === 0
             ? '可以。下一段我会让一群来历不明的人闯入，但先不给出幕后主使。'
             : '明白。闯入者会先用言语施压，不会一上来就替你决定是否动手。';
@@ -80,10 +80,14 @@ const { currentNarrativeSources, fallbackNarrativeSummary } = await import('../s
 await runtime.beginBackstageSession();
 await runtime.appendBackstageUserMessage('这段太平了。可以来点人闯入宗门找麻烦，但暂时别揭晓幕后主使吗？');
 await runtime.requestBackstageNarratorReply();
-assert.match(quietPrompt, /同一个叙述者/u);
-assert.match(quietPrompt, /来点人闯入宗门找麻烦/u);
-assert.match(quietPrompt, /只回复玩家能看到的自然对话。不要输出 JSON/u,
+assert.match(rawRequest.systemPrompt, /同一个叙述者/u);
+assert.match(rawRequest.systemPrompt, /最近完整正文/u);
+assert.match(JSON.stringify(rawRequest.prompt), /来点人闯入宗门找麻烦/u);
+assert.match(rawRequest.systemPrompt, /只回复玩家能看到的自然对话。不要输出 JSON/u,
     '幕间应要求自然对话而不是结构化选项');
+assert.equal(rawRequest.responseLength, 768, '幕间回复必须使用独立短输出上限');
+assert.deepEqual(rawRequest.prompt.map(message => message.role), ['user'],
+    '幕间消息必须以真实角色数组发送，而不是拼进完整正文预设');
 
 const fullText = '很长也不能截断：'.repeat(2_000);
 assert.match(formatBackstagePlayerInput({ messages: [{ role: 'user', text: fullText }] }), new RegExp(fullText.slice(-80)),
