@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>幕间界面验收</title>
+    <link rel="stylesheet" href="../style-v0.16.0.css?backstage-harness=2">
+    <style>
+        :root {
+            color-scheme: dark;
+            --SmartThemeBodyColor: #eee9e4;
+            --SmartThemeBlurTintColor: #17151c;
+            --SmartThemeBorderColor: #514c58;
+            --bottomFormBlockSize: 44px;
+        }
+        * { box-sizing: border-box; }
+        body {
+            min-height: 100dvh;
+            margin: 0;
+            color: var(--SmartThemeBodyColor);
+            background:
+                radial-gradient(circle at 18% 18%, #332b3b 0, transparent 34%),
+                linear-gradient(150deg, #17151c, #0e0d12 72%);
+            font-family: "Avenir Next", "PingFang SC", sans-serif;
+        }
+        #chat { width: min(820px, 90vw); margin: 8vh auto 0; opacity: .32; }
+        .mes { margin: 22px 0; padding: 18px 22px; background: #24212a; border: 1px solid #45404b; border-radius: 15px; }
+        #leftSendForm { position: fixed; right: 4vw; bottom: 28px; display: flex; padding: 7px; background: #24212a; border: 1px solid #4c4652; border-radius: 13px; }
+        .fa-masks-theater::before { content: "◐"; font-family: inherit; font-weight: 700; }
+        .fa-expand::before { content: "↗"; font-family: inherit; }
+        .fa-xmark::before { content: "×"; font-family: inherit; font-size: 1.25rem; }
+        .fa-arrow-up::before { content: "↑"; font-family: inherit; font-size: 1.15rem; }
+    </style>
+</head>
+<body>
+    <div id="chat" aria-hidden="true">
+        <article class="mes"><strong>你</strong><p>我推开宗门的山门，沿着石阶向上。</p></article>
+        <article class="mes"><strong>玄微</strong><p>山道安静得有些反常，只有檐角铜铃偶尔轻响。</p></article>
+    </div>
+    <form id="leftSendForm"><textarea id="send_textarea" aria-label="玩家输入"></textarea></form>
+    <script type="module">
+        const chat = [
+            { is_user: true, mes: '我推开宗门的山门，沿着石阶向上。', send_date: 'u0', extra: { layered_memory_id: 'u0' } },
+            { is_user: false, mes: '山道安静得有些反常，只有檐角铜铃偶尔轻响。', send_date: 'a0', extra: { layered_memory_id: 'a0' } },
+        ];
+        let replyIndex = 0;
+        const replies = [
+            '可以。现在这段确实缺少一个会迫使人物表态的外部压力。下一段我可以让几名来历不明的修士出现在山门外，但先不揭晓幕后主使。',
+            '这个边界很清楚：他们先用言语施压，留下你观察和选择的空间，不会替你决定是否动手。冲突会有张力，但行动权仍然在你。',
+        ];
+        const context = {
+            chat,
+            chatMetadata: {},
+            extensionSettings: { layered_memory: { enabled: true, bodyExtractionRegex: '' } },
+            saveMetadata: async () => {},
+            saveChat: async () => {},
+            saveSettingsDebounced: () => {},
+            name2: '玄微',
+            eventSource: { emit: async () => {} },
+            event_types: { MESSAGE_EDITED: 'message_edited' },
+            generateQuietPrompt: async () => replies[Math.min(replyIndex++, replies.length - 1)],
+            generate: async () => {},
+            stopGeneration: () => {},
+        };
+        globalThis.SillyTavern = { getContext: () => context };
+        globalThis.toastr = { error: console.error };
+
+        const runtime = await import('../src/backstage-runtime.js');
+        await runtime.beginBackstageSession();
+        await runtime.appendBackstageUserMessage('这段有点太平了。我想要一点戏剧性，比如有人闯入宗门找麻烦，但暂时不要揭晓幕后主使。');
+        await runtime.requestBackstageNarratorReply();
+        await runtime.appendBackstageUserMessage('可以，不过别直接替我决定开打。先让他们在门外施压，给我反应空间。');
+        await runtime.requestBackstageNarratorReply();
+
+        const ui = await import('../src/ui/backstage.js');
+        ui.injectBackstageUi();
+        await ui.openBackstageDialog({ trigger: document.querySelector('#lm-backstage-trigger') });
+    </script>
+</body>
+</html>

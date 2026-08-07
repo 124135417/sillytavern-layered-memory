@@ -231,12 +231,29 @@ function reconcileNarrativeArchives(data, liveMessages, maxFloor) {
     }
 }
 
+function reconcileBackstageSessions(data, parentData, liveMessageByKey) {
+    const source = clone(parentData.backstage || EMPTY_CHAT_DATA().backstage);
+    source.pendingGeneration = null;
+    source.sessions = (source.sessions || []).flatMap(session => {
+        if (!session.markerMessageKey || !liveMessageByKey.has(session.markerMessageKey)) return [];
+        const revisions = (session.revisions || []).filter(revision =>
+            (!revision.markerMessageKey || liveMessageByKey.has(revision.markerMessageKey))
+            && (!revision.targetMessageKey || liveMessageByKey.has(revision.targetMessageKey)));
+        if (!revisions.length && !session.working) return [];
+        return [{ ...session, revisions }];
+    });
+    const sessionIds = new Set(source.sessions.map(session => session.id));
+    if (!sessionIds.has(source.activeSessionId)) source.activeSessionId = null;
+    data.backstage = source;
+}
+
 function finishBranchData(data, parentData, livePairs, parentChat, method, trustedMaxPair) {
     const liveByKey = pairMap(livePairs);
     const maxPair = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
     const maxFloor = livePairs.filter(pair => pair.sealed && pair.pairIndex <= trustedMaxPair).at(-1)?.aiFloor ?? -1;
     const liveMessages = getMessageFloors({ includeTrailingUser: true });
     const liveMessageByKey = new Map(liveMessages.map(message => [message.messageKey, message]));
+    reconcileBackstageSessions(data, parentData, liveMessageByKey);
     const withinTrustedPrefix = item => Number(item.floor ?? item.pairIndex ?? item.anchorPairIndex) <= trustedMaxPair;
     data.turn_summaries = (parentData.turn_summaries || [])
         .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);

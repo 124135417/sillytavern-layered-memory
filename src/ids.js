@@ -5,6 +5,7 @@ import {
     saveChatData,
     saveChatMessages,
 } from './settings.js';
+import { isBackstageMarker } from './backstage.js';
 
 /**
  * Ensure every message has a stable layered_memory_id in extra.
@@ -175,7 +176,9 @@ export function getActiveMesText(mes) {
 
 export function getPairTexts(pair) {
     return {
-        userText: getActiveMesText(pair.user),
+        // The complete backstage transcript is a real provider input so native
+        // generation and swipes keep working, but it is not story evidence.
+        userText: isBackstageMarker(pair.user) ? '' : getActiveMesText(pair.user),
         aiText: getActiveMesText(pair.ai),
     };
 }

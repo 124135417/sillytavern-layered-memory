@@ -9,12 +9,16 @@ import { appendLog, assertChatData, getChatData, getSettings, saveChatData } fro
 import { normalizeStoryTime, storyTimeEvidencePosition } from './story-time.js';
 import { resolveStyleReset, stripStyleResetCommands } from './style-reset.js';
 import { evidenceSpansInSource } from './tokens.js';
+import { isBackstageMarker } from './backstage.js';
 
 const MAX_BATCH_MESSAGES = 25;
 const MAX_BATCH_CHARS = 45_000;
 const NARRATIVE_VALIDATOR_VERSION = 2;
 
 function narrativeText(source) {
+    if (isBackstageMarker(source.message)) {
+        return '';
+    }
     if (source.role === 'assistant') {
         return extractAiBody(source.text, getSettings().bodyExtractionRegex).text;
     }
@@ -31,6 +35,9 @@ function boundedText(value, limit = 320) {
 
 /** Guaranteed temporary coverage while the auxiliary summary job is pending. */
 export function fallbackNarrativeSummary(source) {
+    if (isBackstageMarker(source.message)) {
+        return '幕间交流控制楼：不属于剧情事件。';
+    }
     const text = boundedText(narrativeText(source));
     if (source.role === 'user') return `<user>：${text || '该楼没有可读取的正文。'}`;
     return `角色回复：${text || '该楼没有可读取的正文。'}`;
@@ -40,9 +47,11 @@ export function currentNarrativeSources(options = {}) {
     return getMessageFloors(options).map(source => ({
         ...source,
         narrativeText: narrativeText(source),
-        timeSourceText: stripHtmlComments(source.role === 'user'
-            ? stripStyleResetCommands(source.text).text
-            : source.text),
+        timeSourceText: isBackstageMarker(source.message)
+            ? ''
+            : stripHtmlComments(source.role === 'user'
+                ? stripStyleResetCommands(source.text).text
+                : source.text),
     }));
 }
 

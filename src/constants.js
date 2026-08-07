@@ -75,7 +75,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const EMPTY_CHAT_DATA = () => ({
-    version: 6,
+    version: 7,
     state_table: {
         version: 1,
         entries: [],
@@ -113,6 +113,13 @@ export const EMPTY_CHAT_DATA = () => ({
     fact_ledger: [],
     /** User choices over immutable discoveries; anchored for Fork-safe replay. */
     fact_decisions: [],
+    /** Non-canon player/narrator discussions and their swipe-safe revisions. */
+    backstage: {
+        version: 1,
+        activeSessionId: null,
+        pendingGeneration: null,
+        sessions: [],
+    },
     history_rebuild: null,
     rebuild_backup: null,
     pending_floors: [],

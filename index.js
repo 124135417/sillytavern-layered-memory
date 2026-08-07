@@ -27,6 +27,13 @@ import {
     handleNarrativeChapterJob,
     handleNarrativeSummaryJob,
 } from './src/narrative.js';
+import {
+    handleBackstageGenerationStarted,
+    handleBackstageGenerationStopped,
+    handleBackstageMessageReceived,
+    handleBackstageMessageSent,
+} from './src/backstage-runtime.js';
+import { injectBackstageUi } from './src/ui/backstage.js';
 
 const MODULE = 'layered-memory';
 
@@ -166,6 +173,7 @@ jQuery(async () => {
     registerPresetMemoryMacro();
     injectPanel();
     registerMessageMenu();
+    injectBackstageUi();
     const { eventSource, event_types } = ctx();
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
@@ -174,8 +182,11 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.MESSAGE_RECEIVED, async (mesId, type) => {
+        const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
+        ensureMessageIds();
+        await handleBackstageMessageReceived(normalizedId, type);
         if (type === 'swipe') {
-            queueHistoryMutation(typeof mesId === 'number' ? mesId : Number(mesId));
+            queueHistoryMutation(normalizedId);
             return;
         }
         const originMetadata = ctx().chatMetadata;
@@ -187,7 +198,10 @@ jQuery(async () => {
         updateInjection();
     });
 
-    eventSource.on(event_types.MESSAGE_SENT, async () => {
+    eventSource.on(event_types.MESSAGE_SENT, async (mesId) => {
+        const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
+        ensureMessageIds();
+        await handleBackstageMessageSent(normalizedId);
         const originMetadata = ctx().chatMetadata;
         await waitForBranchRecovery();
         if (ctx().chatMetadata !== originMetadata) return;
@@ -217,6 +231,7 @@ jQuery(async () => {
     }
     if (event_types.GENERATION_STARTED) {
         eventSource.on(event_types.GENERATION_STARTED, async (type, _params, isDryRun) => {
+            await handleBackstageGenerationStarted(type, isDryRun);
             setActiveGenerationType(type);
             const originMetadata = ctx().chatMetadata;
             const { excludeTrailingAssistant } = await waitForGenerationHistory(ctx().chat, type);
@@ -237,10 +252,16 @@ jQuery(async () => {
         updateInjection();
     };
     if (event_types.GENERATION_ENDED) {
-        eventSource.on(event_types.GENERATION_ENDED, clearGenerationState);
+        eventSource.on(event_types.GENERATION_ENDED, async () => {
+            clearGenerationState();
+            await handleBackstageGenerationStopped({ includeDiscussion: false });
+        });
     }
     if (event_types.GENERATION_STOPPED) {
-        eventSource.on(event_types.GENERATION_STOPPED, clearGenerationState);
+        eventSource.on(event_types.GENERATION_STOPPED, async () => {
+            clearGenerationState();
+            await handleBackstageGenerationStopped();
+        });
     }
     if (event_types.GENERATE_AFTER_DATA) {
         eventSource.on(event_types.GENERATE_AFTER_DATA, (_data, isDryRun) => {
@@ -258,7 +279,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.15.3`);
+    console.log(`[${MODULE}] 已加载 v0.16.0`);
 });
 
 export async function onActivate() {
