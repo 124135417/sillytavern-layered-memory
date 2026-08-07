@@ -34,7 +34,11 @@ import {
     handleBackstageMessageReceived,
     handleBackstageMessageSent,
 } from './src/backstage-runtime.js';
-import { injectBackstageUi } from './src/ui/backstage.js';
+import {
+    injectBackstageUi,
+    refreshBackstageMarkers,
+    refreshBackstageTriggerState,
+} from './src/ui/backstage.js';
 
 const MODULE = 'layered-memory';
 
@@ -73,6 +77,8 @@ async function onChatChanged() {
     if (ctx().chatMetadata !== originMetadata) return;
     updateInjection();
     renderActiveTab();
+    refreshBackstageMarkers();
+    refreshBackstageTriggerState();
 }
 
 async function onMessageEvents(mesId, { excludeTrailingAssistant = false } = {}, originMetadata = ctx().chatMetadata) {
@@ -188,6 +194,7 @@ jQuery(async () => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
         await handleBackstageMessageReceived(normalizedId, type);
+        refreshBackstageTriggerState();
         if (type === 'swipe') {
             queueHistoryMutation(normalizedId);
             return;
@@ -204,7 +211,9 @@ jQuery(async () => {
     eventSource.on(event_types.MESSAGE_SENT, async (mesId) => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
-        await handleBackstageMessageSent(normalizedId);
+        const createdBackstageMarker = await handleBackstageMessageSent(normalizedId);
+        if (createdBackstageMarker) refreshBackstageMarkers(normalizedId);
+        refreshBackstageTriggerState();
         const originMetadata = ctx().chatMetadata;
         await waitForBranchRecovery();
         if (ctx().chatMetadata !== originMetadata) return;
@@ -218,6 +227,8 @@ jQuery(async () => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         const chat = ctx().chat || [];
         const pendingNewSwipe = normalizedId === chat.length - 1 && isPendingSwipeMessage(chat[normalizedId]);
+        refreshBackstageMarkers(normalizedId);
+        refreshBackstageTriggerState();
         queueHistoryMutation(normalizedId, { excludeTrailingAssistant: pendingNewSwipe });
     };
 
@@ -229,12 +240,14 @@ jQuery(async () => {
     }
     if (event_types.MESSAGE_DELETED) {
         eventSource.on(event_types.MESSAGE_DELETED, (mesId) => {
+            refreshBackstageTriggerState();
             queueHistoryMutation(typeof mesId === 'number' ? mesId : Number(mesId));
         });
     }
     if (event_types.GENERATION_STARTED) {
         eventSource.on(event_types.GENERATION_STARTED, async (type, _params, isDryRun) => {
             await handleBackstageGenerationStarted(type, isDryRun);
+            refreshBackstageTriggerState();
             setActiveGenerationType(type);
             const originMetadata = ctx().chatMetadata;
             const { excludeTrailingAssistant } = await waitForGenerationHistory(ctx().chat, type);
@@ -253,6 +266,7 @@ jQuery(async () => {
     const clearGenerationState = () => {
         clearActiveGenerationType();
         updateInjection();
+        refreshBackstageTriggerState();
     };
     if (event_types.GENERATION_ENDED) {
         eventSource.on(event_types.GENERATION_ENDED, async () => {
@@ -282,7 +296,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.16.3`);
+    console.log(`[${MODULE}] 已加载 v0.16.4`);
 });
 
 export async function onActivate() {

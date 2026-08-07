@@ -12,6 +12,7 @@ import {
     submitBackstageUserMessage,
     subscribeBackstage,
 } from '../backstage-runtime.js';
+import { isBackstageMarker } from '../backstage.js';
 import { getContext } from '../settings.js';
 
 const TRIGGER_ID = 'lm-backstage-trigger';
@@ -20,7 +21,7 @@ let lastTrigger = null;
 let archivedView = null;
 let isComposing = false;
 let draftSaveTimer = null;
-let decorationFrame = null;
+let triggerRetryTimer = null;
 let uiInjected = false;
 let dialogReady = false;
 let hydrationGeneration = 0;
@@ -540,49 +541,46 @@ function injectTrigger() {
     return true;
 }
 
-function decorateBackstageMessages() {
-    decorationFrame = null;
+function scheduleTriggerInjection(attempt = 0) {
+    clearTimeout(triggerRetryTimer);
+    triggerRetryTimer = null;
+    if (injectTrigger() || attempt >= 30) return;
+    triggerRetryTimer = setTimeout(() => scheduleTriggerInjection(attempt + 1), 100);
+}
+
+function setMarkerAccessibility(element, marker) {
+    const markerText = element?.querySelector('.mes_text');
+    element?.querySelector('.lm-backstage-reopen')?.remove();
+    element?.classList.toggle('lm-backstage-marker-message', marker);
+    if (!markerText) return;
+    if (marker) {
+        markerText.setAttribute('role', 'button');
+        markerText.setAttribute('tabindex', '0');
+        markerText.setAttribute('aria-label', '查看这次幕间讨论');
+    } else {
+        markerText.removeAttribute('role');
+        markerText.removeAttribute('tabindex');
+        markerText.removeAttribute('aria-label');
+    }
+}
+
+/**
+ * Restore marker affordances once after a chat render, or update one message
+ * after an explicit SillyTavern event. DOM changes never drive this function.
+ */
+export function refreshBackstageMarkers(messageIndex = null) {
     const context = getContext();
-    document.querySelectorAll('#chat .mes[mesid]').forEach(element => {
+    const elements = Number.isInteger(messageIndex)
+        ? [document.querySelector(`#chat .mes[mesid="${messageIndex}"]`)].filter(Boolean)
+        : Array.from(document.querySelectorAll('#chat .mes[mesid]'));
+    elements.forEach(element => {
         const index = Number(element.getAttribute('mesid'));
-        const linked = backstageSessionForMessage(index);
-        const markerText = element.querySelector('.mes_text');
-        const existingAction = element.querySelector('.lm-backstage-reopen');
-        if (!linked) {
-            existingAction?.remove();
-            if (element.classList.contains('lm-backstage-marker-message')) {
-                element.classList.remove('lm-backstage-marker-message');
-                markerText?.removeAttribute('role');
-                markerText?.removeAttribute('tabindex');
-                markerText?.removeAttribute('aria-label');
-            }
-            return;
-        }
-        if (!linked.output) {
-            existingAction?.remove();
-            element.classList.add('lm-backstage-marker-message');
-            if (markerText) {
-                markerText.setAttribute('role', 'button');
-                markerText.setAttribute('tabindex', '0');
-                markerText.setAttribute('aria-label', '查看这次幕间讨论');
-            }
-            return;
-        }
-        const actions = element.querySelector('.extraMesButtons') || element.querySelector('.mes_buttons');
-        if (!actions) return;
-        const action = existingAction || document.createElement('div');
-        if (!existingAction) action.className = 'mes_button lm-backstage-reopen fa-solid fa-masks-theater';
-        action.setAttribute('role', 'button');
-        action.setAttribute('tabindex', '0');
-        action.setAttribute('title', index === context.chat.length - 1 ? '回到幕间' : '查看幕间讨论');
-        action.setAttribute('aria-label', index === context.chat.length - 1 ? '回到幕间修改这一版' : '查看这版使用的幕间讨论');
-        if (!existingAction) actions.prepend(action);
+        setMarkerAccessibility(element, isBackstageMarker(context.chat?.[index]));
     });
 }
 
-function scheduleDecorate() {
-    if (decorationFrame != null) return;
-    decorationFrame = requestAnimationFrame(decorateBackstageMessages);
+export function refreshBackstageTriggerState() {
+    updateTriggerState();
 }
 
 function messageIndexFromTarget(target) {
@@ -601,46 +599,23 @@ function activateLinkedMessage(target) {
 
 export function injectBackstageUi() {
     if (uiInjected) {
-        injectTrigger();
+        scheduleTriggerInjection();
         updateTriggerState();
-        scheduleDecorate();
         return;
     }
     uiInjected = true;
     if (!document.getElementById(DIALOG_ID)) makeDialog();
-    if (!injectTrigger()) {
-        const triggerObserver = new MutationObserver(() => {
-            if (injectTrigger()) triggerObserver.disconnect();
-        });
-        triggerObserver.observe(document.body, { childList: true, subtree: true });
-        setTimeout(() => triggerObserver.disconnect(), 15_000);
-    }
-    const observer = new MutationObserver(records => {
-        const onlyBackstageChanges = records.length > 0 && records.every(record => {
-            const element = record.target?.nodeType === 1 ? record.target : record.target?.parentElement;
-            return Boolean(element?.closest?.(`#${DIALOG_ID}`));
-        });
-        if (onlyBackstageChanges) return;
-        updateTriggerState();
-        scheduleDecorate();
-    });
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['data-generating'],
-    });
+    scheduleTriggerInjection();
     document.body.addEventListener('click', event => {
-        const action = event.target.closest?.('.lm-backstage-reopen');
         const marker = event.target.closest?.('.lm-backstage-marker-message .mes_text');
-        if (!action && !marker) return;
+        if (!marker) return;
         event.preventDefault();
         event.stopPropagation();
-        activateLinkedMessage(action || marker);
+        activateLinkedMessage(marker);
     });
     document.body.addEventListener('keydown', event => {
         if (!['Enter', ' '].includes(event.key)) return;
-        const target = event.target.closest?.('.lm-backstage-reopen, .lm-backstage-marker-message .mes_text');
+        const target = event.target.closest?.('.lm-backstage-marker-message .mes_text');
         if (!target) return;
         event.preventDefault();
         activateLinkedMessage(target);
@@ -648,9 +623,7 @@ export function injectBackstageUi() {
     subscribeBackstage(snapshot => {
         updateTriggerState();
         if (dialog()?.open && dialogReady && !archivedView) renderTranscript(snapshot, { preserveScroll: true });
-        scheduleDecorate();
     });
-    scheduleDecorate();
 }
 
 export { closeBackstageDialog };

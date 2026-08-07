@@ -17,7 +17,6 @@ assert.match(ui, /好了，重写这段/u);
 assert.match(ui, /重新询问/u, '失败后应提供显式重试而不是要求重新输入');
 assert.match(ui, /清空本次幕间/u, '当前工作副本必须提供可发现的清空操作');
 assert.match(ui, /clearBackstageSession\(\)/u);
-assert.match(ui, /回到幕间/u);
 assert.match(ui, /syncTranscriptList/u, '新增回复应增量加入，避免整段历史反复动画和播报');
 assert.match(ui, /aria-relevant="additions"/u);
 assert.doesNotMatch(ui, /data-option|剧情选项|选择一个/u, '幕间不应退化为选项卡交互');
@@ -39,8 +38,16 @@ assert.match(ui, /dialogReady = true;[\s\S]*renderTranscript\(getBackstageSnapsh
     '输入就绪状态必须先于正文渲染后的 token 调度');
 assert.match(ui, /function scheduleTokenEstimate[\s\S]*requestAnimationFrame[\s\S]*setTimeout/u,
     'token 估算必须延后到内容和输入就绪之后');
-assert.match(ui, /onlyBackstageChanges[\s\S]*closest\?\.\(`#\$\{DIALOG_ID\}`\)[\s\S]*if \(onlyBackstageChanges\) return/u,
-    '幕间内部渲染不得触发全局聊天装饰和数据读取');
+assert.doesNotMatch(ui, /MutationObserver/u,
+    '幕间不得通过 DOM 观察器监听整个页面');
+assert.doesNotMatch(ui, /function decorateBackstageMessages|scheduleDecorate|action\.className[^;]*lm-backstage-reopen|actions\.prepend/u,
+    '幕间不得在 DOM 变化后扫描聊天或给 AI 正文追加回看图标');
+assert.match(ui, /querySelector\('\.lm-backstage-reopen'\)\?\.remove/u,
+    '升级后应在显式刷新时清理旧版本遗留的回看图标');
+assert.match(ui, /export function refreshBackstageMarkers[\s\S]*Number\.isInteger\(messageIndex\)/u,
+    '控制楼标记只允许在聊天载入或明确消息事件后更新');
+assert.match(ui, /scheduleTriggerInjection[\s\S]*attempt >= 30/u,
+    '按钮宿主缺失时只能进行有上限的短暂重试');
 assert.match(ui, /messageFormatting\(value,[\s\S]*false, false, -1, \{\}, false\)/u,
     '叙述者 Markdown 应复用 SillyTavern 默认净化渲染链');
 assert.match(ui, /renderBackstageMessageBody[\s\S]*message\?\.role === 'narrator'[\s\S]*escapeHtml/u,
@@ -73,10 +80,12 @@ assert.match(css, /\.lm-backstage-compose\[hidden\] \{ display: none; \}/u,
 const parsed = JSON.parse(manifest);
 assert.equal(parsed.js, 'index.js');
 assert.equal(parsed.css, 'style-v0.16.2.css');
-assert.equal(parsed.version, '0.16.3');
+assert.equal(parsed.version, '0.16.4');
 assert.match(index, /injectBackstageUi\(\)/u);
 assert.match(index, /MESSAGE_SENT[\s\S]*handleBackstageMessageSent/u);
 assert.match(index, /MESSAGE_RECEIVED[\s\S]*handleBackstageMessageReceived/u);
+assert.match(index, /async function onChatChanged[\s\S]*refreshBackstageMarkers/u,
+    '聊天切换后应通过显式事件恢复控制楼标记');
 
 let formatterCall = null;
 const formatterContext = {
