@@ -366,9 +366,8 @@ async function hydrateDialog({ messageIndex }, generation) {
         archivedView = null;
         if (Number.isInteger(messageIndex)) {
             const linked = backstageSessionForMessage(messageIndex);
-            const isLast = messageIndex === (getContext().chat?.length || 0) - 1;
             if (!linked) throw new Error('找不到这条消息关联的幕间讨论');
-            if (linked.output && isLast) beginBackstageSession({ messageIndex });
+            if (linked.editable) beginBackstageSession({ messageIndex });
             else archivedView = linked;
         } else {
             beginBackstageSession();

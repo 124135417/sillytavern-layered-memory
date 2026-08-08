@@ -164,15 +164,24 @@ export function beginBackstageSession({ messageIndex = null } = {}) {
     if (Number.isInteger(messageIndex)) {
         const source = chat[messageIndex];
         const output = backstageOutputMeta(source);
-        if (!output) throw new Error('这条回复没有关联的幕间讨论');
-        const session = getBackstageSession(data, output.sessionId);
-        const revision = getBackstageRevision(session, output.revisionId);
+        const marker = backstageMarkerMeta(source);
+        const meta = output || marker;
+        if (!meta) throw new Error('这条消息没有关联的幕间讨论');
+        const session = getBackstageSession(data, meta.sessionId);
+        const revision = getBackstageRevision(session, meta.revisionId);
         if (!session || !revision) throw new Error('这次幕间讨论已经无法读取');
-        if (messageIndex !== chat.length - 1) throw new Error('剧情已经继续，只能查看这次幕间讨论');
+        const targetIndex = output ? messageIndex : findMessageIndexByKey(revision.targetMessageKey);
+        const target = chat[targetIndex];
+        const targetMeta = backstageOutputMeta(target);
+        const targetIsCurrentRevision = targetMeta?.sessionId === session.id
+            && targetMeta?.revisionId === revision.id;
+        if (targetIndex !== chat.length - 1 || target?.is_user || !targetIsCurrentRevision) {
+            throw new Error('剧情已经继续，只能查看这次幕间讨论');
+        }
         setBackstageWorkingCopy(data, session.id, {
             baseRevisionId: revision.id,
             messages: revision.messages,
-            rejectedDraft: getActiveMesText(source),
+            rejectedDraft: getActiveMesText(target),
         });
         state.activeSessionId = session.id;
         notify();
@@ -525,14 +534,23 @@ export function handleBackstageGenerationStopped({ includeDiscussion = true } = 
 
 export function backstageSessionForMessage(messageIndex) {
     const data = getChatData();
-    const message = getContext().chat?.[messageIndex];
+    const chat = getContext().chat || [];
+    const message = chat[messageIndex];
     const marker = backstageMarkerMeta(message);
     const output = backstageOutputMeta(message);
     const meta = output || marker;
     if (!meta) return null;
     const session = getBackstageSession(data, meta.sessionId);
     const revision = getBackstageRevision(session, meta.revisionId);
-    return session && revision ? { session: clone(session), revision: clone(revision), output: Boolean(output) } : null;
+    if (!session || !revision) return null;
+    const targetIndex = output ? messageIndex : findMessageIndexByKey(revision.targetMessageKey);
+    const target = chat[targetIndex];
+    const targetMeta = backstageOutputMeta(target);
+    const editable = targetIndex === chat.length - 1
+        && !target?.is_user
+        && targetMeta?.sessionId === session.id
+        && targetMeta?.revisionId === revision.id;
+    return { session: clone(session), revision: clone(revision), output: Boolean(output), editable };
 }
 
 export function isBackstageDiscussionInFlight() {

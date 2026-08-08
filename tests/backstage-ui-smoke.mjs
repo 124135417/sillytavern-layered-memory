@@ -46,6 +46,8 @@ assert.match(ui, /querySelector\('\.lm-backstage-reopen'\)\?\.remove/u,
     '升级后应在显式刷新时清理旧版本遗留的回看图标');
 assert.match(ui, /export function refreshBackstageMarkers[\s\S]*Number\.isInteger\(messageIndex\)/u,
     '控制楼标记只允许在聊天载入或明确消息事件后更新');
+assert.match(ui, /linked\.editable[\s\S]*beginBackstageSession\(\{ messageIndex \}\)/u,
+    '点击当前最后一段正文前的控制楼必须重新进入可编辑幕间');
 assert.match(ui, /scheduleTriggerInjection[\s\S]*attempt >= 30/u,
     '按钮宿主缺失时只能进行有上限的短暂重试');
 assert.match(ui, /messageFormatting\(value,[\s\S]*false, false, -1, \{\}, false\)/u,
@@ -80,7 +82,7 @@ assert.match(css, /\.lm-backstage-compose\[hidden\] \{ display: none; \}/u,
 const parsed = JSON.parse(manifest);
 assert.equal(parsed.js, 'index.js');
 assert.equal(parsed.css, 'style-v0.16.2.css');
-assert.equal(parsed.version, '0.16.5');
+assert.equal(parsed.version, '0.16.6');
 assert.match(index, /injectBackstageUi\(\)/u);
 assert.match(index, /MESSAGE_SENT[\s\S]*handleBackstageMessageSent/u);
 assert.match(index, /MESSAGE_RECEIVED[\s\S]*handleBackstageMessageReceived/u);

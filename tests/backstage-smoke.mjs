@@ -127,9 +127,12 @@ assert.doesNotMatch(recentRawAfterBackstage, /来点人闯入宗门找麻烦/u,
     '幕间全文只能影响紧随其后的一轮，不能长期重复注入');
 
 const firstMeta = structuredClone(firstOutput.extra[BACKSTAGE_OUTPUT_EXTRA]);
-await runtime.beginBackstageSession({ messageIndex: 3 });
+assert.equal(runtime.backstageSessionForMessage(2).editable, true,
+    '当前最后一段正文之前的幕间控制楼必须提供可编辑入口');
+await runtime.beginBackstageSession({ messageIndex: 2 });
 let snapshot = runtime.getBackstageSnapshot();
-assert.equal(snapshot.session.working.rejectedDraft, firstOutput.mes);
+assert.equal(snapshot.session.working.rejectedDraft, firstOutput.mes,
+    '从控制楼回到幕间时必须把当前正文作为待重写草稿');
 assert.equal(snapshot.session.working.messages.length, 2, '回到幕间必须带回原讨论全文');
 await runtime.appendBackstageUserMessage('还是太突然了。让他们先在门外施压，不要直接替我决定开打。');
 await runtime.requestBackstageNarratorReply();
@@ -163,5 +166,11 @@ snapshot = runtime.getBackstageSnapshot();
 assert.ok(snapshot.pendingGeneration?.nativeSwipe, '原生继续右滑应继承当前候选的幕间版本');
 await runtime.handleBackstageGenerationStopped({ includeDiscussion: false });
 assert.equal(runtime.getBackstageSnapshot().pendingGeneration, null);
+
+chat.push({ is_user: true, mes: '剧情已经继续。', send_date: 'u2', extra: { layered_memory_id: 'u2' } });
+assert.equal(runtime.backstageSessionForMessage(2).editable, false,
+    '控制楼关联的正文不再是最后一条后必须退回只读模式');
+assert.throws(() => runtime.beginBackstageSession({ messageIndex: 2 }), /剧情已经继续/u,
+    '旧控制楼不得重写已经继续之后的历史');
 
 console.log('backstage smoke: narrator chat, full-input send, non-canon isolation, rewrite swipe, and native swipe passed');
