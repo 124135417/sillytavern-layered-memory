@@ -1,4 +1,4 @@
-import { getContext, getSettings, appendLog } from './settings.js';
+import { getContext, getSettings, appendLog, saveSettings } from './settings.js';
 
 const CONNECTION_TEST_TIMEOUT_MS = 15_000;
 const CONNECTION_TEST_SYSTEM_PROMPT = 'You are a connection health check. Follow the user instruction exactly.';
@@ -11,7 +11,7 @@ const CONNECTION_TEST_USER_PROMPT = 'Reply with exactly OK.';
  * { ok, route, elapsedMs, category, message }
  *
  * route: connection_profile | current_connection | fallback | unavailable
- * category: success | unavailable | auth | rate_limit | timeout | network |
+ * category: success | unavailable | auth | balance | rate_limit | timeout | network |
  *           not_found | bad_request | server_error | empty_response | request_failed
  */
 export async function testAuxModelConnection({ timeoutMs = CONNECTION_TEST_TIMEOUT_MS, settings: settingsOverride = null } = {}) {
@@ -73,7 +73,7 @@ export async function callAuxModel({ purpose, systemPrompt, userPrompt, jsonSche
     try {
         if (source === 'direct') {
             assertDirectSettings(settings);
-            const text = await directFetch({
+            const result = await directFetch({
                 baseUrl: settings.directBaseUrl,
                 apiKey: settings.directApiKey,
                 model: settings.directModel,
@@ -82,8 +82,14 @@ export async function callAuxModel({ purpose, systemPrompt, userPrompt, jsonSche
                 temperature,
                 jsonSchema,
             });
-            if (!hasUsableTestResponse(text)) throw createConnectionTestError('empty_response');
-            return { text, via: 'direct_api', model: settings.directModel };
+            if (!hasUsableTestResponse(result.text)) throw createConnectionTestError('empty_response');
+            const usage = recordDirectUsage({
+                purpose,
+                baseUrl: settings.directBaseUrl,
+                model: settings.directModel,
+                usage: result.usage,
+            });
+            return { text: result.text, via: 'direct_api', model: settings.directModel, usage };
         }
         if (source === 'profile') {
             const text = await callConnectionProfile({
@@ -169,6 +175,7 @@ async function directFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, t
     if (jsonSchema) {
         body.response_format = directResponseFormat(baseUrl, jsonSchema);
     }
+    applyDirectProviderOptions(baseUrl, body);
     const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -184,7 +191,18 @@ async function directFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, t
         throw error;
     }
     const data = await res.json();
-    return data.choices?.[0]?.message?.content ?? '';
+    return {
+        text: data.choices?.[0]?.message?.content ?? '',
+        usage: data.usage ?? null,
+    };
+}
+
+function applyDirectProviderOptions(baseUrl, body) {
+    if (isOfficialDeepSeekUrl(baseUrl)) {
+        // V4 enables thinking by default. Memory extraction needs deterministic
+        // JSON, not a separately billed reasoning trace.
+        body.thinking = { type: 'disabled' };
+    }
 }
 
 function directResponseFormat(baseUrl, jsonSchema) {
@@ -207,6 +225,75 @@ function isOfficialDeepSeekUrl(baseUrl) {
     }
 }
 
+function usageNumber(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function normalizeDirectUsage(rawUsage) {
+    if (!rawUsage || typeof rawUsage !== 'object') return null;
+    const knownFields = [
+        'prompt_tokens',
+        'completion_tokens',
+        'total_tokens',
+        'prompt_cache_hit_tokens',
+        'prompt_cache_miss_tokens',
+        'completion_tokens_details',
+    ];
+    if (!knownFields.some(key => Object.hasOwn(rawUsage, key))) return null;
+    const promptTokens = usageNumber(rawUsage.prompt_tokens);
+    const completionTokens = usageNumber(rawUsage.completion_tokens);
+    return {
+        promptTokens,
+        completionTokens,
+        totalTokens: usageNumber(rawUsage.total_tokens) || promptTokens + completionTokens,
+        promptCacheHitTokens: usageNumber(rawUsage.prompt_cache_hit_tokens),
+        promptCacheMissTokens: usageNumber(rawUsage.prompt_cache_miss_tokens),
+        reasoningTokens: usageNumber(rawUsage.completion_tokens_details?.reasoning_tokens),
+    };
+}
+
+function deepSeekFlashCost(usage) {
+    const cacheBreakdown = usage.promptCacheHitTokens + usage.promptCacheMissTokens;
+    const cacheMissTokens = cacheBreakdown > 0
+        ? usage.promptCacheMissTokens
+        : usage.promptTokens;
+    const cost = (
+        usage.promptCacheHitTokens * 0.02
+        + cacheMissTokens * 1
+        + usage.completionTokens * 2
+    ) / 1_000_000;
+    return Math.round(cost * 100_000_000) / 100_000_000;
+}
+
+function recordDirectUsage({ purpose, baseUrl, model, usage: rawUsage }) {
+    const usage = normalizeDirectUsage(rawUsage);
+    if (!usage) return null;
+    const officialDeepSeekFlash = isOfficialDeepSeekUrl(baseUrl)
+        && String(model).trim().toLowerCase() === 'deepseek-v4-flash';
+    const entry = {
+        at: Date.now(),
+        purpose: String(purpose || 'memory_task').slice(0, 80),
+        route: 'direct_api',
+        model: String(model || '').slice(0, 120),
+        ...usage,
+        ...(officialDeepSeekFlash ? {
+            estimatedCostCny: deepSeekFlashCost(usage),
+            pricingVersion: 'deepseek-2026-08-09',
+        } : {}),
+    };
+    try {
+        const settings = getSettings();
+        settings.usageHistory = [...settings.usageHistory, entry].slice(-500);
+        saveSettings();
+    } catch (error) {
+        // Telemetry must never turn a successful model response into a failed
+        // memory task. The normalized usage is still returned to the caller.
+        console.warn('[layered-memory] 记忆模型用量保存失败', error);
+    }
+    return entry;
+}
+
 function normalizeOpenAiJsonSchema(jsonSchema) {
     const schema = jsonSchema?.schema || jsonSchema?.value || jsonSchema;
     return {
@@ -223,6 +310,15 @@ async function directTestFetch({ baseUrl, apiKey, model, timeoutMs }) {
     const timeoutId = controller
         ? setTimeout(() => controller.abort(), timeoutMs)
         : null;
+    const body = {
+        model,
+        temperature: 0,
+        messages: [
+            { role: 'system', content: CONNECTION_TEST_SYSTEM_PROMPT },
+            { role: 'user', content: CONNECTION_TEST_USER_PROMPT },
+        ],
+    };
+    applyDirectProviderOptions(baseUrl, body);
     try {
         const res = await fetch(url, {
             method: 'POST',
@@ -230,14 +326,7 @@ async function directTestFetch({ baseUrl, apiKey, model, timeoutMs }) {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${apiKey}`,
             },
-            body: JSON.stringify({
-                model,
-                temperature: 0,
-                messages: [
-                    { role: 'system', content: CONNECTION_TEST_SYSTEM_PROMPT },
-                    { role: 'user', content: CONNECTION_TEST_USER_PROMPT },
-                ],
-            }),
+            body: JSON.stringify(body),
             ...(controller ? { signal: controller.signal } : {}),
         });
         if (!res.ok) {
@@ -312,6 +401,9 @@ function classifyConnectionTestError(error) {
     }
     if (code === 'timeout' || name === 'aborterror' || /timeout|timed out/.test(diagnostic)) {
         return { category: 'timeout', message: '模型等待太久仍未回复。请检查网络和服务状态，然后再试一次。' };
+    }
+    if (status === 402) {
+        return { category: 'balance', message: '记忆模型账户余额不足。请充值后再继续后台整理。' };
     }
     if (status === 401 || status === 403 || /unauthorized|forbidden|invalid api.?key|authentication/.test(diagnostic)) {
         return { category: 'auth', message: '服务商拒绝了连接。请检查访问密钥和账户权限。' };

@@ -72,6 +72,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     /** 仅在此模式下，手动改表才自动写入错例库 */
     migrationReviewMode: false,
     eval_cases: [],
+    /** Bounded, prompt-free usage ledger for successful direct memory-model calls. */
+    usageHistory: [],
 });
 
 export const EMPTY_CHAT_DATA = () => ({
@@ -127,6 +129,7 @@ export const EMPTY_CHAT_DATA = () => ({
     job_queue: {
         scope_id: null,
         paused: false,
+        pause_reason: null,
         queued: [],
         running: [],
         failed: [],

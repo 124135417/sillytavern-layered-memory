@@ -53,23 +53,54 @@ export function workflowPresentation({ status = 'idle', completed = 0, total = 0
     };
 }
 
-export function taskRailPresentation({ paused = false, queued = [], running = null, failed = [] } = {}) {
+export function taskRailPresentation({ paused = false, pauseReason = null, queued = [], running = null, failed = [] } = {}) {
     const queuedCount = Array.isArray(queued) ? queued.length : Number(queued) || 0;
     const runningCount = Array.isArray(running) ? running.length : Number(Boolean(running));
     const failedCount = Array.isArray(failed) ? failed.length : Number(failed) || 0;
     const working = runningCount > 0 || queuedCount > 0;
-    const state = failedCount > 0 ? 'error' : paused ? 'paused' : working ? 'working' : 'idle';
+    const pauseMessage = String(pauseReason?.message || '').trim();
+    const state = pauseMessage ? 'paused' : failedCount > 0 ? 'error' : paused ? 'paused' : working ? 'working' : 'idle';
     const total = queuedCount + runningCount + failedCount;
     const counts = [
         runningCount ? `${runningCount} 项处理中` : '',
         queuedCount ? `${queuedCount} 项等待` : '',
         failedCount ? `${failedCount} 项需要处理` : '',
     ].filter(Boolean).join('，');
-    const summary = failedCount > 0 ? `共 ${total} 项：${counts}`
+    const summary = pauseMessage || (failedCount > 0 ? `共 ${total} 项：${counts}`
         : paused ? `已暂停领取新任务${counts ? ` · ${counts}` : ''}`
             : working ? `共 ${total} 项：${counts}`
-                : '后台整理已完成';
+                : '后台整理已完成');
     return { state, summary, expandedByDefault: state !== 'idle' };
+}
+
+export function usageSummaryPresentation(history = []) {
+    const entries = Array.isArray(history) ? history.filter(entry => entry && typeof entry === 'object') : [];
+    const number = value => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    };
+    const summary = entries.reduce((result, entry) => {
+        result.totalTokens += number(entry.totalTokens);
+        result.promptCacheHitTokens += number(entry.promptCacheHitTokens);
+        result.promptCacheMissTokens += number(entry.promptCacheMissTokens);
+        result.reasoningTokens += number(entry.reasoningTokens);
+        if (Number.isFinite(Number(entry.estimatedCostCny))) {
+            result.estimatedCostCny += Math.max(0, Number(entry.estimatedCostCny));
+            result.pricedRequests += 1;
+        }
+        return result;
+    }, {
+        requests: entries.length,
+        totalTokens: 0,
+        promptCacheHitTokens: 0,
+        promptCacheMissTokens: 0,
+        reasoningTokens: 0,
+        estimatedCostCny: 0,
+        pricedRequests: 0,
+    });
+    const cacheTokens = summary.promptCacheHitTokens + summary.promptCacheMissTokens;
+    summary.cacheHitRate = cacheTokens > 0 ? summary.promptCacheHitTokens / cacheTokens : null;
+    return summary;
 }
 
 export function injectionPresentation(isActual) {

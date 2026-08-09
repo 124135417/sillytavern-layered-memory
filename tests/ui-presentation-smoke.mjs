@@ -6,6 +6,7 @@ import {
     injectionPresentation,
     presetAnchorPresentation,
     taskRailPresentation,
+    usageSummaryPresentation,
     workflowPresentation,
 } from '../src/ui/presentation.js';
 
@@ -52,6 +53,30 @@ assert.equal(taskRailPresentation({ running: [{ id: 'x' }, { id: 'y' }], failed:
     '共 3 项：2 项处理中，1 项需要处理');
 assert.equal(taskRailPresentation({ paused: true }).state, 'paused');
 assert.equal(taskRailPresentation({ failed: [{ id: 'x' }] }).state, 'error');
+const balancePause = taskRailPresentation({
+    paused: true,
+    pauseReason: { category: 'balance', message: '记忆模型余额不足，后台整理已暂停。' },
+    failed: [{ id: 'old-failure' }],
+});
+assert.equal(balancePause.state, 'paused');
+assert.match(balancePause.summary, /余额不足/u);
+
+const usage = usageSummaryPresentation([
+    {
+        totalTokens: 3_500,
+        promptCacheHitTokens: 1_000,
+        promptCacheMissTokens: 2_000,
+        reasoningTokens: 300,
+        estimatedCostCny: 0.00302,
+    },
+    { totalTokens: 500, promptCacheHitTokens: 500, promptCacheMissTokens: 0 },
+]);
+assert.equal(usage.requests, 2);
+assert.equal(usage.totalTokens, 4_000);
+assert.equal(usage.cacheHitRate, 3 / 7);
+assert.equal(usage.reasoningTokens, 300);
+assert.equal(usage.pricedRequests, 1);
+assert.equal(usage.estimatedCostCny, 0.00302);
 
 assert.equal(injectionPresentation(true).action, '查看上次使用内容');
 assert.equal(injectionPresentation(false).action, '预览下次记忆内容');

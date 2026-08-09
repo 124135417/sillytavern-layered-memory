@@ -88,6 +88,8 @@ function ensureQueueState(data = getChatData()) {
         state.running = [];
     }
     if (!Object.hasOwn(state, 'paused')) state.paused = false;
+    if (!state.pause_reason || typeof state.pause_reason !== 'object') state.pause_reason = null;
+    if (!state.paused) state.pause_reason = null;
     return state;
 }
 
@@ -128,6 +130,27 @@ function hydrateCurrentScope() {
         ...memoryQueue.map(j => j.id),
         ...inFlightJobs.keys(),
     ]);
+    const balanceFailures = state.failed.filter(raw => isBalanceExhaustedError(raw?.lastError));
+    if (balanceFailures.length) {
+        state.failed = state.failed.filter(raw => !isBalanceExhaustedError(raw?.lastError));
+        state.paused = true;
+        state.pause_reason = {
+            category: 'balance',
+            message: '记忆模型余额不足，后台整理已暂停。充值后点“继续”即可恢复。',
+            at: Date.now(),
+        };
+        for (const raw of balanceFailures) {
+            if (!raw?.type || knownIds.has(raw.id)) continue;
+            const recovered = normalizeJob({
+                ...raw,
+                attempt: 0,
+                lastError: null,
+                nextRetryAt: null,
+            }, chatData, scopeId, 'queued');
+            memoryQueue.push(recovered);
+            knownIds.add(recovered.id);
+        }
+    }
     for (const raw of state.queued) {
         if (raw?.type && !knownIds.has(raw.id)) {
             const job = normalizeJob(raw, chatData, scopeId, 'queued');
@@ -158,6 +181,9 @@ function hydrateCurrentScope() {
     }
     state.running = stillRunning;
     sortQueue();
+    if (balanceFailures.length) {
+        queueMicrotask(() => void persistScope(scopeId, chatData));
+    }
     return { chatData, state, scopeId };
 }
 
@@ -340,6 +366,7 @@ export function getQueueSnapshot() {
     return {
         scopeId,
         paused: Boolean(state.paused),
+        pauseReason: state.pause_reason ? { ...state.pause_reason } : null,
         running,
         // Compatibility for callers that only need one representative task.
         inFlight: running[0] || null,
@@ -351,6 +378,7 @@ export function getQueueSnapshot() {
 export function setQueuePaused(paused) {
     const { chatData, state, scopeId } = hydrateCurrentScope();
     state.paused = Boolean(paused);
+    if (!state.paused) state.pause_reason = null;
     void persistScope(scopeId, chatData).then(() => {
         if (!state.paused) void pump();
     });
@@ -429,9 +457,15 @@ export function isRetryableError(error) {
     const message = String(error?.message ?? error ?? '');
     const status = Number(error?.status);
     if (message.startsWith('副模型不可用：')) return false;
-    if ([400, 401, 403, 404, 422].includes(status)) return false;
-    if (/(?:模型服务|fallback) HTTP (400|401|403|404|422)\b/i.test(message)) return false;
+    if ([400, 401, 402, 403, 404, 422].includes(status)) return false;
+    if (/(?:模型服务|fallback) HTTP (400|401|402|403|404|422)\b/i.test(message)) return false;
     return true;
+}
+
+export function isBalanceExhaustedError(error) {
+    const status = Number(error?.status);
+    const message = String(error?.message ?? error ?? '');
+    return status === 402 || /(?:模型服务|fallback) HTTP 402\b/i.test(message);
 }
 
 function safeJobError(error) {
@@ -537,6 +571,27 @@ async function finishJob(job, handler, scopeId, chatData, state) {
         return;
     }
     if (!error) {
+        void pump();
+        return;
+    }
+
+    if (isBalanceExhaustedError(error)) {
+        // A balance failure cannot recover on a timer. Preserve the exact work
+        // and stop this chat from claiming more tasks until the user resumes it.
+        job.attempt = Math.max(0, job.attempt - 1);
+        job.status = 'queued';
+        job.lastError = null;
+        job.nextRetryAt = null;
+        memoryQueue.push(job);
+        state.paused = true;
+        state.pause_reason = {
+            category: 'balance',
+            message: '记忆模型余额不足，后台整理已暂停。充值后点“继续”即可恢复。',
+            at: Date.now(),
+        };
+        appendLog('warn', '记忆模型余额不足，已暂停后台整理并保留未完成任务');
+        sortQueue();
+        await persistScope(scopeId, chatData);
         void pump();
         return;
     }

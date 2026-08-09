@@ -16,6 +16,7 @@ const chats = {
     priority: { layered_memory: emptyData('priority') },
     stages: { layered_memory: emptyData('stages') },
     exclusive: { layered_memory: emptyData('exclusive') },
+    balance: { layered_memory: emptyData('balance') },
     scope_switch: { layered_memory: emptyData('scope-switch') },
     switch_target: { layered_memory: emptyData('switch-target', { paused: true }) },
     legacy: {
@@ -169,6 +170,37 @@ assert.equal(exclusiveCounters.max, 1, 'shared-state maintenance jobs must remai
 exclusiveReleases.get(exclusiveStarted[1])();
 await waitUntil(() => getQueueSnapshot().running.length === 0 && getQueueSnapshot().queued.length === 0,
     'exclusive queue should drain');
+
+active = 'balance';
+const balanceStarted = [];
+let balanceAvailable = false;
+registerHandler('proofread', async payload => {
+    balanceStarted.push(payload.key);
+    if (!balanceAvailable) {
+        throw Object.assign(new Error('模型服务 HTTP 402: Insufficient Balance'), { status: 402 });
+    }
+});
+enqueue('proofread', { key: 'balance-a' }, 50);
+enqueue('proofread', { key: 'balance-b' }, 50);
+await waitUntil(() => getQueueSnapshot().paused, 'the first HTTP 402 should pause the queue');
+const balancePaused = getQueueSnapshot();
+assert.deepEqual(balanceStarted, ['balance-a'], 'no later job may start after the balance circuit opens');
+assert.equal(balancePaused.running.length, 0);
+assert.equal(balancePaused.queued.length, 2, 'the failed request and untouched work must both be preserved');
+assert.equal(balancePaused.failed.length, 0, 'balance exhaustion is not a permanently failed memory task');
+assert.equal(balancePaused.pauseReason.category, 'balance');
+assert.ok(balancePaused.queued.every(job => job.attempt === 0),
+    'a balance pause must not consume a task retry attempt');
+
+balanceAvailable = true;
+setQueuePaused(false);
+await waitUntil(() => getQueueSnapshot().running.length === 0 && getQueueSnapshot().queued.length === 0,
+    'resuming after a top-up should drain the preserved work');
+assert.equal(balanceStarted.filter(key => key === 'balance-a').length, 2,
+    'the request that opened the circuit must run exactly once after resume');
+assert.equal(balanceStarted.filter(key => key === 'balance-b').length, 1,
+    'untouched queued work must run exactly once after resume');
+assert.equal(getQueueSnapshot().pauseReason, null, 'manual resume must clear the balance pause reason');
 
 active = 'scope_switch';
 let releaseScopeSwitch;

@@ -47,6 +47,7 @@ import {
     injectionPresentation,
     presetAnchorPresentation,
     taskRailPresentation,
+    usageSummaryPresentation,
     workflowPresentation,
 } from './presentation.js';
 
@@ -910,9 +911,11 @@ function renderTaskRail() {
         : 0;
     const recent = [...(data.logs || [])].reverse().filter(x => /完成|更新|回滚/.test(x.message || '')).slice(0, 4);
     const running = q.running?.length ? q.running : (q.inFlight ? [q.inFlight] : []);
-    const taskView = taskRailPresentation({ paused: q.paused, queued, running, failed });
+    const taskView = taskRailPresentation({ paused: q.paused, pauseReason: q.pauseReason, queued, running, failed });
     const activeCount = running.length + queued.length + failed.length;
-    const summary = activeCount
+    const summary = q.pauseReason
+        ? taskView.summary
+        : activeCount
         ? taskView.summary
         : missingTurns ? `还有 ${missingTurns} 条对话尚未整理` : '已全部处理完成';
     const summaryState = missingTurns && taskView.state === 'idle' ? 'attention' : taskView.state;
@@ -930,6 +933,7 @@ function renderTaskRail() {
                 </div>
             </header>
             <div class="lm-task-list" id="lm-task-list">
+                ${q.pauseReason ? `<div class="lm-task" data-state="paused"><span class="fa-solid fa-wallet" aria-hidden="true"></span><div class="lm-task-copy"><b>后台整理已安全暂停</b><small>${escapeHtml(q.pauseReason.message)}</small></div></div>` : ''}
                 ${running.length ? running.map(job => renderTask(job, 'running')).join('') : (!queued.length && !failed.length ? idleTask : '')}
                 ${queued.slice(0, 4).map(job => renderTask(job, 'queued')).join('')}
                 ${queued.length > 4 ? `<p class="lm-task-overflow">另有 ${queued.length - 4} 个任务等待</p>` : ''}
@@ -1899,6 +1903,10 @@ function bindReviewTab(body) {
 
 function renderSettingsTab() {
     const s = getSettings();
+    const usage = usageSummaryPresentation(s.usageHistory);
+    const usageText = usage.requests
+        ? `最近 ${usage.requests.toLocaleString('zh-CN')} 次直连请求共 ${usage.totalTokens.toLocaleString('zh-CN')} token；缓存命中率 ${usage.cacheHitRate == null ? '暂无数据' : `${(usage.cacheHitRate * 100).toFixed(1)}%`}；思考 token ${usage.reasoningTokens.toLocaleString('zh-CN')}${usage.pricedRequests ? `；按价格快照估算约 ¥${usage.estimatedCostCny.toFixed(4)}` : ''}。`
+        : '还没有可显示的直连记忆模型用量。';
     const profiles = listConnectionProfiles();
     const profileOpts = profiles.map(p => {
         const id = p.id || p.name || p;
@@ -1950,6 +1958,7 @@ function renderSettingsTab() {
                         <p class="lm-security-note"><span class="fa-solid fa-circle-info" aria-hidden="true"></span>插件会跟着当前聊天正在使用的模型走。你在酒馆里切换聊天模型后，记忆模型也会一起改变；这里不能单独指定模型。</p>
                     </div>
                     <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-test-connection">测试连接</button><output id="lm-connection-result" class="lm-connection-result" aria-live="polite"></output></div>
+                    <div class="lm-security-note"><span class="fa-solid fa-chart-line" aria-hidden="true"></span><div><b>最近记忆模型用量</b><br/>${escapeHtml(usageText)} 费用是插件根据响应 token 与保存的价格快照计算的估算值，请以服务商账单为准。</div></div>
                 </div>
             </section>
 

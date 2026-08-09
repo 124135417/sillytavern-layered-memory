@@ -14,7 +14,13 @@ function emptyData(scope) {
 const chats = {
     a: { layered_memory: emptyData('scope-a') },
     b: { layered_memory: emptyData('scope-b') },
+    c: { layered_memory: emptyData('scope-c') },
 };
+chats.c.layered_memory.job_queue.failed.push({
+    id: 'old-balance-failure', type: 'extract', payload: { floorKey: 'old-floor', pairIndex: 2 }, priority: 100,
+    status: 'failed', attempt: 3, maxAttempts: 3,
+    lastError: '模型服务 HTTP 402: Insufficient Balance',
+});
 let active = 'a';
 let metadataSaves = 0;
 const context = {
@@ -109,9 +115,18 @@ assert.deepEqual(getQueueSnapshot().failed.find(job => job.id === 'failed-reset-
     '重试目标楼层时不得清除同批其它失败记录');
 
 assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 400'), { status: 400 })), false);
+assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 402'), { status: 402 })), false);
 assert.equal(isRetryableError(new Error('模型服务 HTTP 422: invalid schema')), false);
 assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 429'), { status: 429 })), true);
 assert.equal(isRetryableError(Object.assign(new Error('模型服务 HTTP 503'), { status: 503 })), true);
+
+active = 'c';
+const recoveredBalance = getQueueSnapshot();
+assert.equal(recoveredBalance.paused, true, 'persisted 402 failures must reopen as a safe balance pause');
+assert.equal(recoveredBalance.pauseReason.category, 'balance');
+assert.equal(recoveredBalance.failed.length, 0);
+assert.equal(recoveredBalance.queued.length, 1, 'old balance failures must be preserved as queued work');
+assert.equal(recoveredBalance.queued[0].attempt, 0);
 
 active = 'b';
 metadataSaves = 0;

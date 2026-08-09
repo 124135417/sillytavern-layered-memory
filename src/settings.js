@@ -48,6 +48,11 @@ export function getSettings() {
     if (!Array.isArray(settings.eval_cases)) {
         settings.eval_cases = [];
     }
+    if (!Array.isArray(settings.usageHistory)) {
+        settings.usageHistory = [];
+    } else if (settings.usageHistory.length > 500) {
+        settings.usageHistory = settings.usageHistory.slice(-500);
+    }
     return settings;
 }
 
