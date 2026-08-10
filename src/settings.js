@@ -2,7 +2,9 @@ import { DEFAULT_SETTINGS, EMPTY_CHAT_DATA, MODULE_NAME } from './constants.js';
 import { quarantineInvalidEntries } from './quality.js';
 import { ensureFactLedger } from './facts.js';
 
-let chatMetadataSaveChain = Promise.resolve();
+const chatMetadataSaveQueue = [];
+let chatMetadataSaveDrainPromise = null;
+let chatMetadataSaveDrainScheduled = false;
 
 export function getContext() {
     return SillyTavern.getContext();
@@ -128,17 +130,53 @@ export function assertChatData(data) {
     }
 }
 
-export async function saveChatData(expectedData = null) {
-    const save = async () => {
-        if (expectedData) assertChatData(expectedData);
-        const { saveMetadata } = getContext();
-        await saveMetadata();
-        // Prevent callers from continuing their completion path against a newly
-        // opened chat if the switch happened while the save request was pending.
-        if (expectedData) assertChatData(expectedData);
-    };
-    const pending = chatMetadataSaveChain.catch(() => {}).then(save);
-    chatMetadataSaveChain = pending;
+async function drainChatMetadataSaveQueue() {
+    while (chatMetadataSaveQueue.length) {
+        const batch = chatMetadataSaveQueue.shift();
+        try {
+            assertChatData(batch.data);
+            const { saveMetadata } = getContext();
+            await saveMetadata();
+            // Prevent callers from continuing their completion path against a newly
+            // opened chat if the switch happened while the save request was pending.
+            assertChatData(batch.data);
+            for (const waiter of batch.waiters) waiter.resolve();
+        } catch (error) {
+            for (const waiter of batch.waiters) waiter.reject(error);
+        }
+    }
+}
+
+function scheduleChatMetadataSaveDrain() {
+    if (chatMetadataSaveDrainScheduled || chatMetadataSaveDrainPromise) return;
+    chatMetadataSaveDrainScheduled = true;
+    queueMicrotask(() => {
+        chatMetadataSaveDrainScheduled = false;
+        if (chatMetadataSaveDrainPromise) return;
+        chatMetadataSaveDrainPromise = drainChatMetadataSaveQueue().finally(() => {
+            chatMetadataSaveDrainPromise = null;
+            if (chatMetadataSaveQueue.length) scheduleChatMetadataSaveDrain();
+        });
+    });
+}
+
+export function saveChatData(expectedData = null) {
+    const data = expectedData || getActiveChatData();
+    try {
+        assertChatData(data);
+    } catch (error) {
+        return Promise.reject(error);
+    }
+
+    const pending = new Promise((resolve, reject) => {
+        const tail = chatMetadataSaveQueue.at(-1);
+        if (tail?.data === data) {
+            tail.waiters.push({ resolve, reject });
+        } else {
+            chatMetadataSaveQueue.push({ data, waiters: [{ resolve, reject }] });
+        }
+    });
+    scheduleChatMetadataSaveDrain();
     return pending;
 }
 
