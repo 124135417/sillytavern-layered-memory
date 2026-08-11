@@ -72,7 +72,6 @@ assert.deepEqual(isolatedRequest.prompt.map(message => message.role), ['user', '
 assert.deepEqual(Object.keys(isolatedRequest).sort(), [
     'prompt',
     'quietToLoud',
-    'responseLength',
     'systemPrompt',
     'trimNames',
 ]);
@@ -95,7 +94,8 @@ await Promise.resolve();
 assert.equal(generateRawCalls, 1, '连点十次只能调用一次模型');
 await Promise.resolve();
 assert.equal(metadataSaveCalls, 1, '阻塞的元数据保存不能阻止模型请求立即开始');
-assert.equal(rawRequest.responseLength, 768);
+assert.equal(Object.hasOwn(rawRequest, 'responseLength'), false,
+    '真实幕间请求不得覆盖当前主模型的输出上限');
 assert.deepEqual(rawRequest.prompt.map(message => message.role), ['user']);
 const payload = JSON.stringify(rawRequest);
 assert.match(payload, /RAW_STORY_PLAYER[\s\S]*RAW_STORY_NARRATOR/u,

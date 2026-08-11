@@ -82,7 +82,7 @@ assert.match(css, /\.lm-backstage-compose\[hidden\] \{ display: none; \}/u,
 const parsed = JSON.parse(manifest);
 assert.equal(parsed.js, 'index.js');
 assert.equal(parsed.css, 'style-v0.16.2.css');
-assert.equal(parsed.version, '0.16.8');
+assert.equal(parsed.version, '0.16.9');
 assert.match(index, /injectBackstageUi\(\)/u);
 assert.match(index, /MESSAGE_SENT[\s\S]*handleBackstageMessageSent/u);
 assert.match(index, /MESSAGE_RECEIVED[\s\S]*handleBackstageMessageReceived/u);

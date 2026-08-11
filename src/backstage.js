@@ -1,6 +1,5 @@
 export const BACKSTAGE_MARKER_EXTRA = 'layered_memory_backstage_marker';
 export const BACKSTAGE_OUTPUT_EXTRA = 'layered_memory_backstage';
-export const BACKSTAGE_RESPONSE_TOKENS = 768;
 
 const BACKSTAGE_STATE_VERSION = 1;
 
@@ -270,7 +269,6 @@ export function buildBackstageDiscussionRequest(session, {
             role: message.role === 'narrator' ? 'assistant' : 'user',
             content: cleanText(message.text),
         })),
-        responseLength: BACKSTAGE_RESPONSE_TOKENS,
         quietToLoud: true,
         trimNames: false,
     };

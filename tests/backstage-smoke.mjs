@@ -88,7 +88,8 @@ assert.match(rawRequest.systemPrompt, /只回复玩家能看到的自然纯文�
     '幕间应要求自然对话而不是结构化选项');
 assert.match(rawRequest.systemPrompt, /不要使用 Markdown 标题、列表、粗体、引用、行内代码或代码块/u,
     '模型提示词应主动要求纯文本，Markdown 渲染只作为显示兜底');
-assert.equal(rawRequest.responseLength, 768, '幕间回复必须使用独立短输出上限');
+assert.equal(Object.hasOwn(rawRequest, 'responseLength'), false,
+    '幕间回复必须继承当前主模型输出上限，不能被插件单独截断');
 assert.deepEqual(rawRequest.prompt.map(message => message.role), ['user'],
     '幕间消息必须以真实角色数组发送，而不是拼进完整正文预设');
 
