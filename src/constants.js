@@ -56,9 +56,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     budgetL2: 5000,
     budgetL4: 1500,
     /** Fixed plugin-owned allowance for a suffix of complete raw message floors. */
-    recentRawTokens: 16000,
+    recentRawTokens: 32000,
     /** Empty means the complete AI reply. Capture group 1 is the narrative body. */
     bodyExtractionRegex: '',
+    /** Capture group 1 contains a compact end-of-floor status region with time/location fields. */
+    sceneContextRegex: '',
     chapterSize: 25,
     proofreadEvery: 75,
     /** @deprecated L1 is a mandatory IN_PROMPT block; retained for settings compatibility. */
@@ -78,7 +80,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const EMPTY_CHAT_DATA = () => ({
-    version: 8,
+    version: 9,
     state_table: {
         version: 1,
         entries: [],
@@ -118,6 +120,19 @@ export const EMPTY_CHAT_DATA = () => ({
     fact_decisions: [],
     /** Facts removed from the current-state view, with their evidence and reason. */
     retired_facts: [],
+    /** Facts that remain plausible but are not currently useful enough for L1. */
+    dormant_facts: [],
+    /** Scene-local or completed one-floor facts retained only for traceability. */
+    historical_facts: [],
+    /** Staged organization batch plus the most recent reversible adoption snapshot. */
+    memory_organization: {
+        version: 1,
+        status: 'idle',
+        staged: null,
+        last_snapshot: null,
+        last_applied_at: null,
+        last_applied_floor: -1,
+    },
     /** Durable cursor for full and incremental current-state lifecycle audits. */
     state_lifecycle: {
         version: 1,

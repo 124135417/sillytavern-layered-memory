@@ -129,6 +129,47 @@ export function renderL1Block(data, budget = 2000, context = null) {
     return selectL1Entries(data, budget, context).text;
 }
 
+function dormantFactEntry(record) {
+    return record?.entry && typeof record.entry === 'object' ? record.entry : record;
+}
+
+function dormantMatchTerms(entry) {
+    const terms = [entry?.subject, entry?.object, entry?.topic]
+        .map(value => String(value || '').trim())
+        .filter(value => [...value].length >= 2 && [...value].length <= 40);
+    return [...new Set(terms)];
+}
+
+/** Retrieve dormant facts for this request only; never promote them to current. */
+export function renderDormantRetrievalBlock(data, recentNarrativeText, budget = 500) {
+    const haystack = String(recentNarrativeText || '').toLowerCase();
+    if (!haystack || Number(budget) <= 0) return '';
+    const matches = (data?.dormant_facts || [])
+        .map(record => ({ record, entry: dormantFactEntry(record) }))
+        .filter(({ entry }) => entry?.subject && entry?.value)
+        .map(item => ({
+            ...item,
+            score: dormantMatchTerms(item.entry)
+                .reduce((total, term) => total + (haystack.includes(term.toLowerCase()) ? [...term].length : 0), 0),
+        }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score || numericFloor(b.entry) - numericFloor(a.entry));
+    if (!matches.length) return '';
+    const lines = [
+        '## 本轮重新相关的休眠事实',
+        '以下事实没有被重新设为当前状态；只是因为最近正文再次提到对应实体而临时提供。若与最近完整原文冲突，以原文为准。',
+        '',
+    ];
+    let accepted = 0;
+    for (const { entry } of matches) {
+        const line = l1EntryLine(entry);
+        if (estimateTokens([...lines, line].join('\n')) > Number(budget)) continue;
+        lines.push(line);
+        accepted += 1;
+    }
+    return accepted ? lines.join('\n').trim() : '';
+}
+
 function validFloorRange(value) {
     if (!Array.isArray(value) || value.length < 2) {
         return null;
@@ -182,22 +223,39 @@ function renderStructuredSegments(segments, timeState) {
     return lines.join('\n');
 }
 
+function renderSceneTransition(item, timeState) {
+    const lines = [];
+    const time = String(item.sceneTime || '').trim();
+    const location = String(item.sceneLocation || '').trim();
+    if (time && time !== timeState.current) {
+        lines.push(`【当前剧情时间：${time}】`);
+        timeState.current = item.sceneTimeEnd || time;
+    }
+    if (location && location !== timeState.location) {
+        lines.push(`【当前剧情地点：${location}】`);
+        timeState.location = item.sceneLocationEnd || location;
+    }
+    return lines.join('\n');
+}
+
 function renderNarrativeItem(item, pairs, timeState = { current: '' }) {
     const range = item.floorUnit === 'message'
         ? (item.start === item.end ? `第 ${item.start} 楼` : `第 ${item.start}–${item.end} 楼`)
         : narrativeRangeLabel(item.start, item.end, pairs);
     const structured = renderStructuredSegments(item.segments, timeState);
+    const scene = renderSceneTransition(item, timeState);
     const summary = String(item.summary ?? '').trim();
-    const storyTime = !structured && item.storyTime ? `（剧情时间：${item.storyTime}）` : '';
-    if (!structured && item.storyTime) timeState.current = item.storyTimeEnd || item.storyTime;
+    const storyTime = !structured && !scene && item.storyTime ? `（剧情时间：${item.storyTime}）` : '';
+    if (!structured && !scene && item.storyTime) timeState.current = item.storyTimeEnd || item.storyTime;
     const body = structured
         ? [`本楼摘要：${summary}`, '补充事件：', structured].join('\n')
         : summary;
     return [
         `### ${item.kind}｜${range}${storyTime}`,
+        scene,
         body,
         `【本段范围结束｜${range}】`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 }
 
 function completeNarrativeText(items, nextRawFloor = null) {
@@ -205,7 +263,7 @@ function completeNarrativeText(items, nextRawFloor = null) {
     const handoff = Number.isInteger(nextRawFloor)
         ? `以上摘要截至第 ${nextRawFloor - 1} 楼；紧随其后的完整原文从第 ${nextRawFloor} 楼开始，二者连续且不重叠。`
         : '后续提示词、最近完整对话及用户新输入均不属于上述任何摘要范围。';
-    const timeState = { current: '' };
+    const timeState = { current: '', location: '' };
     return [
         '## 剧情记忆开始',
         '以下内容只记录已经发生的过去剧情，并按聊天楼层顺序排列。',
@@ -265,6 +323,10 @@ function renderVisibleFloorNarrative(data, narrativeSources, maxFloor = null) {
             start: chapter.floor_range[0], end: chapter.floor_range[1], floorUnit: 'message',
             kind: '章节摘要', summary: String(chapter.summary).trim(), storyTime: chapter.story_time_range?.label,
             storyTimeEnd: chapter.story_time_range?.end,
+            sceneTime: chapter.scene_time_range?.label,
+            sceneTimeEnd: chapter.scene_time_range?.end,
+            sceneLocation: chapter.scene_location_range?.label,
+            sceneLocationEnd: chapter.scene_location_range?.end,
         });
         coveredRanges.push(chapter.floor_range);
     }
@@ -279,6 +341,8 @@ function renderVisibleFloorNarrative(data, narrativeSources, maxFloor = null) {
             kind: matches ? '逐楼剧情记录' : '逐楼临时记录', summary: String(summary).trim(),
             storyTime: matches ? stored.story_time?.label : null,
             segments: matches ? stored.segments : null,
+            sceneTime: matches ? stored.scene_context?.time : null,
+            sceneLocation: matches ? stored.scene_context?.location : null,
         });
     }
     items.sort((a, b) => a.start - b.start || a.end - b.end);

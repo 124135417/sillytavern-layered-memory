@@ -9,6 +9,7 @@ import { enqueue } from './queue.js';
 import { extractAiBody } from './body.js';
 import { stripStyleResetCommands } from './style-reset.js';
 import { automaticStateReviewRequest } from './state-review.js';
+import { pairMessageSources } from './fact-source.js';
 
 const extractCommitStateByChat = new WeakMap();
 const EXTRACT_MUTATION_KEYS = [
@@ -120,6 +121,10 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
             floorLabel: pair.pairIndex,
             source: 'auto',
             bodyMode: prepared.bodyMode,
+            messageSources: pairMessageSources(pair, {
+                userText: stripStyleResetCommands(getPairTexts(pair).userText).text,
+                aiText: extractAiBody(getPairTexts(pair).aiText, getSettings().bodyExtractionRegex).text,
+            }),
             persist: false,
         });
         assertChatData(originData);

@@ -11,12 +11,13 @@ import {
 } from './prompts.js';
 import { usableMemoryEntries } from './quality.js';
 import { appendLog, assertChatData, getChatData, saveChatData } from './settings.js';
+import { backfillFactSourceCoordinates, sourceOrder } from './fact-source.js';
 
 const REVIEW_KIND = 'state_cleanup';
 const AUDIT_BATCH_SIZE = 30;
 const CATEGORIES = new Set(['expired', 'superseded', 'redundant', 'scene_local', 'contradicted']);
 const CONFIDENCE = new Set(['high', 'medium']);
-const VERDICTS = new Set(['keep', 'retire', 'uncertain']);
+const VERDICTS = new Set(['keep', 'dormant', 'retire', 'history', 'uncertain']);
 const VERIFY_VERDICTS = new Set(['confirm', 'reject', 'uncertain']);
 
 function isProtected(entry) {
@@ -76,6 +77,20 @@ function lifecycleState(data) {
     return data.state_lifecycle;
 }
 
+export function organizationState(data = getChatData()) {
+    if (!data.memory_organization || typeof data.memory_organization !== 'object') {
+        data.memory_organization = {
+            version: 1,
+            status: 'idle',
+            staged: null,
+            last_snapshot: null,
+            last_applied_at: null,
+            last_applied_floor: -1,
+        };
+    }
+    return data.memory_organization;
+}
+
 /** Decide whether opening or chapter progress requires a durable lifecycle audit. */
 export function automaticStateReviewRequest(data = getChatData(), {
     onOpen = false,
@@ -85,16 +100,25 @@ export function automaticStateReviewRequest(data = getChatData(), {
     const entries = usableMemoryEntries(data).filter(entry => !isProtected(entry));
     if (!entries.length) return null;
     const lifecycle = lifecycleState(data);
+    const organization = organizationState(data);
     const signature = stateReviewSignature(data);
     const floor = latestNarrativeFloor(data);
     let reason = '';
     if (force) reason = 'manual_full_audit';
-    else if (!lifecycle.last_completed_at) reason = 'initial_full_audit';
+    // A pre-existing chat must never mutate just because the plugin was opened.
+    // The first baseline is created only after the user previews and adopts a
+    // full organization run.
+    else if (!organization.last_applied_at) return null;
     else if (onOpen && lifecycle.last_state_signature !== signature) reason = 'state_changed_before_open';
     else if (onOpen && floor > Number(lifecycle.last_narrative_floor ?? -1)) reason = 'new_evidence_before_open';
     else if (floor - Number(lifecycle.last_narrative_floor ?? -1) >= Math.max(1, Number(chapterSize) || 25)) reason = 'chapter_boundary';
     if (!reason) return null;
-    return { automatic: true, reason, requestedAt: Date.now() };
+    return {
+        automatic: !force,
+        mode: force ? 'full_stage' : 'incremental',
+        reason,
+        requestedAt: Date.now(),
+    };
 }
 
 function uniquePieces(values) {
@@ -186,6 +210,30 @@ function discoverySourceMap(data, catalog) {
         ].filter(Boolean).join(' ｜ '), 1000));
     }
     return map;
+}
+
+function citationOrder(data, catalog, sourceId) {
+    if (String(sourceId || '').startsWith('fact:')) {
+        const id = String(sourceId).slice('fact:'.length);
+        return sourceOrder((data.state_table?.entries || []).find(entry => entry.id === id));
+    }
+    const source = (catalog || []).find(item => item.source_id === sourceId);
+    return Number.isInteger(Number(source?.order)) ? Number(source.order) : -1;
+}
+
+function evidenceIsPostEstablishment(entry, decision, data, catalog, evidence) {
+    if (!evidence.length) return false;
+    if (decision.verdict === 'history' || decision.category === 'scene_local') {
+        return evidence.some(item => item.source_id === `fact:${entry.id}`
+            || citationOrder(data, catalog, item.source_id) >= sourceOrder(entry));
+    }
+    const established = sourceOrder(entry);
+    if (established < 0) return false;
+    return evidence.some(item => {
+        if (item.source_id === `fact:${entry.id}`) return false;
+        const order = citationOrder(data, catalog, item.source_id);
+        return order > established;
+    });
 }
 
 function rangeCovered(floor, ranges) {
@@ -322,12 +370,19 @@ export function normalizeLifecycleAudit(raw, data = getChatData(), entries = nul
         }
         let verdict = VERDICTS.has(item.verdict) ? item.verdict : 'uncertain';
         if (isProtected(entry)) verdict = 'keep';
-        const category = verdict === 'retire' && CATEGORIES.has(item.category) ? item.category : '';
+        const needsLifecycleEvidence = verdict === 'retire' || verdict === 'history';
+        const category = needsLifecycleEvidence && CATEGORIES.has(item.category)
+            ? item.category
+            : verdict === 'history' ? 'scene_local' : '';
         const keepId = String(item.keep_id || '').trim();
         const keepValid = !keepId || (data.state_table?.entries || []).some(candidate => candidate.id === keepId && candidate.id !== entry.id);
         const evidence = normalizedEvidence(item.evidence, sources);
-        const evidenceValid = verdict !== 'retire' || (category && keepValid && evidence.length > 0);
-        if (verdict === 'retire' && !evidenceValid) verdict = 'uncertain';
+        const evidenceValid = !needsLifecycleEvidence || (
+            category
+            && keepValid
+            && evidenceIsPostEstablishment(entry, { verdict, category }, data, catalog, evidence)
+        );
+        if (needsLifecycleEvidence && !evidenceValid) verdict = 'uncertain';
         return {
             entry_id: entry.id,
             verdict,
@@ -432,14 +487,24 @@ function normalizeEvidenceResolution(raw, data, decisions, rawCatalog) {
         if (expected.has(id) && !rawById.has(id)) rawById.set(id, item);
     }
     const sources = sourceMap(data, rawCatalog);
+    const entries = new Map((data.state_table?.entries || []).map(entry => [entry.id, entry]));
     return decisions.map(decision => {
         const item = rawById.get(decision.entry_id);
         const verdict = ['supported', 'unsupported', 'uncertain'].includes(item?.verdict) ? item.verdict : 'uncertain';
         const evidence = normalizedEvidence(item?.evidence, sources);
+        const postSource = evidenceIsPostEstablishment(
+            entries.get(decision.entry_id),
+            decision,
+            data,
+            rawCatalog,
+            evidence,
+        );
         return {
             entry_id: decision.entry_id,
-            verdict: verdict === 'supported' && !evidence.length ? 'uncertain' : verdict,
-            reason: cleanText(item?.reason || '没有取得可逐字核验的原文依据。'),
+            verdict: verdict === 'supported' && (!evidence.length || !postSource) ? 'uncertain' : verdict,
+            reason: cleanText(item?.reason || (!postSource
+                ? '引用不晚于该事实的建立或更新位置，不能证明后文使其失效。'
+                : '没有取得可逐字核验的原文依据。')),
             evidence,
         };
     });
@@ -453,7 +518,9 @@ async function resolveExactRetirementEvidence(data, decisions, overview, rawCata
             direct.set(decision.entry_id, {
                 entry_id: decision.entry_id,
                 verdict: 'supported',
-                reason: '第一轮引用的是事实条目自身，可直接逐字核验。',
+                reason: decision.verdict === 'history'
+                    ? '一次性场景事实可由其建立原文直接确认。'
+                    : '第一轮引用已通过建立位置之后的逐字证据检查。',
                 evidence: decision.evidence,
             });
         } else {
@@ -535,23 +602,36 @@ export function normalizeLifecycleVerification(raw, decisions) {
     }));
 }
 
-function archiveRetirement(data, entry, decision, event, runId, retiredAt) {
-    data.retired_facts = Array.isArray(data.retired_facts) ? data.retired_facts : [];
-    data.retired_facts.push({
+function archiveLifecycleFact(data, destination, entry, decision, event, runId, archivedAt, automatic) {
+    const key = destination === 'dormant' ? 'dormant_facts'
+        : destination === 'historical' ? 'historical_facts'
+            : 'retired_facts';
+    data[key] = Array.isArray(data[key]) ? data[key] : [];
+    data[key].push({
         id: crypto.randomUUID(),
         entry: structuredClone(entry),
         entry_id: entry.id,
+        destination,
         category: decision.category,
         reason: decision.reason,
         evidence: structuredClone(decision.evidence),
         verification: structuredClone(decision.verification),
-        automatic: true,
+        automatic: Boolean(automatic),
         run_id: runId,
         anchorFloorKey: event?.anchorFloorKey || null,
         anchorPairIndex: Number.isFinite(Number(event?.anchorPairIndex)) ? Number(event.anchorPairIndex) : null,
         anchorFingerprint: event?.anchorFingerprint || null,
-        retiredAt,
+        archivedAt,
+        retiredAt: destination === 'retired' ? archivedAt : null,
     });
+}
+
+function verifiedDestination(decision, { allowDormant = false } = {}) {
+    if (allowDormant && decision?.verdict === 'dormant') return 'dormant';
+    if (!['retire', 'history'].includes(decision?.verdict)) return 'current';
+    if (!decision.evidence_valid || !decision.evidence_exact) return 'current';
+    if (decision.verification?.verdict !== 'confirm') return 'current';
+    return decision.verdict === 'history' ? 'historical' : 'retired';
 }
 
 /** Apply only independently-confirmed high-confidence retirements; queue the rest. */
@@ -564,21 +644,23 @@ export function applyLifecycleAudit(data, audit, { recordEvent = recordManualEve
     const pending = [];
     for (const decision of audit?.decisions || []) {
         const entry = byId.get(decision.entry_id);
-        if (!entry || isProtected(entry) || decision.verdict !== 'retire' || !decision.evidence_valid || !decision.evidence_exact) continue;
-        if (decision.confidence === 'high' && decision.verification?.verdict === 'confirm') automatic.push({ entry, decision });
-        else if (decision.verification?.verdict !== 'reject') pending.push({ entry, decision });
+        if (!entry || isProtected(entry)) continue;
+        const destination = verifiedDestination(decision);
+        if (destination !== 'current' && decision.confidence === 'high') automatic.push({ entry, decision, destination });
+        else if (['retire', 'history'].includes(decision.verdict)
+            && decision.verification?.verdict !== 'reject') pending.push({ entry, decision });
     }
 
     const removedIds = new Set();
     const retiredAt = Date.now();
-    for (const { entry, decision } of automatic) {
+    for (const { entry, decision, destination } of automatic) {
         const event = recordEvent(data, {
             op: 'delete',
             before: entry,
             after: null,
-            reason: 'state_lifecycle_auto_retire',
+            reason: `state_lifecycle_auto_${destination}`,
         });
-        archiveRetirement(data, entry, decision, event, audit.run_id, retiredAt);
+        archiveLifecycleFact(data, destination, entry, decision, event, audit.run_id, retiredAt, true);
         removedIds.add(entry.id);
     }
     if (removedIds.size) {
@@ -594,6 +676,7 @@ export function applyLifecycleAudit(data, audit, { recordEvent = recordManualEve
             base_version: Number(data.state_table?.version || 0),
             proposals: pending.map(({ entry, decision }) => ({
                 retire_ids: [entry.id],
+                destination: decision.verdict === 'history' ? 'historical' : 'retired',
                 keep_id: decision.keep_id,
                 category: decision.category,
                 reason: `${decision.reason}（二次核验：${decision.verification?.reason || '不确定'}）`,
@@ -614,6 +697,146 @@ export function applyLifecycleAudit(data, audit, { recordEvent = recordManualEve
         pending: pending.length,
         reviewed: (audit?.decisions || []).length,
     };
+}
+
+function organizationCounts(decisions = [], data = null) {
+    const entries = new Map((data?.state_table?.entries || []).map(entry => [entry.id, entry]));
+    const counts = { current: 0, dormant: 0, retired: 0, historical: 0, uncertain: 0 };
+    for (const decision of decisions) {
+        const entry = entries.get(decision.entry_id);
+        if (entry && isProtected(entry)) {
+            counts.current += 1;
+            continue;
+        }
+        const destination = verifiedDestination(decision, { allowDormant: true });
+        if (destination !== 'current') counts[destination] += 1;
+        else if (decision.verdict === 'uncertain'
+            || (['retire', 'history'].includes(decision.verdict) && decision.verification?.verdict !== 'confirm')) {
+            counts.uncertain += 1;
+        } else counts.current += 1;
+    }
+    return counts;
+}
+
+/** Save a complete preview. No current fact is moved until explicit adoption. */
+export function stageOrganizationBatch(data, audit) {
+    if (Number(audit?.base_version) !== Number(data.state_table?.version || 0)) {
+        return { error: 'stale' };
+    }
+    const organization = organizationState(data);
+    const staged = {
+        id: audit.run_id || crypto.randomUUID(),
+        base_version: Number(audit.base_version),
+        state_signature: stateReviewSignature(data),
+        decisions: structuredClone(audit.decisions || []),
+        counts: organizationCounts(audit.decisions || [], data),
+        floorKey: audit.floorKey || null,
+        anchor_pair: audit.anchor_pair ?? null,
+        anchor_fingerprint: audit.anchor_fingerprint || null,
+        createdAt: Date.now(),
+    };
+    organization.status = 'staged';
+    organization.staged = staged;
+    return { error: null, staged };
+}
+
+function organizationSnapshot(data, staged) {
+    const organization = organizationState(data);
+    return {
+        id: crypto.randomUUID(),
+        createdAt: Date.now(),
+        anchorFloorKey: staged?.floorKey || null,
+        anchorPairIndex: Number.isFinite(Number(staged?.anchor_pair)) ? Number(staged.anchor_pair) : null,
+        anchorFingerprint: staged?.anchor_fingerprint || null,
+        state_table: structuredClone(data.state_table),
+        dormant_facts: structuredClone(data.dormant_facts || []),
+        retired_facts: structuredClone(data.retired_facts || []),
+        historical_facts: structuredClone(data.historical_facts || []),
+        review_queue: structuredClone(data.review_queue || []),
+        manual_events: structuredClone(data.manual_events || []),
+        state_lifecycle: structuredClone(data.state_lifecycle || null),
+        organization_before: {
+            status: organization.status,
+            last_applied_at: organization.last_applied_at,
+            last_applied_floor: organization.last_applied_floor,
+        },
+    };
+}
+
+/** Adopt one staged preview atomically and keep one exact rollback snapshot. */
+export function applyStagedOrganization(data, { recordEvent = recordManualEvent } = {}) {
+    const organization = organizationState(data);
+    const staged = organization.staged;
+    if (!staged) return { error: 'missing', moved: 0 };
+    if (Number(staged.base_version) !== Number(data.state_table?.version || 0)
+        || staged.state_signature !== stateReviewSignature(data)) {
+        organization.status = 'stale';
+        return { error: 'stale', moved: 0 };
+    }
+    const snapshot = organizationSnapshot(data, staged);
+    const byId = new Map((data.state_table?.entries || []).map(entry => [entry.id, entry]));
+    const removedIds = new Set();
+    const moved = { dormant: 0, retired: 0, historical: 0 };
+    const archivedAt = Date.now();
+    for (const decision of staged.decisions || []) {
+        const entry = byId.get(decision.entry_id);
+        if (!entry || isProtected(entry)) continue;
+        const destination = verifiedDestination(decision, { allowDormant: true });
+        if (destination === 'current') continue;
+        const event = recordEvent(data, {
+            op: 'delete',
+            before: entry,
+            after: null,
+            reason: `memory_organization_${destination}`,
+        });
+        archiveLifecycleFact(data, destination, entry, decision, event, staged.id, archivedAt, false);
+        removedIds.add(entry.id);
+        moved[destination] += 1;
+    }
+    if (removedIds.size) {
+        data.state_table.entries = (data.state_table.entries || []).filter(entry => !removedIds.has(entry.id));
+        data.state_table.version = Number(data.state_table.version || 0) + 1;
+    }
+    organization.last_snapshot = snapshot;
+    organization.staged = null;
+    organization.status = 'complete';
+    organization.last_applied_at = archivedAt;
+    organization.last_applied_floor = latestNarrativeFloor(data);
+    const lifecycle = lifecycleState(data);
+    lifecycle.status = 'complete';
+    lifecycle.active_run = null;
+    lifecycle.last_completed_at = archivedAt;
+    lifecycle.last_state_signature = stateReviewSignature(data);
+    lifecycle.last_narrative_floor = latestNarrativeFloor(data);
+    lifecycle.last_result = { reviewed: staged.decisions?.length || 0, moved, reason: 'full_organization_adopted', run_id: staged.id };
+    return { error: null, moved: removedIds.size, destinations: moved, reviewed: staged.decisions?.length || 0 };
+}
+
+export function discardStagedOrganization(data) {
+    const organization = organizationState(data);
+    const existed = Boolean(organization.staged);
+    organization.staged = null;
+    organization.status = 'idle';
+    return existed;
+}
+
+export function rollbackLastOrganization(data) {
+    const organization = organizationState(data);
+    const snapshot = organization.last_snapshot;
+    if (!snapshot) return { error: 'missing' };
+    data.state_table = structuredClone(snapshot.state_table);
+    data.dormant_facts = structuredClone(snapshot.dormant_facts || []);
+    data.retired_facts = structuredClone(snapshot.retired_facts || []);
+    data.historical_facts = structuredClone(snapshot.historical_facts || []);
+    data.review_queue = structuredClone(snapshot.review_queue || []);
+    data.manual_events = structuredClone(snapshot.manual_events || []);
+    data.state_lifecycle = structuredClone(snapshot.state_lifecycle || lifecycleState(data));
+    organization.staged = null;
+    organization.last_snapshot = null;
+    organization.status = snapshot.organization_before?.status || 'rolled_back';
+    organization.last_applied_at = snapshot.organization_before?.last_applied_at ?? null;
+    organization.last_applied_floor = snapshot.organization_before?.last_applied_floor ?? -1;
+    return { error: null };
 }
 
 // Backward-compatible proposal normalizer used by existing pending batches and UI tests.
@@ -689,7 +912,15 @@ export function applyStateReviewBatch(data, batch, { recordEvent = recordManualE
     if (!removable.length) return { error: 'nothing_to_remove', removed: 0 };
     const removedIds = new Set(removable.map(entry => entry.id));
     for (const entry of removable) {
-        recordEvent(data, { op: 'delete', before: entry, after: null, reason: 'state_review_approval' });
+        const proposal = (batch.proposals || []).find(item => (item.retire_ids || []).includes(entry.id)) || {};
+        const destination = proposal.destination === 'historical' ? 'historical' : 'retired';
+        const event = recordEvent(data, { op: 'delete', before: entry, after: null, reason: 'state_review_approval' });
+        archiveLifecycleFact(data, destination, entry, {
+            category: proposal.category || (destination === 'historical' ? 'scene_local' : 'superseded'),
+            reason: proposal.reason || '玩家确认从当前记忆移出。',
+            evidence: proposal.evidence || [],
+            verification: { verdict: 'confirm', reason: '玩家在待处理页面确认。' },
+        }, event, batch.id, Date.now(), false);
     }
     data.state_table.entries = entries.filter(entry => !removedIds.has(entry.id));
     data.state_table.version = Number(data.state_table.version || 0) + 1;
@@ -734,12 +965,12 @@ async function auditChunk(data, entries, overview, rawCatalog) {
         };
     }
 
-    const proposed = normalized.decisions.filter(item => item.verdict === 'retire' && item.evidence_valid);
+    const proposed = normalized.decisions.filter(item => ['retire', 'history'].includes(item.verdict) && item.evidence_valid);
     if (!proposed.length) return normalized.decisions;
     const resolved = await resolveExactRetirementEvidence(data, proposed, overview, rawCatalog);
     const resolvedById = new Map(resolved.map(item => [item.entry_id, item]));
     normalized.decisions = normalized.decisions.map(item => resolvedById.get(item.entry_id) || item);
-    const exact = normalized.decisions.filter(item => item.verdict === 'retire' && item.evidence_valid && item.evidence_exact);
+    const exact = normalized.decisions.filter(item => ['retire', 'history'].includes(item.verdict) && item.evidence_valid && item.evidence_exact);
     if (!exact.length) return normalized.decisions;
     const verified = await callAuxModel({
         purpose: 'state_review_verify',
@@ -754,36 +985,74 @@ async function auditChunk(data, entries, overview, rawCatalog) {
     return normalized.decisions.map(item => ({
         ...item,
         verification: verification.get(item.entry_id) || {
-            verdict: item.verdict === 'retire' ? 'uncertain' : 'not_required',
-            reason: item.verdict === 'retire' ? '第二轮没有确认该退役判断。' : '',
+            verdict: ['retire', 'history'].includes(item.verdict) ? 'uncertain' : 'not_required',
+            reason: ['retire', 'history'].includes(item.verdict) ? '第二轮没有确认该移出判断。' : '',
         },
     }));
 }
 
 export async function handleStateReviewJob(payload = {}) {
     const data = getChatData();
-    const candidates = usableMemoryEntries(data).filter(entry => !isProtected(entry));
+    const pairs = getPairs();
+    const mode = payload.mode === 'full_stage' || payload.reason === 'manual_full_audit'
+        ? 'full_stage'
+        : 'incremental';
     const lifecycle = lifecycleState(data);
-    if (!candidates.length) {
-        lifecycle.status = 'complete';
+    const organization = organizationState(data);
+    if (mode === 'incremental' && !organization.last_applied_at) {
+        lifecycle.status = 'idle';
         lifecycle.active_run = null;
-        lifecycle.last_completed_at = Date.now();
-        lifecycle.last_state_signature = stateReviewSignature(data);
-        lifecycle.last_narrative_floor = latestNarrativeFloor(data);
+        lifecycle.last_result = { reviewed: 0, removed: 0, pending: 0, reason: 'baseline_not_adopted' };
+        await saveChatData(data);
+        appendLog('info', '已取消旧版自动全量审计：请先手动生成并采用整理预览');
+        return;
+    }
+    const sourceBackfill = backfillFactSourceCoordinates(data, pairs);
+    const candidates = usableMemoryEntries(data)
+        .filter(entry => mode === 'full_stage' || !isProtected(entry));
+    if (!candidates.length) {
+        if (mode === 'full_stage') {
+            const head = pairs.filter(pair => pair.sealed).at(-1);
+            stageOrganizationBatch(data, {
+                run_id: crypto.randomUUID(),
+                base_version: Number(data.state_table?.version || 0),
+                decisions: [],
+                floorKey: head?.floorKey || null,
+                anchor_pair: head?.pairIndex ?? null,
+                anchor_fingerprint: head?.contentFingerprint || null,
+            });
+            lifecycle.status = 'staged';
+        } else lifecycle.status = 'complete';
+        lifecycle.active_run = null;
+        if (mode !== 'full_stage') {
+            lifecycle.last_completed_at = Date.now();
+            lifecycle.last_state_signature = stateReviewSignature(data);
+            lifecycle.last_narrative_floor = latestNarrativeFloor(data);
+        }
         lifecycle.last_result = { reviewed: 0, removed: 0, pending: 0, reason: payload.reason || 'empty' };
         await saveChatData(data);
-        appendLog('info', '当前记忆生命周期审计跳过：没有可自动整理的条目');
+        appendLog('info', mode === 'full_stage'
+            ? '当前记忆整理预览已生成：当前没有待分类条目'
+            : '当前记忆增量维护跳过：没有可自动整理的条目');
         return;
     }
 
     const baseVersion = Number(data.state_table?.version || 0);
     const signature = stateReviewSignature(data);
-    const rawCatalog = buildStateEvidenceCatalog(data);
-    const overview = buildStateAuditOverview(data);
+    const previousFloor = Number(lifecycle.last_narrative_floor ?? -1);
+    const fullRawCatalog = buildStateEvidenceCatalog(data);
+    const fullOverview = buildStateAuditOverview(data);
+    const rawCatalog = mode === 'incremental'
+        ? fullRawCatalog.filter(source => source.order > previousFloor)
+        : fullRawCatalog;
+    const overview = mode === 'incremental'
+        ? fullOverview.filter(source => Number(source.range?.[1] ?? source.order) > previousFloor)
+        : fullOverview;
     const candidateIds = candidates.map(entry => entry.id);
     const reusable = lifecycle.active_run
         && Number(lifecycle.active_run.base_version) === baseVersion
         && lifecycle.active_run.state_signature === signature
+        && lifecycle.active_run.mode === mode
         && JSON.stringify(lifecycle.active_run.candidate_ids) === JSON.stringify(candidateIds);
     const run = reusable ? lifecycle.active_run : {
         id: crypto.randomUUID(),
@@ -793,6 +1062,7 @@ export async function handleStateReviewJob(payload = {}) {
         cursor: 0,
         decisions: [],
         reason: payload.reason || 'automatic',
+        mode,
         startedAt: Date.now(),
     };
     lifecycle.status = 'running';
@@ -816,36 +1086,45 @@ export async function handleStateReviewJob(payload = {}) {
     }
 
     assertChatData(data);
-    const head = getPairs().filter(pair => pair.sealed).at(-1);
-    const result = applyLifecycleAudit(data, {
+    const head = pairs.filter(pair => pair.sealed).at(-1);
+    const audit = {
         run_id: run.id,
         base_version: baseVersion,
         decisions: run.decisions,
         floorKey: head?.floorKey || null,
         anchor_pair: head?.pairIndex ?? null,
         anchor_fingerprint: head?.contentFingerprint || null,
-    });
+    };
+    const result = mode === 'full_stage'
+        ? stageOrganizationBatch(data, audit)
+        : applyLifecycleAudit(data, audit);
     if (result.error) {
         lifecycle.status = 'dirty';
         lifecycle.active_run = null;
         await saveChatData(data);
-        throw new Error('当前事实版本已变化，生命周期审计未应用任何删除');
+        throw new Error('当前事实版本已变化，生命周期整理未应用任何变更');
     }
-    lifecycle.status = 'complete';
+    lifecycle.status = mode === 'full_stage' ? 'staged' : 'complete';
     lifecycle.active_run = null;
-    lifecycle.last_completed_at = Date.now();
-    lifecycle.last_state_signature = stateReviewSignature(data);
-    lifecycle.last_narrative_floor = latestNarrativeFloor(data);
-    lifecycle.last_result = { ...result, reason: run.reason, run_id: run.id };
+    if (mode !== 'full_stage') {
+        lifecycle.last_completed_at = Date.now();
+        lifecycle.last_state_signature = stateReviewSignature(data);
+        lifecycle.last_narrative_floor = latestNarrativeFloor(data);
+    }
+    lifecycle.last_result = { ...result, reason: run.reason, run_id: run.id, sourceBackfill };
     data.notices = Array.isArray(data.notices) ? data.notices : [];
     data.notices.push({
         id: crypto.randomUUID(),
         kind: 'notice',
-        note: `当前记忆大整理完成：逐条审计 ${result.reviewed} 条，自动移出 ${result.removed} 条，${result.pending} 条不确定项等待确认。`,
+        note: mode === 'full_stage'
+            ? `当前记忆整理预览已生成：逐条检查 ${run.decisions.length} 条。请在“当前记忆”中查看后再决定是否采用。`
+            : `当前记忆增量维护完成：逐条检查 ${result.reviewed} 条，自动移出 ${result.removed} 条，${result.pending} 条不确定项等待确认。`,
         createdAt: Date.now(),
     });
     await saveChatData(data);
-    appendLog('info', `当前记忆大整理完成：审计 ${result.reviewed} 条，自动移出 ${result.removed} 条，待确认 ${result.pending} 条`);
+    appendLog('info', mode === 'full_stage'
+        ? `当前记忆整理预览已生成：${run.decisions.length} 条，未改动正式记忆`
+        : `当前记忆增量维护完成：审计 ${result.reviewed} 条，自动移出 ${result.removed} 条，待确认 ${result.pending} 条`);
 }
 
 export const STATE_REVIEW_KIND = REVIEW_KIND;

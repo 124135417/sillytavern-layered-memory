@@ -10,6 +10,7 @@ import { normalizeStoryTime, storyTimeEvidencePosition } from './story-time.js';
 import { resolveStyleReset, stripStyleResetCommands } from './style-reset.js';
 import { evidenceSpansInSource } from './tokens.js';
 import { isBackstageMarker } from './backstage.js';
+import { attachSceneContexts, sameSceneContext, sceneContextRange } from './scene-context.js';
 
 const MAX_BATCH_MESSAGES = 25;
 const MAX_BATCH_CHARS = 45_000;
@@ -44,15 +45,14 @@ export function fallbackNarrativeSummary(source) {
 }
 
 export function currentNarrativeSources(options = {}) {
-    return getMessageFloors(options).map(source => ({
+    const sources = getMessageFloors(options).map(source => ({
         ...source,
         narrativeText: narrativeText(source),
-        timeSourceText: isBackstageMarker(source.message)
-            ? ''
-            : stripHtmlComments(source.role === 'user'
-                ? stripStyleResetCommands(source.text).text
-                : source.text),
+        // In-prose time evidence is limited to the same cleaned narrative body.
+        // The compact end-of-floor scene snapshot is extracted deterministically.
+        timeSourceText: narrativeText(source),
     }));
+    return attachSceneContexts(sources, getSettings().sceneContextRegex);
 }
 
 function matchesSource(record, source) {
@@ -76,15 +76,23 @@ export function reconcileNarrativeSummaries(data, sources = currentNarrativeSour
             affectedFloors.push(record.messageIndex, source?.messageIndex);
             continue;
         }
-        if (record.messageIndex !== source.messageIndex || record.role !== source.role) {
-            kept.push({ ...record, messageIndex: source.messageIndex, role: source.role });
+        const sceneChanged = !sameSceneContext(record.scene_context, source.sceneContext);
+        if (record.messageIndex !== source.messageIndex || record.role !== source.role || sceneChanged) {
+            kept.push({
+                ...record,
+                messageIndex: source.messageIndex,
+                role: source.role,
+                scene_context: structuredClone(source.sceneContext),
+            });
             changed = true;
-            affectedFloors.push(record.messageIndex, source.messageIndex);
+            if (record.messageIndex !== source.messageIndex || record.role !== source.role) {
+                affectedFloors.push(record.messageIndex, source.messageIndex);
+            }
         } else kept.push(record);
     }
     data.narrative_summaries = kept;
 
-    if (changed) {
+    if (affectedFloors.length) {
         const firstAffected = Math.min(...affectedFloors.filter(Number.isInteger));
         const affectedChapterIds = new Set();
         for (const chapter of data.narrative_chapters) {
@@ -96,6 +104,23 @@ export function reconcileNarrativeSummaries(data, sources = currentNarrativeSour
         for (const volume of data.narrative_volumes) {
             if ((volume.chapter_ids || []).some(id => affectedChapterIds.has(id))) volume.stale = true;
         }
+    }
+    if (changed) synchronizeNarrativeChapterSceneRanges(data);
+    return changed;
+}
+
+/** Enrich saved records and chapters without regenerating any summary prose. */
+export function synchronizeNarrativeChapterSceneRanges(data) {
+    let changed = false;
+    const records = data.narrative_summaries || [];
+    for (const chapter of data.narrative_chapters || []) {
+        const [start, end] = chapter.floor_range || [];
+        if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
+        const range = sceneContextRange(records.filter(item => item.messageIndex >= start && item.messageIndex <= end));
+        const before = JSON.stringify([chapter.scene_time_range || null, chapter.scene_location_range || null]);
+        chapter.scene_time_range = range.time;
+        chapter.scene_location_range = range.location;
+        if (JSON.stringify([chapter.scene_time_range || null, chapter.scene_location_range || null]) !== before) changed = true;
     }
     return changed;
 }
@@ -113,9 +138,7 @@ function makeBatches(sources) {
     let batch = [];
     let chars = 0;
     for (const source of sources) {
-        const timeSourceText = source.timeSourceText ?? stripHtmlComments(source.text);
-        const extraFullSource = timeSourceText === source.narrativeText ? '' : timeSourceText;
-        const length = [...source.narrativeText].length + [...extraFullSource].length;
+        const length = [...source.narrativeText].length + [...String(source.sceneContext?.raw || '')].length;
         if (batch.length && (batch.length >= MAX_BATCH_MESSAGES || chars + length > MAX_BATCH_CHARS)) {
             batches.push(batch);
             batch = [];
@@ -264,17 +287,15 @@ export async function ensureStyleResetNarrativeCoverage({
     }
 }
 
-function batchPrompt(sources, retryNote = '') {
+export function buildNarrativeBatchPrompt(sources, retryNote = '') {
     return [
         retryNote ? `上次输出没有通过校验：${retryNote}\n请完整修正。\n\n` : '',
         ...sources.map(source => [
             `【第 ${source.messageIndex} 楼｜${source.role === 'user' ? '用户消息' : '角色消息'}】`,
             '【剧情正文｜事件 evidence 只能引用这里】',
             source.narrativeText,
-            '【完整楼层原文｜仅时间 evidence 可以额外引用这里】',
-            (source.timeSourceText ?? stripHtmlComments(source.text)) === source.narrativeText
-                ? '（与剧情正文相同）'
-                : (source.timeSourceText ?? stripHtmlComments(source.text)),
+            '【本楼结束时的场景状态｜仅作时间地点背景，不是剧情事件】',
+            source.sceneContext?.raw || '（未提取到时间地点状态）',
         ].join('\n')),
     ].join('\n\n');
 }
@@ -428,7 +449,7 @@ export async function handleNarrativeSummaryJob(payload) {
         const { text } = await callAuxModel({
             purpose: 'narrative_summary',
             systemPrompt: NARRATIVE_FLOOR_SYSTEM,
-            userPrompt: batchPrompt(missing, retryNote),
+            userPrompt: buildNarrativeBatchPrompt(missing, retryNote),
             jsonSchema: NARRATIVE_FLOOR_JSON_SCHEMA,
             temperature: 0,
         });
@@ -448,6 +469,7 @@ export async function handleNarrativeSummaryJob(payload) {
                 summary,
                 segments,
                 story_time: storyTime,
+                scene_context: structuredClone(source.sceneContext),
                 updatedAt: Date.now(),
             };
             const index = data.narrative_summaries.findIndex(item => item.messageKey === source.messageKey);
@@ -516,6 +538,7 @@ export async function handleNarrativeChapterJob(payload) {
             summary: item.summary,
             story_time: item.story_time || null,
             segments: item.segments || [],
+            scene_context: item.scene_context || null,
         }));
     const result = await summarizeChapterNotes(notes, startFloor, endFloor, () => assertChatData(data), { unit: 'floor' });
     assertChatData(data);
@@ -530,6 +553,8 @@ export async function handleNarrativeChapterJob(payload) {
         key_events: result.key_events || [],
         coverage: result.coverage || [],
         story_time_range: result.story_time_range || null,
+        scene_time_range: sceneContextRange(notes).time,
+        scene_location_range: sceneContextRange(notes).location,
         floor_range: [startFloor, endFloor],
         stale: false,
         stale_reason: null,

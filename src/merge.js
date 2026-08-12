@@ -3,6 +3,7 @@ import { validateEntry, validateUpdateId } from './validate.js';
 import { recordFloorEvent } from './branch.js';
 import { factIdentityKey, makeFactCandidate, upsertFactCandidate } from './facts.js';
 import { normalizeStoryTime } from './story-time.js';
+import { locateFactEvidence } from './fact-source.js';
 
 function nextEntryId(data) {
     const seq = data.progress.next_entry_seq || 1;
@@ -104,7 +105,14 @@ export function mergeExtractResult(normalized, ctx) {
                 id: dup.id,
                 floorKey,
                 floor: floorLabel,
-                before: { value: oldValue, cause: dup.cause },
+                before: {
+                    value: oldValue,
+                    cause: dup.cause,
+                    topic: dup.topic,
+                    evidence: dup.evidence,
+                    updated_floor: dup.updated_floor,
+                    updated_source: structuredClone(dup.updated_source || null),
+                },
                 after: { value: item.value, cause: item.cause || item.old_value },
             });
             dup.value = item.value;
@@ -114,6 +122,9 @@ export function mergeExtractResult(normalized, ctx) {
             }
             dup.updated_floor = floorLabel;
             dup.evidence = item.evidence || dup.evidence;
+            dup.updated_source = locateFactEvidence(item.evidence, ctx.messageSources)
+                || dup.updated_source
+                || null;
             table.version += 1;
             entryChanges.push({ op: 'upsert', id: dup.id, after: structuredClone(dup) });
             applied += 1;
@@ -144,6 +155,7 @@ export function mergeExtractResult(normalized, ctx) {
             conflicts += 1;
         }
 
+        const establishedSource = locateFactEvidence(item.evidence, ctx.messageSources);
         const entry = {
             id: nextEntryId(data),
             slot: item.slot,
@@ -158,6 +170,8 @@ export function mergeExtractResult(normalized, ctx) {
             pinned: false,
             source: ctx.source || 'auto',
             why_persistent: item.why_persistent || '',
+            established_source: establishedSource,
+            updated_source: establishedSource ? structuredClone(establishedSource) : null,
         };
         table.entries.push(entry);
         pushChangelog(data, {

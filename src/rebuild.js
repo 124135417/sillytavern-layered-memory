@@ -13,6 +13,7 @@ import { evidenceInSource } from './tokens.js';
 import { factIdentityKey, makeFactCandidate, upsertFactCandidate } from './facts.js';
 import { normalizeStoryTime, storyTimeRange } from './story-time.js';
 import { stripStyleResetCommands } from './style-reset.js';
+import { backfillFactSourceCoordinates } from './fact-source.js';
 
 export const REBUILD_JOB_TYPES = ['history_rebuild_segment', 'history_rebuild_chapter', 'history_rebuild_commit'];
 const SEGMENT_SIZE = 13;
@@ -177,6 +178,9 @@ function backupCurrent(data) {
         fact_decisions: clone(data.fact_decisions || []),
         manual_events: clone(data.manual_events || []),
         retired_facts: clone(data.retired_facts || []),
+        dormant_facts: clone(data.dormant_facts || []),
+        historical_facts: clone(data.historical_facts || []),
+        memory_organization: clone(data.memory_organization || null),
         state_lifecycle: clone(data.state_lifecycle || null),
         history_backfill: clone(data.history_backfill || {}),
         review_queue: clone(data.review_queue || []),
@@ -616,7 +620,12 @@ export async function handleHistoryRebuildCommit() {
     data.quarantined_entries = (data.quarantined_entries || []).filter(entry => entry.source === 'manual'
         || entry.pinned || entry.manual_override);
     data.review_queue = [];
+    data.retired_facts = [];
+    data.dormant_facts = [];
+    data.historical_facts = [];
+    data.memory_organization = clone(EMPTY_CHAT_DATA().memory_organization);
     data.state_lifecycle = clone(EMPTY_CHAT_DATA().state_lifecycle);
+    backfillFactSourceCoordinates(data, pairs);
     data.progress.last_chapter_end_pair = Math.max(-1, ...data.chapters.map(chapter => Number(chapter.floor_range?.[1])).filter(Number.isFinite));
     data.progress.next_entry_seq = entryIds.peek();
     data.progress.next_chapter_seq = chapterIds.peek();
@@ -951,7 +960,8 @@ export async function restoreRebuildBackup() {
     if (!backup || ['running', 'stopping'].includes(data.history_rebuild?.status)) return false;
     for (const key of ['state_table', 'turn_summaries', 'floor_events', 'branch_checkpoints', 'chapters', 'volumes',
         'keyword_index', 'extracted_keys', 'quarantined_entries', 'history_backfill', 'review_queue', 'notices',
-        'progress', 'fact_ledger', 'fact_decisions', 'manual_events', 'retired_facts', 'state_lifecycle']) {
+        'progress', 'fact_ledger', 'fact_decisions', 'manual_events', 'retired_facts', 'dormant_facts',
+        'historical_facts', 'memory_organization', 'state_lifecycle']) {
         data[key] = clone(backup[key]);
     }
     data.history_rebuild = null;

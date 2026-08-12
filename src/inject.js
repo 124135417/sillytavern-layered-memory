@@ -1,8 +1,8 @@
 import { PROMPT_KEYS, QUEUE_PRIORITY } from './constants.js';
-import { getPairs } from './ids.js';
+import { getActiveMesText, getPairs } from './ids.js';
 import { inspectPresetAnchor, MEMORY_ANCHOR_MACRO } from './preset-anchor.js';
 import { retrieveHits } from './retrieve.js';
-import { renderL1Block, renderL2Block, renderL4Block } from './render.js';
+import { renderDormantRetrievalBlock, renderL1Block, renderL2Block, renderL4Block } from './render.js';
 import { enqueue } from './queue.js';
 import { getChatData, getSettings } from './settings.js';
 import { estimateTokens } from './tokens.js';
@@ -87,7 +87,17 @@ export function buildCoreMemoryParts({
             ...source,
             fallbackSummary: fallbackNarrativeSummary(source),
         }));
-    const l1 = renderL1Block(data, settings.budgetL1, context);
+    const trailingMessage = context?.chat?.at?.(-1);
+    const trailingUserText = trailingMessage?.is_user ? getActiveMesText(trailingMessage) : '';
+    const recentNarrativeText = [
+        ...resolvedNarrativeSources.slice(-12).map(source => source.narrativeText || source.text || ''),
+        trailingUserText,
+    ].filter(Boolean).join('\n');
+    const dormantAllowance = Math.min(600, Math.max(0, Math.floor(Number(settings.budgetL1 || 2000) * 0.25)));
+    const dormant = renderDormantRetrievalBlock(data, recentNarrativeText, dormantAllowance);
+    const currentAllowance = Math.max(0, Number(settings.budgetL1 || 2000) - estimateTokens(dormant));
+    const currentL1 = renderL1Block(data, currentAllowance, context);
+    const l1 = [currentL1, dormant].filter(Boolean).join('\n\n');
     const styleReset = resolveStyleReset({ context, excludeTrailingAssistant: resolvedExcludeTrailingAssistant });
     const rawWindow = selectRecentRawWindow(resolvedNarrativeSources, settings.recentRawTokens, {
         minimumFloor: styleReset?.messageIndex ?? null,

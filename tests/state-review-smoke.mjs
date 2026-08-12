@@ -14,6 +14,9 @@ const {
     applyLifecycleAudit,
     stateReviewSignature,
     latestNarrativeFloor,
+    stageOrganizationBatch,
+    applyStagedOrganization,
+    rollbackLastOrganization,
 } = await import('../src/state-review.js');
 
 const entry = (id, extra = {}) => ({
@@ -26,6 +29,8 @@ const entry = (id, extra = {}) => ({
     evidence: `证据 ${id}`,
     established_floor: 1,
     updated_floor: 1,
+    established_source: { status: 'exact', messageIndex: 1, messageKey: `m-${id}`, contentFingerprint: `fp-${id}` },
+    updated_source: { status: 'exact', messageIndex: 1, messageKey: `m-${id}`, contentFingerprint: `fp-${id}` },
     source: 'auto',
     pinned: false,
     ...extra,
@@ -128,6 +133,12 @@ const lifecycleData = {
     review_queue: [],
     manual_events: [],
     retired_facts: [],
+    dormant_facts: [],
+    historical_facts: [],
+    memory_organization: {
+        version: 1, status: 'idle', staged: null, last_snapshot: null,
+        last_applied_at: null, last_applied_floor: -1,
+    },
     state_lifecycle: {
         version: 1, status: 'idle', active_run: null, last_completed_at: null,
         last_state_signature: '', last_narrative_floor: -1, last_result: null,
@@ -136,7 +147,9 @@ const lifecycleData = {
 const catalog = buildStateEvidenceCatalog(lifecycleData);
 assert.equal(catalog.length, 2);
 assert.match(catalog[1].text, /结束冷战并恢复合作/u);
-assert.equal(automaticStateReviewRequest(lifecycleData)?.reason, 'initial_full_audit');
+assert.equal(automaticStateReviewRequest(lifecycleData), null,
+    'opening a legacy chat before user adoption must never schedule a full mutation');
+assert.equal(automaticStateReviewRequest(lifecycleData, { force: true })?.mode, 'full_stage');
 
 const longHistory = {
     ...lifecycleData,
@@ -159,7 +172,7 @@ const primary = normalizeLifecycleAudit({
             reason: '后文明确结束冷战', confidence: 'high', evidence: [{ source_id: 'floor:88', quote: '结束冷战并恢复合作' }],
         },
         {
-            entry_id: 'duplicate_location', verdict: 'retire', category: 'scene_local', keep_id: '',
+            entry_id: 'duplicate_location', verdict: 'history', category: 'scene_local', keep_id: '',
             reason: '只是当时位置', confidence: 'medium', evidence: [{ source_id: 'fact:duplicate_location', quote: '当前站在门口' }],
         },
         { entry_id: 'current_relation', verdict: 'keep', reason: '仍是现行状态', confidence: 'high', evidence: [] },
@@ -178,7 +191,7 @@ const verified = normalizeLifecycleVerification({
         { entry_id: 'old_cold_war', verdict: 'confirm', reason: '后文直接取代旧关系状态' },
         { entry_id: 'duplicate_location', verdict: 'confirm', reason: '只是单场景位置' },
     ],
-}, primary.decisions.filter(item => item.verdict === 'retire'));
+}, primary.decisions.filter(item => ['retire', 'history'].includes(item.verdict)));
 const verificationById = new Map(verified.map(item => [item.entry_id, item.verification]));
 const auditedDecisions = primary.decisions.map(item => ({
     ...item,
@@ -202,14 +215,66 @@ assert.ok(!lifecycleData.state_table.entries.some(item => item.id === 'old_cold_
 assert.ok(lifecycleData.state_table.entries.some(item => item.id === 'duplicate_location'));
 assert.equal(lifecycleData.retired_facts.length, 1, 'automatic retirement must remain archived');
 assert.equal(lifecycleData.retired_facts[0].anchorPairIndex, 44);
-assert.equal(lifecycleEvents[0].reason, 'state_lifecycle_auto_retire');
+assert.equal(lifecycleEvents[0].reason, 'state_lifecycle_auto_retired');
 assert.equal(lifecycleData.review_queue[0].base_version, 21, 'pending review must bind to the post-auto-retirement version');
 
 lifecycleData.state_lifecycle.last_completed_at = 999;
 lifecycleData.state_lifecycle.last_state_signature = stateReviewSignature(lifecycleData);
 lifecycleData.state_lifecycle.last_narrative_floor = latestNarrativeFloor(lifecycleData);
+lifecycleData.memory_organization.last_applied_at = 999;
+lifecycleData.memory_organization.last_applied_floor = latestNarrativeFloor(lifecycleData);
 assert.equal(automaticStateReviewRequest(lifecycleData, { onOpen: true }), null, 'unchanged reopened chat needs no duplicate audit');
 lifecycleData.narrative_summaries.push({ messageIndex: 89, summary: '新的剧情证据。', segments: [] });
 assert.equal(automaticStateReviewRequest(lifecycleData, { onOpen: true })?.reason, 'new_evidence_before_open');
 
-console.log('state review smoke: validation, protection, anchoring, approval, and stale closure passed');
+const organizationData = {
+    state_table: {
+        version: 3,
+        entries: [
+            entry('stay'),
+            entry('sleep'),
+            entry('past_action'),
+            entry('protected', { pinned: true }),
+        ],
+    },
+    dormant_facts: [], retired_facts: [], historical_facts: [], review_queue: [], manual_events: [],
+    narrative_summaries: [{ messageIndex: 20, summary: '当前剧情。', segments: [] }],
+    memory_organization: {
+        version: 1, status: 'idle', staged: null, last_snapshot: null,
+        last_applied_at: null, last_applied_floor: -1,
+    },
+    state_lifecycle: {
+        version: 1, status: 'idle', active_run: null, last_completed_at: null,
+        last_state_signature: '', last_narrative_floor: -1, last_result: null,
+    },
+};
+const staged = stageOrganizationBatch(organizationData, {
+    run_id: 'organize-1', base_version: 3,
+    decisions: [
+        { entry_id: 'stay', verdict: 'keep', confidence: 'high', evidence: [] },
+        { entry_id: 'sleep', verdict: 'dormant', confidence: 'medium', reason: '近期无关', evidence: [] },
+        {
+            entry_id: 'past_action', verdict: 'history', category: 'scene_local', confidence: 'high',
+            reason: '只属于当时动作', evidence: [{ source_id: 'fact:past_action', quote: '证据 past_action' }],
+            evidence_valid: true, evidence_exact: true, verification: { verdict: 'confirm', reason: '一次性动作' },
+        },
+        {
+            entry_id: 'protected', verdict: 'dormant', confidence: 'high', reason: '不应移动保护项', evidence: [],
+        },
+    ],
+});
+assert.equal(staged.error, null);
+assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'sleep', 'past_action', 'protected'],
+    'staging a preview must not mutate formal memory');
+const adopted = applyStagedOrganization(organizationData, {
+    recordEvent: () => ({ anchorFloorKey: 'head', anchorPairIndex: 10, anchorFingerprint: 'fp' }),
+});
+assert.equal(adopted.error, null);
+assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'protected']);
+assert.equal(organizationData.dormant_facts[0].entry_id, 'sleep');
+assert.equal(organizationData.historical_facts[0].entry_id, 'past_action');
+assert.ok(organizationData.memory_organization.last_snapshot, 'adoption must retain one rollback snapshot');
+assert.equal(rollbackLastOrganization(organizationData).error, null);
+assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'sleep', 'past_action', 'protected']);
+
+console.log('state review smoke: preview adoption, post-source evidence, protection, rollback, and incremental gating passed');

@@ -35,15 +35,22 @@ import { renderL4Block, selectL1Entries } from '../render.js';
 import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
+import { extractSceneContext, latestExactScene } from '../scene-context.js';
+import { currentNarrativeSources, reconcileNarrativeSummaries } from '../narrative.js';
 import { recordManualEvent } from '../branch.js';
 import { displayEntityName, displayNarrativeText, usableMemoryEntries } from '../quality.js';
-import { markChapterStaleForTurnSummaryEdit } from '../chapter.js';
 import { activateEditedFactCandidate, activateFactCandidate, dismissFactCandidate, factCandidateView } from '../facts.js';
-import { applyStateReviewBatch, stateReviewEntries, STATE_REVIEW_KIND } from '../state-review.js';
+import {
+    applyStagedOrganization,
+    applyStateReviewBatch,
+    discardStagedOrganization,
+    rollbackLastOrganization,
+    stateReviewEntries,
+    STATE_REVIEW_KIND,
+} from '../state-review.js';
 import { openConfirmDialog, openFormDialog, openMessageDialog, openTextEditorDialog } from './dialogs.js';
 import {
     FACT_STATUS_LABELS,
-    FACT_VIEW_LABELS,
     factViewMeta,
     injectionPresentation,
     presetAnchorPresentation,
@@ -760,11 +767,27 @@ function renderStateTab() {
     const rebuild = data.history_rebuild;
     const rebuilding = rebuild && !['complete', 'idle'].includes(rebuild.status);
     const lifecycle = data.state_lifecycle || {};
-    const retiredCount = Array.isArray(data.retired_facts) ? data.retired_facts.length : 0;
+    const organization = data.memory_organization || {};
+    const dormantFacts = data.dormant_facts || [];
+    const retiredFacts = data.retired_facts || [];
+    const historicalFacts = data.historical_facts || [];
+    const stagedOrganization = organization.staged;
+    const stagedById = new Map(entries.map(entry => [entry.id, entry]));
+    const stagedRows = (stagedOrganization?.decisions || []).map(decision => {
+        const entry = stagedById.get(decision.entry_id);
+        const destination = decision.verdict === 'dormant' ? '休眠'
+            : decision.verdict === 'retire' && decision.verification?.verdict === 'confirm' ? '退役'
+                : decision.verdict === 'history' && decision.verification?.verdict === 'confirm' ? '历史'
+                    : decision.verdict === 'uncertain' ? '不确定，继续保留'
+                        : '继续保留';
+        return `<li><strong>${escapeHtml(entry?.subject || decision.entry_id)}</strong><span>${escapeHtml(entry?.value || '当前条目已变化')}</span><em>${destination}</em><small>${escapeHtml(decision.reason || '')}</small></li>`;
+    }).join('');
     const stagedFactCount = Array.isArray(rebuild?.entries) ? rebuild.entries.length : 0;
     const ignoredFactCount = Array.isArray(rebuild?.warnings) ? rebuild.warnings.length : 0;
     const statusBannerItems = [
-        lifecycle.status === 'running' ? `<aside class="lm-quality-alert"><div><strong>正在逐条重审当前记忆</strong><p>已检查 ${Number(lifecycle.active_run?.cursor || 0)} / ${Number(lifecycle.active_run?.candidate_ids?.length || entries.length)} 条；审计完成前不会应用半批删除。</p></div></aside>` : '',
+        lifecycle.status === 'running' ? `<aside class="lm-quality-alert"><div><strong>正在生成记忆整理预览</strong><p>已检查 ${Number(lifecycle.active_run?.cursor || 0)} / ${Number(lifecycle.active_run?.candidate_ids?.length || entries.length)} 条；完成前和完成后都不会自动改动正式记忆。</p></div></aside>` : '',
+        stagedOrganization ? `<aside class="lm-quality-alert lm-organization-preview"><div><strong>整理预览已生成，正式记忆尚未改变</strong><p>建议：保留 ${stagedOrganization.counts?.current || 0} 条、休眠 ${stagedOrganization.counts?.dormant || 0} 条、退役 ${stagedOrganization.counts?.retired || 0} 条、转入历史 ${stagedOrganization.counts?.historical || 0} 条、不确定 ${stagedOrganization.counts?.uncertain || 0} 条。</p><details><summary>逐条查看整理依据</summary><ol>${stagedRows || '<li>没有待分类条目</li>'}</ol></details><div class="lm-row-actions"><button type="button" class="lm-button lm-button-primary" id="lm-adopt-organization">采用整理结果</button><button type="button" class="lm-text-button" id="lm-discard-organization">放弃这次预览</button></div></div></aside>` : '',
+        organization.last_snapshot ? `<aside class="lm-quality-alert"><div><strong>上一次整理可以回滚</strong><p>回滚会恢复采用整理结果之前的当前、休眠、退役和历史事实。</p><button type="button" class="lm-text-button" id="lm-rollback-organization">回到整理前</button></div></aside>` : '',
         rebuilding ? `<aside class="lm-quality-alert"><div><strong>当前显示旧正式事实 ${entries.length} 条；新暂存事实 ${stagedFactCount} 条</strong><p>暂存结果尚未加入当前记忆；完成章节后才会一次性采用。${ignoredFactCount ? `另有 ${ignoredFactCount} 条因原文证据不可靠而被忽略。` : ''}</p></div></aside>` : '',
         quarantined.length ? `<aside class="lm-quality-alert"><div><strong>已隔离 ${quarantined.length} 条异常结果</strong><p>它们缺少主体、事实或原文证据，不会加入当前记忆。完成安全重建后会由新结果替换。</p></div></aside>` : '',
         notices.length ? `<section class="lm-notice-strip" aria-label="状态通知">${notices.slice(-3).map(item => `<article data-notice-id="${escapeHtml(item.id)}"><span>${escapeHtml(item.note || '')}</span><button type="button" class="lm-text-button" data-dismiss-notice>知道了</button></article>`).join('')}</section>` : '',
@@ -796,25 +819,46 @@ function renderStateTab() {
     const candidateItems = currentFactView === 'all'
         ? candidates
         : currentFactView === 'inactive' ? inactiveCandidates : [];
-    const viewMeta = factViewMeta(currentFactView, {
+    const baseViewMeta = factViewMeta(currentFactView, {
         active: entries.length,
         all: candidates.length,
         inactive: inactiveCandidates.length,
     });
+    const lifecycleViewMeta = {
+        dormant: { description: '仍可能成立，但只在正文重新相关时临时找回', count: dormantFacts.length },
+        retired: { description: '已经失效或被后文替代，只保留作证据追溯', count: retiredFacts.length },
+        historical: { description: '一次性场景事实，属于过去剧情而非当前状态', count: historicalFacts.length },
+    };
+    const viewMeta = lifecycleViewMeta[currentFactView] || baseViewMeta;
     const candidateList = candidateItems.length
         ? `<div class="lm-discovery-list">${candidateItems.map(renderFactCandidateCard).join('')}</div>`
         : `<div class="lm-empty-state lm-compact-empty"><h3>${currentFactView === 'inactive' ? '没有等待采用的事实' : '还没有发现事实'}</h3><p>${currentFactView === 'inactive' ? '当前没有被覆盖、未验证或尚未选择的内容。' : '完成逐轮整理后，模型发现的内容会完整保留在这里。'}</p></div>`;
+    const archiveViews = {
+        dormant: dormantFacts,
+        retired: retiredFacts,
+        historical: historicalFacts,
+    };
+    const archiveLabels = { dormant: '休眠记忆', retired: '已退役', historical: '剧情历史' };
+    const archived = archiveViews[currentFactView] || [];
+    const archiveList = archived.length
+        ? `<div class="lm-discovery-list">${archived.map(item => renderArchivedFactCard(item, archiveLabels[currentFactView])).join('')}</div>`
+        : `<div class="lm-empty-state lm-compact-empty"><h3>还没有${archiveLabels[currentFactView] || '归档记忆'}</h3><p>大整理采用后，对应条目会保留在这里，不会丢失原文依据。</p></div>`;
+    const displayedGroups = currentFactView === 'active' ? groups
+        : Object.hasOwn(archiveViews, currentFactView) ? archiveList
+            : candidateList;
     return `
         <div class="lm-dashboard">
             <main class="lm-memory-main" id="lm-memory-main">
                 ${statusBanners}
                 <section class="lm-fact-shell">
                     <div class="lm-fact-overview" aria-label="事实记录概览">
-                        <button type="button" data-fact-view="active" class="${currentFactView === 'active' ? 'active' : ''}"><strong>${entries.length}</strong><span>${FACT_VIEW_LABELS.active}</span></button>
-                        <button type="button" data-fact-view="all" class="${currentFactView === 'all' ? 'active' : ''}"><strong>${candidates.length}</strong><span>${FACT_VIEW_LABELS.all}</span></button>
-                        <button type="button" data-fact-view="inactive" class="${currentFactView === 'inactive' ? 'active' : ''}"><strong>${inactiveCandidates.length}</strong><span>${FACT_VIEW_LABELS.inactive}</span></button>
+                        <button type="button" data-fact-view="active" class="${currentFactView === 'active' ? 'active' : ''}"><strong>${entries.length}</strong><span>当前</span></button>
+                        <button type="button" data-fact-view="dormant" class="${currentFactView === 'dormant' ? 'active' : ''}"><strong>${dormantFacts.length}</strong><span>休眠</span></button>
+                        <button type="button" data-fact-view="retired" class="${currentFactView === 'retired' ? 'active' : ''}"><strong>${retiredFacts.length}</strong><span>退役</span></button>
+                        <button type="button" data-fact-view="historical" class="${currentFactView === 'historical' ? 'active' : ''}"><strong>${historicalFacts.length}</strong><span>历史</span></button>
+                        <button type="button" data-fact-view="all" class="${currentFactView === 'all' ? 'active' : ''}"><strong>${candidates.length}</strong><span>发现记录</span></button>
                     </div>
-                    <p class="lm-fact-explainer">当前记忆会随你之后发出的聊天请求一起提供给模型；发现历史只用于查看和追溯。${retiredCount ? `另有 ${retiredCount} 条已退出当前状态，仍保留证据和恢复记录。` : ''}</p>
+                    <p class="lm-fact-explainer">当前记忆每轮发送；休眠记忆只在最近正文重新提到对应实体或事项时临时找回；退役与历史只用于追溯。</p>
                 </section>
                 <div class="lm-memory-toolbar">
                     <label class="lm-search">
@@ -834,7 +878,7 @@ function renderStateTab() {
                     <span>${escapeHtml(viewMeta.description)}</span>
                     <small>${viewMeta.count} 条</small>
                 </div>
-                <div id="lm-memory-groups">${currentFactView === 'active' ? groups : candidateList}</div>
+                <div id="lm-memory-groups">${displayedGroups}</div>
                 <p class="lm-no-results" hidden>没有找到匹配的记忆。可以试试人物名、物品名或聊天楼层。</p>
             </main>
             ${renderTaskRail()}
@@ -863,6 +907,23 @@ function renderFactCandidateCard(candidate) {
             ${canEdit ? `<button type="button" class="lm-text-button" data-candidate-action="edit">${candidate.status === 'unverified' ? '核对并加入' : '编辑并加入'}</button>` : ''}
             ${candidate.status !== 'active' && candidate.status !== 'dismissed' ? '<button type="button" class="lm-text-button" data-candidate-action="dismiss">忽略</button>' : ''}
         </div>
+    </article>`;
+}
+
+function renderArchivedFactCard(record, label) {
+    const fact = record?.entry || {};
+    const subject = fact.object
+        ? `${displayEntityName(fact.subject)} → ${displayEntityName(fact.object)}`
+        : displayEntityName(fact.subject);
+    const searchable = [fact.subject, fact.object, fact.topic, fact.value, fact.evidence, record?.reason]
+        .filter(Boolean).join(' ').toLowerCase();
+    return `<article class="lm-discovery-card" data-slot="${escapeHtml(fact.slot || 'other')}" data-search="${escapeHtml(searchable)}">
+        <div class="lm-discovery-head"><span class="lm-discovery-status">${escapeHtml(label || '归档')}</span><span>${escapeHtml(formatFloorLabel(fact.updated_floor ?? fact.established_floor))}</span></div>
+        <h3>${escapeHtml(readableCandidateText(subject, '主体未记录'))}</h3>
+        ${fact.topic ? `<small class="lm-fact-topic">具体事项：${escapeHtml(fact.topic)}</small>` : ''}
+        <p>${escapeHtml(readableCandidateText(fact.value, '事实内容未记录'))}</p>
+        ${record?.reason ? `<p class="lm-discovery-reason">整理依据：${escapeHtml(record.reason)}</p>` : ''}
+        ${fact.evidence ? `<details class="lm-evidence"><summary>查看原文依据</summary><blockquote>${escapeHtml(fact.evidence)}</blockquote></details>` : ''}
     </article>`;
 }
 
@@ -1087,6 +1148,58 @@ function bindStateTab(body) {
         await saveChatData(data);
         renderActiveTab();
     }));
+    body.querySelector('#lm-adopt-organization')?.addEventListener('click', async () => {
+        const data = getChatData();
+        const counts = data.memory_organization?.staged?.counts || {};
+        const confirmed = await openConfirmDialog({
+            kicker: '采用整理预览',
+            title: '把这次分类应用到正式记忆？',
+            description: '当前记忆会按预览分类；插件会同时保存一份完整快照，效果不对可以一键回到采用前。',
+            details: [
+                `休眠 ${counts.dormant || 0} 条`,
+                `退役 ${counts.retired || 0} 条`,
+                `转入剧情历史 ${counts.historical || 0} 条`,
+                `不确定 ${counts.uncertain || 0} 条继续留在当前记忆`,
+            ],
+            confirmLabel: '采用并保留回滚快照',
+            cancelLabel: '继续查看预览',
+        });
+        if (!confirmed) return;
+        const result = applyStagedOrganization(data);
+        if (result.error) {
+            toastr?.error?.('正式记忆在预览后发生了变化；旧预览已失效，请重新整理。');
+            renderActiveTab();
+            return;
+        }
+        await saveChatData(data);
+        updateInjection();
+        toastr?.success?.(`整理结果已采用，共移动 ${result.moved} 条；可随时回到整理前。`);
+        renderActiveTab();
+    });
+    body.querySelector('#lm-discard-organization')?.addEventListener('click', async () => {
+        const data = getChatData();
+        discardStagedOrganization(data);
+        await saveChatData(data);
+        toastr?.info?.('已放弃整理预览，正式记忆没有变化。');
+        renderActiveTab();
+    });
+    body.querySelector('#lm-rollback-organization')?.addEventListener('click', async () => {
+        const confirmed = await openConfirmDialog({
+            kicker: '恢复整理快照',
+            title: '回到采用整理结果之前？',
+            description: '会恢复当时的当前、休眠、退役和历史事实；聊天正文不会改变。',
+            confirmLabel: '回到整理前',
+            cancelLabel: '保留当前结果',
+        });
+        if (!confirmed) return;
+        const data = getChatData();
+        const result = rollbackLastOrganization(data);
+        if (result.error) return;
+        await saveChatData(data);
+        updateInjection();
+        toastr?.success?.('已恢复到采用整理结果之前。');
+        renderActiveTab();
+    });
     const addEntry = async () => {
         const draft = await openEntryEditor();
         if (!draft) {
@@ -1203,24 +1316,23 @@ function bindStateTab(body) {
 
     body.querySelector('#lm-reorganize-state')?.addEventListener('click', async () => {
         const data = getChatData();
-        const existing = (data.review_queue || []).find(item => item.kind === STATE_REVIEW_KIND);
         const confirmed = await openConfirmDialog({
             kicker: '当前记忆大整理',
-            title: '立即重审整张当前记忆？',
-            description: '插件会逐条核对完整剧情。只有两轮审计一致、引用有效且高置信的旧状态会自动移出当前记忆；不确定项仍放到“待处理”。',
+            title: '生成一份完整整理预览？',
+            description: '插件会逐条核对完整剧情，把事实建议分为当前、休眠、退役、历史或不确定。生成完只显示预览，不会自动移动任何正式记忆。',
             details: [
                 `本次检查 ${usableMemoryEntries(data).length} 条当前记忆`,
-                '置顶和人工编写的记忆永远不会被自动移出',
-                '被移出的条目仍保留原文证据、退役原因和恢复记录',
-                existing ? '新的不确定项会替换尚未处理的上一批整理建议' : '不确定项会保存为一批待处理建议',
+                '事实自身的建立证据不能被当作后文失效证据',
+                '置顶和人工编写的记忆只会建议继续保留',
+                '你查看逐条依据并点击采用后才会生效，采用时再保存回滚快照',
             ],
-            confirmLabel: '开始大整理',
+            confirmLabel: '开始生成预览',
             cancelLabel: '暂不检查',
             tone: 'default',
         });
         if (!confirmed) return;
-        const jobId = enqueue('state_review', { automatic: true, reason: 'manual_full_audit', requestedAt: Date.now() }, QUEUE_PRIORITY.state_review);
-        if (jobId) toastr?.info?.('正在逐条重审当前记忆；高置信旧状态会自动退役，不确定项会进入“待处理”。');
+        const jobId = enqueue('state_review', { automatic: false, mode: 'full_stage', reason: 'manual_full_audit', requestedAt: Date.now() }, QUEUE_PRIORITY.state_review);
+        if (jobId) toastr?.info?.('正在生成整理预览；完成前后都不会自动改动正式记忆。');
         else toastr?.info?.('当前记忆已经在进行大整理。');
     });
 
@@ -1532,43 +1644,36 @@ export function turnSummaryDisplaySource(data) {
 
 function renderTurnsTab() {
     const data = getChatData();
-    const snapshot = getHistoryRebuildSnapshot();
-    const source = turnSummaryDisplaySource(data);
-    const turns = normalizedTurnSummaries({ turn_summaries: source.items });
-    const formalCount = normalizedTurnSummaries(data).length;
+    const sources = new Map(currentNarrativeSources({ includeTrailingUser: true }).map(source => [source.messageKey, source]));
+    const records = (data.narrative_summaries || [])
+        .filter(item => String(item.summary || '').trim() && sources.has(item.messageKey))
+        .slice()
+        .sort((a, b) => a.messageIndex - b.messageIndex);
     const size = getSettings().chapterSize || 25;
     const groups = [];
-    for (let offset = 0; offset < turns.length; offset += size) {
-        const items = turns.slice(offset, offset + size);
+    for (let offset = 0; offset < records.length; offset += size) {
+        const items = records.slice(offset, offset + size);
         groups.push({ items, partial: items.length < size });
     }
-    const chapterRunning = snapshot.stage_mode === 'chapters' && ['running', 'stopping'].includes(snapshot.status);
-    const remaining = Math.max(0, (snapshot.turnProgress?.total || 0) - (snapshot.turnProgress?.completed || 0));
-    const countLabel = source.source === 'staged' ? `新记录 ${turns.length} 轮 · 还剩 ${remaining} 轮对话`
-        : source.source === 'formal_during_rebuild' ? `正式记录 ${turns.length} 轮 · 重建还剩 ${remaining} 轮对话`
-            : `已生成 ${turns.length} / ${snapshot.turnProgress?.total || turns.length} 轮`;
-    const sourceTitle = source.source === 'staged' ? '当前显示本次重建草稿'
-        : source.source === 'formal_during_rebuild' ? '本次重建尚无草稿，当前显示原来的正式记录'
-            : source.source === 'legacy_formal' ? '当前显示旧版本保存的正式记录'
-                : '编辑会保留为人工修改';
-    const sourceDetail = source.source === 'formal_during_rebuild'
-        ? `原来的 ${formalCount} 轮记录没有被删除；本次重建还有 ${remaining} 轮对话未整理。`
-        : chapterRunning ? '章节正在生成；为避免当前章节使用旧内容，请先停止章节任务再编辑。'
-            : '编辑这里只改变剧情记录；人物身份、关系和其他结构化事实请到“当前记忆”修改。';
-    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">每轮对话都保留</span><h3>对话记录</h3><p>一轮记录包含一条用户消息和紧随其后的角色回复，并直接标出酒馆里的真实楼层。</p><small>${escapeHtml(floorProgressText(snapshot.turnProgress?.completed || 0, snapshot.turnProgress?.total || 0, source.items))}</small></div><div class="lm-page-count">${escapeHtml(countLabel)}</div></div>`;
+    const exact = records.filter(item => item.scene_context?.status === 'matched').length;
+    const currentScene = latestExactScene(records);
+    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">每条可见消息都保留</span><h3>对话记录</h3><p>这里就是实际用于 L2 的逐楼剧情记录；一条记录对应酒馆里的一楼，不再展示另一套旧轮次摘要。</p></div><div class="lm-page-count">${records.length} / ${sources.size} 楼</div></div>`;
     html += '<div class="lm-page-content lm-turns-content">';
-    html += `<div class="lm-workflow-progress">${renderTurnProgressCard(snapshot, { controls: true, showOpen: false, preservedCount: formalCount })}</div>`;
-    html += `<aside class="lm-quality-alert"><span class="fa-solid fa-pen" aria-hidden="true"></span><div><strong>${escapeHtml(sourceTitle)}</strong><p>${escapeHtml(sourceDetail)}</p></div></aside>`;
+    html += `<aside class="lm-quality-alert"><span class="fa-solid fa-location-dot" aria-hidden="true"></span><div><strong>${currentScene ? `当前剧情场景：${escapeHtml(currentScene.time || '时间未填写')} · ${escapeHtml(currentScene.location || '地点未填写')}` : '当前剧情时间地点尚未识别'}</strong><p>${currentScene ? `依据第 ${currentScene.sourceMessageIndex} 楼角色回复的状态代码；已有 ${exact} 条角色楼保存了精确场景快照。` : '请在设置中配置时间地点信息提取规则；插件不会读取整条回复或自行猜测。'}</p></div></aside>`;
     html += '<div class="lm-turn-list">';
     for (const group of groups.reverse()) {
-        html += renderTurnSummaryDisclosure(group.items, {
-            draft: source.staged,
-            editable: !chapterRunning,
-            partial: group.partial,
-        });
+        const start = group.items[0]?.messageIndex;
+        const end = group.items.at(-1)?.messageIndex;
+        const label = start === end ? `第 ${start} 楼` : `第 ${start}–${end} 楼`;
+        html += `<details class="lm-turn-records ${group.partial ? 'lm-turn-records-loose' : ''}" data-closed-label="查看 ${label} · ${group.items.length} 条逐楼记录" data-open-label="收起 ${label}"><summary><span>查看 ${label} · ${group.items.length} 条逐楼记录</span></summary><ol>${group.items.map(item => {
+            const scene = item.scene_context || {};
+            const sceneLabels = [scene.time, scene.location].filter(Boolean).map(value => `<em class="lm-time-label">${escapeHtml(value)}</em>`).join('');
+            const status = scene.status === 'matched' ? '精确场景' : scene.status === 'inherited' ? '沿用上一角色楼' : '时间地点未识别';
+            return `<li><span>第 ${item.messageIndex} 楼 · ${item.role === 'user' ? '玩家' : '角色'}${item.manual_override ? '<em>人工修改</em>' : ''}${sceneLabels}</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p><small>${escapeHtml(status)}</small><button type="button" class="lm-text-button" data-narrative-edit="${escapeHtml(item.messageKey)}">编辑</button></li>`;
+        }).join('')}</ol></details>`;
     }
-    if (!turns.length) {
-        html += '<div class="lm-empty-state"><span class="fa-solid fa-list-ol" aria-hidden="true"></span><h3>还没有对话记录</h3><p>点击上方按钮后，每轮记录会按真实聊天楼层出现在这里。</p></div>';
+    if (!records.length) {
+        html += '<div class="lm-empty-state"><span class="fa-solid fa-list-ol" aria-hidden="true"></span><h3>还没有逐楼记录</h3><p>后台整理完成后，每条可见消息会按真实楼层出现在这里。</p></div>';
     }
     html += '</div></div>';
     return html;
@@ -1576,20 +1681,12 @@ function renderTurnsTab() {
 
 function renderChaptersTab() {
     const data = getChatData();
-    const snapshot = getHistoryRebuildSnapshot();
-    const rebuilding = data.history_rebuild && data.history_rebuild.status !== 'complete' && Array.isArray(data.history_rebuild.chapters);
-    const staged = rebuilding && data.history_rebuild.chapters.length > 0;
-    const showingPreserved = rebuilding && !staged && (data.chapters || []).length > 0;
-    const chapters = [...(staged ? data.history_rebuild.chapters : (data.chapters || []))]
+    const chapters = [...(data.narrative_chapters || [])]
         .sort((a, b) => (b.floor_range?.[1] || 0) - (a.floor_range?.[1] || 0));
-    const volumes = staged ? [] : (data.volumes || []);
-    const hasStoryTime = chapters.some(chapter => chapter.story_time_range?.label);
-    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">按章节回顾</span><h3>章节摘要</h3><p>只根据已经确认的对话记录生成；关键事件优先展示，完整摘要按需展开。</p></div><div class="lm-page-count">${snapshot.chapterProgress?.completed || chapters.length} / ${snapshot.chapterProgress?.total || chapters.length} 章</div></div>`;
+    const volumes = data.narrative_volumes || [];
+    const hasScene = chapters.some(chapter => chapter.scene_time_range?.label || chapter.scene_location_range?.label);
+    let html = `<div class="lm-page-heading"><div><span class="lm-kicker">实际 L2 章节</span><h3>章节摘要</h3><p>这里展示由真实逐楼记录冻结生成的章节，与模型收到的 L2 使用同一套数据。</p></div><div class="lm-page-count">${chapters.length} 章</div></div>`;
     html += '<div class="lm-page-content lm-chapters-content">';
-    html += `<div class="lm-workflow-progress">${renderChapterProgressCard(snapshot, { controls: true, showOpen: false })}</div>`;
-    if (showingPreserved) {
-        html += `<aside class="lm-quality-alert"><span class="fa-solid fa-book" aria-hidden="true"></span><div><strong>本次重建尚无章节草稿，当前显示原来的章节摘要</strong><p>原来的 ${chapters.length} 章没有被删除；重建全部通过后才会一次性替换。</p></div></aside>`;
-    }
     if (volumes.length) {
         html += '<section class="lm-volume-strip"><h4>很久以前的剧情</h4><div>';
         for (const v of volumes) {
@@ -1597,7 +1694,7 @@ function renderChaptersTab() {
         }
         html += '</div></section>';
     }
-    if (chapters.length && !hasStoryTime) {
+    if (chapters.length && !hasScene) {
         html += '<p class="lm-time-note"><span class="fa-solid fa-clock" aria-hidden="true"></span>这些章节的原文没有明确剧情时间，因此不会显示推测日期。</p>';
     }
     html += '<section class="lm-timeline" aria-label="章节列表">';
@@ -1611,22 +1708,22 @@ function renderChaptersTab() {
             : '';
         const events = Array.isArray(c.key_events) ? c.key_events.filter(event => event?.text).slice(0, 6) : [];
         const summaryLabel = '查看完整摘要';
-        html += `<article class="lm-chapter-card" data-cid="${escapeHtml(c.id)}" data-staged="${staged ? 'true' : 'false'}">
+        html += `<article class="lm-chapter-card" data-cid="${escapeHtml(c.id)}" data-narrative="true">
             <span class="lm-timeline-node" aria-hidden="true"></span>
-            <header><div><span class="lm-kicker">剧情章节</span><h4>${pairFloorRangeLabel(c.floor_range?.[0], c.floor_range?.[1])}</h4>${c.story_time_range?.label ? `<small class="lm-story-time">剧情时间：${escapeHtml(c.story_time_range.label)}</small>` : ''}</div><div class="lm-chapter-state">${c.pinned ? '<span class="fa-solid fa-thumbtack" title="始终保留" aria-label="始终保留"></span>' : ''}${state}${qualityState}</div></header>
-            ${events.length ? `<section class="lm-key-events"><h5>关键事件</h5><ol>${events.map(event => `<li><span>${pairFloorRangeLabel(event.floor_range?.[0], event.floor_range?.[1])}</span>${escapeHtml(displayNarrativeText(event.text))}</li>`).join('')}</ol></section>` : ''}
+            <header><div><span class="lm-kicker">剧情章节</span><h4>第 ${c.floor_range?.[0]}–${c.floor_range?.[1]} 楼</h4>${c.scene_time_range?.label ? `<small class="lm-story-time">剧情时间：${escapeHtml(c.scene_time_range.label)}</small>` : ''}${c.scene_location_range?.label ? `<small class="lm-story-time">剧情地点：${escapeHtml(c.scene_location_range.label)}</small>` : ''}</div><div class="lm-chapter-state">${c.pinned ? '<span class="fa-solid fa-thumbtack" title="始终保留" aria-label="始终保留"></span>' : ''}${state}${qualityState}</div></header>
+            ${events.length ? `<section class="lm-key-events"><h5>关键事件</h5><ol>${events.map(event => `<li><span>第 ${event.floor_range?.[0]}–${event.floor_range?.[1]} 楼</span>${escapeHtml(displayNarrativeText(event.text))}</li>`).join('')}</ol></section>` : ''}
             ${c.keywords?.length ? `<div class="lm-keywords">${c.keywords.map(k => `<span>${escapeHtml(k)}</span>`).join('')}</div>` : ''}
             <details class="lm-chapter-summary" data-closed-label="${summaryLabel}" data-open-label="收起完整摘要"><summary><span>${summaryLabel}</span></summary><p>${escapeHtml(displayNarrativeText(c.summary))}</p></details>
-            ${staged ? '' : `<div class="lm-row-actions">
+            <div class="lm-row-actions">
                 <button type="button" data-act="edit" class="lm-text-button">编辑摘要</button>
-                ${c.stale_reason === 'turn_summary_edit' ? '<button type="button" data-act="regenerate" class="lm-button">根据修改后的记录重新生成本章</button>' : ''}
+                ${c.stale ? '<button type="button" data-act="regenerate" class="lm-button">根据逐楼记录重新生成本章</button>' : ''}
                 <button type="button" data-act="pin" class="lm-text-button">${c.pinned ? '恢复自动整理' : '始终保留本章'}</button>
-            </div>`}
+            </div>
         </article>`;
     }
     html += '</section>';
     if (!chapters.length) {
-        html += `<div class="lm-empty-state"><span class="fa-solid fa-book-open" aria-hidden="true"></span><h3>还没有章节摘要</h3><p>${snapshot.chapterProgress?.status === 'locked' ? '先生成完整的对话记录，再由你决定是否生成章节。' : '点击上方按钮后，只会处理已经凑满一章的记录。'}</p></div>`;
+        html += '<div class="lm-empty-state"><span class="fa-solid fa-book-open" aria-hidden="true"></span><h3>还没有章节摘要</h3><p>逐楼记录凑满一章后，插件会在后台冻结这一章。</p></div>';
     }
     html += '</div>';
     return html;
@@ -1699,45 +1796,39 @@ function bindDisclosureLabels(body) {
 function bindTurnsTab(body) {
     bindHistoryBackfillControls(body, body);
     bindDisclosureLabels(body);
-    body.querySelectorAll('[data-turn-edit]').forEach(button => {
+    body.querySelectorAll('[data-narrative-edit]').forEach(button => {
         button.addEventListener('click', async () => {
             const data = getChatData();
-            const pairIndex = Number(button.dataset.turnEdit);
-            const draft = button.dataset.draft === 'true';
-            const collection = draft ? data.history_rebuild?.turn_summaries : data.turn_summaries;
-            const item = collection?.find(summary => summary.pairIndex === pairIndex);
+            const messageKey = button.dataset.narrativeEdit;
+            const item = (data.narrative_summaries || []).find(summary => summary.messageKey === messageKey);
             if (!item) return;
-            const pair = pairAt(pairIndex);
-            const texts = pair ? getPairTexts(pair) : { userText: '', aiText: '' };
+            const source = currentNarrativeSources({ includeTrailingUser: true })
+                .find(candidate => candidate.messageKey === messageKey);
             const edited = await openTextEditorDialog({
-                kicker: draft ? '修改记录草稿' : '修改对话记录',
-                title: `编辑${pairFloorRangeLabel(pairIndex)}`,
-                description: '这里只修改这轮对话的剧情记录，不会改变“当前记忆”中的结构化事实。',
-                label: '这轮对话发生了什么？',
+                kicker: '修改逐楼记录',
+                title: `编辑第 ${item.messageIndex} 楼`,
+                description: '这里只修改这一楼的 L2 剧情记录，不会改变原聊天或“当前记忆”中的结构化事实。',
+                label: '这一楼发生了什么？',
                 value: displayNarrativeText(item.summary),
-                sourceSections: [
-                    { label: '用户原文', text: texts.userText || '没有可显示的用户原文' },
-                    { label: '角色回复', text: texts.aiText || '没有可显示的角色回复' },
-                ],
-                saveLabel: '保存对话记录',
+                sourceSections: [{
+                    label: item.role === 'user' ? '玩家正文' : '角色正文',
+                    text: source?.narrativeText || '当前分支里已经找不到对应原文',
+                }],
+                saveLabel: '保存逐楼记录',
             });
             if (edited == null) return;
-            const summary = normalizeHistoryUserSummary(edited, SillyTavern.getContext().name1 || '');
-            item.summary = summary;
+            item.summary = normalizeHistoryUserSummary(edited, SillyTavern.getContext().name1 || '');
             item.manual_override = true;
             item.updatedAt = Date.now();
-            if (draft) {
-                data.history_rebuild.chapters = (data.history_rebuild.chapters || []).filter(chapter =>
-                    pairIndex < chapter.floor_range?.[0] || pairIndex > chapter.floor_range?.[1]);
-            } else {
-                const floorEvent = (data.floor_events || []).find(event => event.pairIndex === pairIndex);
-                if (floorEvent) floorEvent.turnSummary = summary;
-                markChapterStaleForTurnSummaryEdit(data, pairIndex);
+            for (const chapter of data.narrative_chapters || []) {
+                if (item.messageIndex < chapter.floor_range?.[0] || item.messageIndex > chapter.floor_range?.[1]) continue;
+                chapter.stale = true;
+                chapter.stale_reason = 'narrative_summary_edit';
             }
             await saveChatData(data);
             updateInjection();
             renderActiveTab();
-            toastr?.success?.(draft ? '记录草稿已保存。生成章节时会使用修改后的内容。' : '记录已保存，只需重新生成它所属的章节。');
+            toastr?.success?.('逐楼记录已保存；已生成的所属章节会标记为等待更新。');
         });
     });
 }
@@ -1746,10 +1837,9 @@ function bindChaptersTab(body) {
     bindHistoryBackfillControls(body, body);
     bindDisclosureLabels(body);
     body.querySelectorAll('article[data-cid]').forEach(card => {
-        if (card.dataset.staged === 'true') return;
         const id = card.dataset.cid;
         card.querySelector('[data-act="edit"]')?.addEventListener('click', async () => {
-            const c = getChatData().chapters.find(x => x.id === id);
+            const c = (getChatData().narrative_chapters || []).find(x => x.id === id);
             if (!c) {
                 return;
             }
@@ -1777,7 +1867,7 @@ function bindChaptersTab(body) {
             renderActiveTab();
         });
         card.querySelector('[data-act="pin"]')?.addEventListener('click', async () => {
-            const c = getChatData().chapters.find(x => x.id === id);
+            const c = (getChatData().narrative_chapters || []).find(x => x.id === id);
             if (c) {
                 c.pinned = !c.pinned;
                 await saveChatData();
@@ -1786,14 +1876,14 @@ function bindChaptersTab(body) {
         });
         card.querySelector('[data-act="regenerate"]')?.addEventListener('click', async () => {
             const data = getChatData();
-            const chapter = data.chapters.find(candidate => candidate.id === id);
+            const chapter = (data.narrative_chapters || []).find(candidate => candidate.id === id);
             if (!chapter) return;
             const button = card.querySelector('[data-act="regenerate"]');
             if (button) button.disabled = true;
-            enqueue('chapter_summary', {
-                startPair: chapter.floor_range[0], endPair: chapter.floor_range[1], reason: 'turn_summary_edit',
-            }, QUEUE_PRIORITY.chapter_summary);
-            toastr?.info?.(`只会重新生成${pairFloorRangeLabel(chapter.floor_range[0], chapter.floor_range[1])}这一章。`);
+            enqueue('narrative_chapter', {
+                startFloor: chapter.floor_range[0], endFloor: chapter.floor_range[1], reason: 'narrative_summary_edit',
+            }, QUEUE_PRIORITY.narrative_chapter);
+            toastr?.info?.(`只会重新生成第 ${chapter.floor_range[0]}–${chapter.floor_range[1]} 楼这一章。`);
             renderActiveTab();
         });
     });
@@ -2074,6 +2164,11 @@ function renderSettingsTab() {
                         <textarea id="lm-body-regex" rows="2" spellcheck="false" placeholder="例如：&lt;content&gt;([\\s\\S]*?)&lt;/content&gt;">${escapeHtml(s.bodyExtractionRegex)}</textarea>
                     </label>
                     <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-test-body">用最近一条回复测试</button><output id="lm-body-result" class="lm-connection-result" aria-live="polite"></output></div>
+                    <label>时间地点信息提取规则
+                        <small>第一个括号捕获一小段状态代码；其中使用 time/时间 和 scene/location/地点/场景 字段。它描述本条角色回复结束时的场景，只会保存提取出的时间地点。</small>
+                        <textarea id="lm-scene-regex" rows="2" spellcheck="false" placeholder="例如：&lt;scene_context&gt;([\\s\\S]*?)&lt;/scene_context&gt;">${escapeHtml(s.sceneContextRegex)}</textarea>
+                    </label>
+                    <div class="lm-settings-actions"><button type="button" class="lm-button" id="lm-test-scene">用最近一条回复测试时间地点</button><output id="lm-scene-result" class="lm-connection-result" aria-live="polite"></output></div>
                     <p class="lm-security-note"><span class="fa-solid fa-circle-info" aria-hidden="true"></span>插件会自动从 Chat Completion 请求中隐藏已经接管的旧前文，不需要再为不同预设编写“删除历史”的正则。如果预设仍主动要求模型每轮另写一份摘要，可自行关闭那条生成指令；插件不会修改预设。</p>
                 </div>
             </section>
@@ -2093,7 +2188,7 @@ function renderSettingsTab() {
             <details class="lm-settings-section lm-settings-disclosure">
                 <summary><div><span class="fa-solid fa-sliders" aria-hidden="true"></span><div><h4>高级设置</h4><p>记忆容量和相关旧记忆的发送位置。不了解这些选项时，请保持默认。</p></div></div><span class="lm-disclosure-label">展开</span></summary>
                 <div class="lm-settings-fields lm-field-grid lm-field-grid-three">
-                    <label>近期完整原文容量<small>按插件统一估算，固定保留连续完整楼层，不依赖模型上下文。推荐 16000。</small><select id="lm-raw-tokens"><option value="8000" ${s.recentRawTokens === 8000 ? 'selected' : ''}>8000</option><option value="16000" ${s.recentRawTokens === 16000 ? 'selected' : ''}>16000（推荐）</option><option value="32000" ${s.recentRawTokens === 32000 ? 'selected' : ''}>32000</option></select></label>
+                    <label>近期完整原文容量<small>按插件统一估算，固定保留连续完整楼层，不依赖模型上下文。长篇回复推荐 32000。</small><select id="lm-raw-tokens"><option value="8000" ${s.recentRawTokens === 8000 ? 'selected' : ''}>8000</option><option value="16000" ${s.recentRawTokens === 16000 ? 'selected' : ''}>16000</option><option value="32000" ${s.recentRawTokens === 32000 ? 'selected' : ''}>32000（推荐）</option></select></label>
                     <label>当前事实容量<small>长期有效的人物状态、关系和约定。推荐 2000。</small><input type="number" id="lm-b1" min="200" value="${s.budgetL1}"/></label>
                     <label>剧情摘要容量<small>以前发生过的剧情。推荐 5000。</small><input type="number" id="lm-b2" min="500" value="${s.budgetL2}"/></label>
                     <label>相关旧记忆容量<small>临时找回的旧内容。推荐 1500。</small><input type="number" id="lm-b4" min="0" value="${s.budgetL4}"/></label>
@@ -2177,7 +2272,8 @@ function bindSettingsTab(body) {
             directBaseUrl: body.querySelector('#lm-direct-url').value.trim(),
             directModel: body.querySelector('#lm-direct-model').value.trim(),
             bodyExtractionRegex: body.querySelector('#lm-body-regex').value.trim(),
-            recentRawTokens: readNumber('#lm-raw-tokens', 16000, 8000),
+            sceneContextRegex: body.querySelector('#lm-scene-regex').value.trim(),
+            recentRawTokens: readNumber('#lm-raw-tokens', 32000, 8000),
             budgetL1: readNumber('#lm-b1', 2000, 200),
             budgetL2: readNumber('#lm-b2', 5000, 500),
             budgetL4: readNumber('#lm-b4', 1500, 0),
@@ -2206,8 +2302,12 @@ function bindSettingsTab(body) {
         updateInjection();
         settingsDirty = false;
     };
-    body.querySelector('#lm-save')?.addEventListener('click', () => {
+    body.querySelector('#lm-save')?.addEventListener('click', async () => {
         persistForm();
+        const data = getChatData();
+        if (reconcileNarrativeSummaries(data, currentNarrativeSources({ includeTrailingUser: true }))) {
+            await saveChatData(data);
+        }
         const button = body.querySelector('#lm-save');
         button.textContent = '已保存';
         button.classList.add('lm-success');
@@ -2291,6 +2391,28 @@ function bindSettingsTab(body) {
         output.textContent = result.error.startsWith('invalid_regex:')
             ? '规则格式有误；实际整理时会自动读取整条回复。'
             : '最近一条回复没有匹配；实际整理时会自动读取整条回复。';
+    });
+    body.querySelector('#lm-test-scene')?.addEventListener('click', () => {
+        const output = body.querySelector('#lm-scene-result');
+        const pair = [...getPairs()].reverse().find(item => item.ai);
+        if (!pair) {
+            output.dataset.state = 'error';
+            output.textContent = '当前聊天还没有可测试的 AI 回复。';
+            return;
+        }
+        const { aiText } = getPairTexts(pair);
+        const pattern = body.querySelector('#lm-scene-regex').value.trim();
+        const result = extractSceneContext(aiText, pattern);
+        if (result.status === 'matched') {
+            output.dataset.state = 'success';
+            output.textContent = `识别成功：时间 ${result.time || '未填写'}；地点 ${result.location || '未填写'}。只会保存这两个字段。`;
+            return;
+        }
+        output.dataset.state = 'error';
+        output.textContent = result.status === 'unconfigured'
+            ? '请先填写时间地点信息提取规则。'
+            : result.status === 'invalid' ? '规则格式有误，不会读取整条回复作为回退。'
+                : '最近一条回复没有匹配到可用的时间地点字段，不会让模型猜测。';
     });
     body.querySelectorAll('[data-settings-jump]').forEach(button => {
         button.addEventListener('click', () => selectTab(button.dataset.settingsJump));

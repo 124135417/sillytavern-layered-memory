@@ -271,12 +271,15 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
         .filter(item => withinTrustedPrefix(item)
             && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')
             && manualEventMatchesSource(item, liveByKey)).map(clone);
-    data.retired_facts = (parentData.retired_facts || [])
-        .filter(item => withinTrustedPrefix(item)
-            && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')).map(clone);
+    for (const key of ['retired_facts', 'dormant_facts', 'historical_facts']) {
+        data[key] = (parentData[key] || [])
+            .filter(item => withinTrustedPrefix(item)
+                && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')).map(clone);
+    }
     // A branch can change which old states are still current. Keep the durable
     // retirement history above, but require a fresh lifecycle pass for this branch.
     data.state_lifecycle = clone(EMPTY_CHAT_DATA().state_lifecycle);
+    data.memory_organization = clone(EMPTY_CHAT_DATA().memory_organization);
     data.fact_ledger = (parentData.fact_ledger || [])
         .filter(item => withinTrustedPrefix(item)
             && item.floorKey && item.contentFingerprint && matchesFloor(item, liveByKey)).map(clone);

@@ -15,6 +15,8 @@ export const EXTRACT_SYSTEM = `你是逐轮剧情记录员兼事实记录员，�
 - 临时情绪、姿势、所在房间、普通动作、当场说过的一句话、一次性谈话结果都不属于当前事实。
 - 身体条目记录本楼结束时仍存在的伤势、永久变化或能力状态；伤势已经痊愈、异物已经取出时，必须指出旧条目已失效。
 - 关系条目只描述当前关系状态，不能把已经结束的疏远、冷战、禁止接近等阶段继续保留为现在。
+- L1 的条目必须拥有清楚的“当前状态事项”。“某事发生在一周前”“先做了甲后做了乙”“当时等了一个月”只是时间线，只进 turn_summary；若真正要保留的是当前结果，应写成“盐沼当前已清剿”这类状态，而不是“盐沼清剿时间”。
+- 一条事实只能描述一个 subject + object + topic 状态链。不要把据点、矿脉、库存、人数、道路等多个会各自变化的事项捆成一条；分别记录，后文才能精确更新其中一项。
 - 如果本楼明确更新状态表里的同一事项，尽量逐字复用旧条目的 topic，让程序更新原条目；不要另造近义 topic 留下两个版本。
 - 不推测、不补完、不因戏剧性评价重要性。没有需要模型持续记住的当前状态时，facts 全部输出“无变化”是正确结果。
 
@@ -99,8 +101,8 @@ export const NARRATIVE_FLOOR_SYSTEM = `你是逐楼剧情记录员，不是作�
 再按剧情时间变化把 events 放进有序 segments：
 - time_change 只在该位置出现了明确剧情内时间时填写，格式为 {"label":"次日清晨","kind":"absolute|relative|time_of_day","evidence":"次日清晨"}，否则写 null。
 - 一楼可以有零个、一个或多个时间变化。跨天时必须拆成多个 segment，并让变化前后的事件各自留在正确段落。
-- 时间的 label 和 evidence 必须逐字来自“完整楼层原文”。允许读取其中预设附加的当前剧情时间，但禁止使用现实聊天时间、消息时间戳或自行推算日期。
-- 如果完整楼层末尾明确给出新的当前剧情时间，可以生成一个 events 为空的最后 segment，表示该楼结束时的时间。
+- 时间的 label 和 evidence 必须逐字来自“剧情正文”。禁止把单独提供的场景状态当成剧情事件，也禁止使用现实聊天时间、消息时间戳或自行推算日期。
+- 单独提供的场景状态只用于理解该楼结束时的背景；它由程序直接保存，不需要在 segments 中重复输出。
 
 最后写一条 12–160 个汉字的 summary，概括该楼全部 events：
 - 用户楼统一用“<user>”称呼用户，保留其行动、话语、问题、选择或主张；单方面说法不能写成已经证实的事实。
@@ -154,6 +156,8 @@ facts 只记录该轮明确发生、之后仍会成立的内容：承诺、永�
 - evidence 必须逐字引用该轮用户输入或 AI 叙事正文中的连续原句，最多 50 字。
 - relationship 必须同时提供 object、old_value、new_value，value 与 new_value 相同。
 - world 也必须有自然主体，例如“因果契约”“防卫局”，不能留空。
+- 单纯说明某事发生在多久以前、先后顺序或当时等待了多久，只属于 summary/story_time，不是当前 facts；若要记录其现行结果，topic/value 必须明确描述现在的状态。
+- 每条 fact 只描述一个 subject + object + topic 状态链；库存、人数、道路、协议等会分别变化的事项必须拆开，不得捆成一个长清单。
 - 没有持久事实时 facts 输出空数组。不得为了填表把普通动作、情绪或推测写成事实。
 
 只输出 JSON：{"floors":[{"floor":0,"summary":"...","story_time":{"label":"次日清晨","kind":"relative","evidence":"次日清晨"},"facts":[{"slot":"promise|body|relationship|identity|possession|world|other","topic":"具体事项","subject":"...","object":"","value":"...","old_value":"","new_value":"","evidence":"...","why_persistent":"..."}]}]}`;
@@ -203,11 +207,18 @@ export const STATE_GC_SYSTEM = `你是状态表整理员。合并同类冗余条
 pinned 条目不得改动。
 只输出 JSON：{"keep_ids":["e_0001"],"drop_ids":["e_0002"],"merged":[{"from_ids":["e_0003","e_0004"],"entry":{"slot":"...","subject":"...","object":"","value":"..."}}]}`;
 
-export const STATE_REVIEW_SYSTEM = `你是“当前记忆”生命周期审计员，不是剧情作者。输入包含一批必须逐条判定的当前状态，以及带稳定 source_id 的完整剧情证据目录。
+export const STATE_REVIEW_SYSTEM = `你是“当前记忆”生命周期整理员，不是剧情作者。输入包含一批必须逐条判定的当前状态，以及带稳定 source_id 的剧情证据目录。
 
 目标：逐条判断状态是否仍描述“现在”。你不能新增、改写或补完事实；完整剧情历史会继续保存在逐楼记录和章节摘要中。这里提供的是按章节压缩的全局目录和最新尾部楼层，用于定位依据；后续程序会再展开对应范围的逐字原文。
 
-可以判定 retire 的情况：
+你要把每项建议为以下一种去向：
+- keep：现在仍成立且值得常驻；
+- dormant：没有失效，但当下长期不相关，只有再次提到对应人物、物品、地点或事项时才临时找回；不得仅因“很老”就休眠关键身份、秘密、关系、规则或持有物；
+- retire：已经被后文明确完成、取消、替代、纠正或证伪；
+- history：原本只描述某一时刻的一次性动作、姿势、情绪、普通位置或已经结束的场景状态，应保留在剧情历史而非当前事实；
+- uncertain：任何无法安全判断的情况。
+
+可以判定 retire/history 的情况：
 - 已经履行、取消、拒绝、过期或被后文替代的承诺与期限；
 - 已痊愈、已取出异物、已消失或被更新状态明确取代的身体状态；
 - 已经结束的冷战、分离、禁止接近、临时互动阶段，且后文已建立更新的关系状态；
@@ -215,22 +226,24 @@ export const STATE_REVIEW_SYSTEM = `你是“当前记忆”生命周期审计�
 - 只对当时场景成立的姿势、情绪、位置、普通行动或未决问题；
 - 后文明确证伪、纠正或完成的旧世界状态与持有物状态。
 
-不得仅因为条目很老、很少被提到或你觉得不重要就退役。身份秘密、关键持有物、世界规则和长期关系只要没有明确失效就必须 keep。证据不足必须 uncertain，不能猜。
+不得仅因为条目很老、很少被提到或你觉得不重要就 retire/history。身份秘密、关键持有物、世界规则和长期关系只要没有明确失效就必须 keep 或 dormant。证据不足必须 uncertain，不能猜。
+
+关键时序规则：retire 的证据必须来自该事实“建立/最后更新之后”的剧情。事实自身的建立证据只能证明它曾成立，绝不能证明它后来失效。history/scene_local 可以引用事实自身来证明它本来就是一次性场景事实。
 
 必须为“本批待审 ID”中的每个 ID 恰好返回一项，不能遗漏、重复或返回别的 ID：
-- verdict：keep|retire|uncertain；
-- category：retire 时填写 expired|superseded|redundant|scene_local|contradicted，否则为空；
+- verdict：keep|dormant|retire|history|uncertain；
+- category：retire/history 时填写 expired|superseded|redundant|scene_local|contradicted，否则为空；history 通常为 scene_local；
 - keep_id：同一事项已有更准确现行条目时填写那个事实 ID，否则为空；
 - reason：一句话说明判断；
 - confidence：high|medium；证据不足必须 medium + uncertain；
-- evidence：retire 时必须填写一项或多项 {source_id, quote}。source_id 必须来自全局剧情目录或 fact:ID；quote 必须逐字复制该来源中的连续文本。scene_local 可引用该事实自身的 fact:ID 来源，其余类别应指向明确显示失效的章节或楼层，供下一步展开原文。
+- evidence：retire/history 时必须填写一项或多项 {source_id, quote}。source_id 必须来自全局剧情目录或 fact:ID；quote 必须逐字复制该来源中的连续文本。history/scene_local 可引用该事实自身的 fact:ID；retire 必须指向建立或最后更新之后、明确显示失效的后文。
 
 只输出 JSON：{"decisions":[{"entry_id":"e_0001","verdict":"retire","category":"superseded","keep_id":"e_0009","reason":"后文已经恢复合作，旧冷战状态不再成立","confidence":"high","evidence":[{"source_id":"floor:88","quote":"双方恢复合作"}]}]}`;
 
-export const STATE_REVIEW_EVIDENCE_SYSTEM = `你是“当前记忆”退役证据员。输入只包含第一轮提出的退役项，以及它们所指章节范围内的逐楼记录和原文连续引句。
+export const STATE_REVIEW_EVIDENCE_SYSTEM = `你是“当前记忆”移出证据员。输入只包含第一轮提出的退役或历史归档项，以及它们所指章节范围内的逐楼记录和原文连续引句。
 
 你的任务不是重新讲剧情，而是判断每个退役项能否被这些原文直接支持：
-- supported：存在明确原文，能够证明旧状态已经结束、被替代、被证伪或本来就只是一时场景状态；
+- supported：存在明确原文，能够证明旧状态在建立之后已经结束、被替代、被证伪，或本来就只是一时场景状态；
 - unsupported：原文与判断相反，或明显张冠李戴；
 - uncertain：原文没有说清、只有角色单方面主张、或找不到足够依据。
 
@@ -238,12 +251,12 @@ export const STATE_REVIEW_EVIDENCE_SYSTEM = `你是“当前记忆”退役证�
 
 只输出 JSON：{"resolutions":[{"entry_id":"e_0001","verdict":"supported","reason":"原文明示双方结束冷战","evidence":[{"source_id":"floor:88","quote":"结束冷战并恢复合作"}]}]}`;
 
-export const STATE_REVIEW_VERIFY_SYSTEM = `你是第二名独立的“当前记忆”核验员。你只核验第一轮提出的退役项，不能因为第一轮已经同意而顺从它。
+export const STATE_REVIEW_VERIFY_SYSTEM = `你是第二名独立的“当前记忆”核验员。你只核验第一轮提出的退役或历史归档项，不能因为第一轮已经同意而顺从它。
 
 逐项检查：
-1. 引用是否真的支持“该状态现在已经失效”，而不只是说它曾经发生；
+1. retire 引用是否来自事实建立/最后更新之后并真的支持“该状态现在已经失效”，而不只是说它曾经发生；
 2. 人物、物品、地点、数字、时间和行动归属是否对应同一实体与属性；
-3. scene_local 是否确实只是当时动作、情绪、姿势、地点或一次性问题；
+3. history/scene_local 是否确实只是当时动作、情绪、姿势、普通地点或一次性问题；
 4. superseded/redundant 的 keep_id 是否真是同一事项的现行版本；
 5. 若证据可能只是角色误解、单方面主张或含糊暗示，必须 uncertain 或 reject。
 
