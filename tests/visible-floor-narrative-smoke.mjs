@@ -194,11 +194,17 @@ data.narrative_summaries.find(item => item.messageIndex === 25).segments = cross
 data.narrative_summaries.find(item => item.messageIndex === 25).story_time = crossing.results[0].storyTime;
 data.narrative_summaries.find(item => item.messageIndex === 26).segments = [{
     time_change: { label: '次日清晨', kind: 'relative', evidence: '次日清晨' },
-    events: [{ text: '众人继续赶路。', evidence: 'MESSAGE_26' }],
+    events: [{ text: '<user>质疑领地归属。', evidence: 'MESSAGE_26' }],
 }];
+data.narrative_summaries.find(item => item.messageIndex === 26).summary =
+    '<user>指出矿场和盐沼由自己打下，角色只在之后半年内扩建少量目标。';
 const timedRendered = renderL2Block(data, { forInjection: true, narrativeSources: allSources });
 assert.equal([...timedRendered.matchAll(/【剧情时间推进：次日清晨】/gu)].length, 1,
     '相邻楼重复的预设剧情时间只能注入一次');
 assert.match(timedRendered, /【剧情时间推进：当晚】[\s\S]*众人在旅店留宿[\s\S]*【剧情时间推进：次日清晨】[\s\S]*众人动身前往北门/u);
+assert.match(timedRendered, /本楼摘要：<user>指出矿场和盐沼由自己打下，角色只在之后半年内扩建少量目标。/u,
+    '结构化事件不得替换并丢失信息更完整的逐楼总结');
+assert.match(timedRendered, /补充事件：[\s\S]*<user>质疑领地归属。/u,
+    '完整逐楼总结和经过证据校验的结构化事件应同时进入 L2');
 
 console.log('visible-floor narrative smoke: chapters, current-user exclusion, atomic events, and cross-day time segments passed');

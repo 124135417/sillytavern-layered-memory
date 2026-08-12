@@ -187,11 +187,15 @@ function renderNarrativeItem(item, pairs, timeState = { current: '' }) {
         ? (item.start === item.end ? `第 ${item.start} 楼` : `第 ${item.start}–${item.end} 楼`)
         : narrativeRangeLabel(item.start, item.end, pairs);
     const structured = renderStructuredSegments(item.segments, timeState);
+    const summary = String(item.summary ?? '').trim();
     const storyTime = !structured && item.storyTime ? `（剧情时间：${item.storyTime}）` : '';
     if (!structured && item.storyTime) timeState.current = item.storyTimeEnd || item.storyTime;
+    const body = structured
+        ? [`本楼摘要：${summary}`, '补充事件：', structured].join('\n')
+        : summary;
     return [
         `### ${item.kind}｜${range}${storyTime}`,
-        structured || item.summary,
+        body,
         `【本段范围结束｜${range}】`,
     ].join('\n');
 }
