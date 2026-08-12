@@ -161,6 +161,43 @@ const manualOtherSwipe = replayBranchData(parentWithManualEdit, [pair(0), pair(1
 assert.equal(manualOtherSwipe.state_table.entries.some(entry => entry.id === 'e_0003'), false,
     'manual edits anchored to a different swipe must not replay');
 
+const parentWithBatchRemoval = structuredClone(parent);
+parentWithBatchRemoval.manual_events.push(
+    {
+        id: 'manual-delete-1', anchorFloorKey: 'u1+a1', anchorPairIndex: 1,
+        anchorFingerprint: pair(1).contentFingerprint, op: 'delete', reason: 'manual_retire', recordedAt: 250,
+        before: { id: 'e_0001', slot: 'identity', subject: '甲', value: '原身份' },
+    },
+    {
+        id: 'manual-delete-2', anchorFloorKey: 'u1+a1', anchorPairIndex: 1,
+        anchorFingerprint: pair(1).contentFingerprint, op: 'delete', reason: 'manual_retire', recordedAt: 251,
+        before: { id: 'e_0002', slot: 'possession', subject: '乙', value: '钥匙' },
+    },
+);
+const batchRemovalReplay = replayBranchData(parentWithBatchRemoval, [pair(0), pair(1)], 'Parent Chat');
+assert.equal(batchRemovalReplay.state_table.entries.length, 0,
+    'every fact in one bulk removal must replay independently on a matching branch');
+assert.deepEqual(batchRemovalReplay.manual_events.filter(event => event.reason === 'manual_retire').map(event => event.id),
+    ['manual-delete-1', 'manual-delete-2']);
+
+const parentWithArchiveRestore = structuredClone(parent);
+parentWithArchiveRestore.retired_facts = [{
+    id: 'retired-1',
+    entry: { id: 'e_0004', slot: 'other', subject: '丙', value: '旧归档' },
+    anchorFloorKey: 'u1+a1', anchorPairIndex: 1, anchorFingerprint: pair(1).contentFingerprint,
+}];
+parentWithArchiveRestore.manual_events.push({
+    id: 'manual-restore-1', anchorFloorKey: 'u1+a1', anchorPairIndex: 1,
+    anchorFingerprint: pair(1).contentFingerprint, op: 'upsert', reason: 'manual_restore_archived', recordedAt: 252,
+    archiveKey: 'retired_facts', archiveId: 'retired-1',
+    after: { id: 'e_0004', slot: 'other', subject: '丙', value: '旧归档' },
+});
+const archiveRestoreReplay = replayBranchData(parentWithArchiveRestore, [pair(0), pair(1)], 'Parent Chat');
+assert.equal(archiveRestoreReplay.state_table.entries.some(entry => entry.id === 'e_0004'), true,
+    'restoring an archived fact must replay into current memory');
+assert.equal(archiveRestoreReplay.retired_facts.some(item => item.id === 'retired-1'), false,
+    'a replayed restoration must not leave a duplicate in the archive');
+
 activeMetadata.layered_memory = structuredClone(replayed);
 const { rollbackFloor } = await import('../src/merge.js');
 await rollbackFloor('u1+a1');

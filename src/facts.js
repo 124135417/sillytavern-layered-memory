@@ -154,7 +154,10 @@ export function factCandidateView(data) {
             && (entry.object || '') === (candidate.fact.object || ''));
         let status = 'unselected';
         let reason = '这条内容已被发现，但尚未加入当前事实。';
-        if (decision?.action === 'dismiss') {
+        if (decision?.action === 'delete') {
+            status = 'dismissed';
+            reason = '你已永久删除这条旧发现；除非出现新的剧情证据，否则它不会重新加入当前记忆。';
+        } else if (decision?.action === 'dismiss') {
             status = 'dismissed';
             reason = '你已选择不采用这条内容。';
         } else if (exact) {
@@ -171,6 +174,23 @@ export function factCandidateView(data) {
         }
         return { ...candidate, status, reason, activeEntryId: exact?.id || null };
     }).sort((a, b) => Number(b.floor ?? -1) - Number(a.floor ?? -1));
+}
+
+/** Block only a deleted discovery (or the same old evidence), never later evidence. */
+export function isFactCandidateDeleted(data, candidate) {
+    const decisions = [...(data.fact_decisions || [])].reverse();
+    const exact = decisions.find(item => item.candidateId === candidate?.id);
+    if (exact) return exact.action === 'delete';
+    const valueDeletion = decisions.find(item => item.action === 'delete'
+        && factValueKey(item.candidateSnapshot) === factValueKey(candidate?.fact));
+    if (!valueDeletion) return false;
+    const candidateFloor = Number(candidate?.floor);
+    const deletionFloor = Number(valueDeletion.anchorPairIndex);
+    if (!Number.isFinite(candidateFloor) || !Number.isFinite(deletionFloor) || deletionFloor < 0) return false;
+    if (candidateFloor < deletionFloor) return true;
+    return candidateFloor === deletionFloor
+        && candidate?.contentFingerprint
+        && candidate.contentFingerprint === valueDeletion.anchorFingerprint;
 }
 
 function appendDecision(data, candidate, action, anchor = {}) {
@@ -240,5 +260,13 @@ export function dismissFactCandidate(data, candidateIdValue, anchor = {}) {
     const candidate = ensureFactLedger(data).find(item => item.id === candidateIdValue);
     if (!candidate) return false;
     appendDecision(data, candidate, 'dismiss', anchor);
+    return true;
+}
+
+/** Durable manual-deletion tombstone for one immutable discovery. */
+export function deleteFactCandidate(data, candidateIdValue, anchor = {}) {
+    const candidate = ensureFactLedger(data).find(item => item.id === candidateIdValue);
+    if (!candidate) return false;
+    appendDecision(data, candidate, 'delete', anchor);
     return true;
 }

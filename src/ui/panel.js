@@ -41,6 +41,14 @@ import { recordManualEvent } from '../branch.js';
 import { displayEntityName, displayNarrativeText, usableMemoryEntries } from '../quality.js';
 import { activateEditedFactCandidate, activateFactCandidate, dismissFactCandidate, factCandidateView } from '../facts.js';
 import {
+    commitFactMutation,
+    invalidateStagedOrganization,
+    permanentlyDeleteCurrentFacts,
+    restoreArchivedFact,
+    retireCurrentFacts,
+    visibleFactIds,
+} from '../fact-management.js';
+import {
     applyStagedOrganization,
     applyStateReviewBatch,
     discardStagedOrganization,
@@ -69,6 +77,10 @@ let lastDrawerTrigger = null;
 let lastConnectionTest = null;
 let settingsDirty = false;
 let currentFactView = 'active';
+let bulkFactMode = false;
+let selectedFactIds = new Set();
+let factMutationSaving = false;
+let factMutationStatus = '';
 let hostInertSnapshot = [];
 
 function setHostInert(inert) {
@@ -757,6 +769,10 @@ function renderStateTab() {
     const data = getChatData();
     const rebuildSnapshot = getHistoryRebuildSnapshot();
     const entries = usableMemoryEntries(data);
+    const currentEntryIds = new Set(entries.map(entry => entry.id));
+    if (!factMutationSaving) {
+        selectedFactIds = new Set([...selectedFactIds].filter(id => currentEntryIds.has(id)));
+    }
     const candidates = factCandidateView(data);
     const inactiveCandidates = candidates.filter(item => !['active', 'dismissed'].includes(item.status));
     const quarantined = data.quarantined_entries || [];
@@ -838,10 +854,15 @@ function renderStateTab() {
         retired: retiredFacts,
         historical: historicalFacts,
     };
+    const archiveKeys = {
+        dormant: 'dormant_facts',
+        retired: 'retired_facts',
+        historical: 'historical_facts',
+    };
     const archiveLabels = { dormant: '休眠记忆', retired: '已退役', historical: '剧情历史' };
     const archived = archiveViews[currentFactView] || [];
     const archiveList = archived.length
-        ? `<div class="lm-discovery-list">${archived.map(item => renderArchivedFactCard(item, archiveLabels[currentFactView])).join('')}</div>`
+        ? `<div class="lm-discovery-list">${archived.map(item => renderArchivedFactCard(item, archiveLabels[currentFactView], archiveKeys[currentFactView])).join('')}</div>`
         : `<div class="lm-empty-state lm-compact-empty"><h3>还没有${archiveLabels[currentFactView] || '归档记忆'}</h3><p>大整理采用后，对应条目会保留在这里，不会丢失原文依据。</p></div>`;
     const displayedGroups = currentFactView === 'active' ? groups
         : Object.hasOwn(archiveViews, currentFactView) ? archiveList
@@ -870,6 +891,7 @@ function renderStateTab() {
                         <option value="">全部类型</option>
                         ${SLOTS.map(slot => `<option value="${slot}">${escapeHtml(SLOT_LABELS[slot])}</option>`).join('')}
                     </select>
+                    ${currentFactView === 'active' ? `<button type="button" class="lm-button lm-button-secondary lm-bulk-toggle" id="lm-bulk-manage" aria-pressed="${bulkFactMode ? 'true' : 'false'}"><span class="fa-solid fa-list-check" aria-hidden="true"></span><span>${bulkFactMode ? '退出批量管理' : '批量管理'}</span></button>` : ''}
                     <button type="button" class="lm-button lm-button-secondary" id="lm-reorganize-state"><span class="fa-solid fa-broom" aria-hidden="true"></span><span>重新整理当前记忆</span></button>
                     <button type="button" class="lm-button lm-button-secondary" id="lm-proof-now"><span class="fa-solid fa-spell-check" aria-hidden="true"></span><span>检查记忆</span></button>
                     <button type="button" class="lm-button lm-button-primary" id="lm-add-entry"><span aria-hidden="true">＋</span> 添加记忆</button>
@@ -878,13 +900,27 @@ function renderStateTab() {
                     <span>${escapeHtml(viewMeta.description)}</span>
                     <small>${viewMeta.count} 条</small>
                 </div>
-                <div id="lm-memory-groups">${displayedGroups}</div>
+                <div id="lm-memory-groups" class="${bulkFactMode && currentFactView === 'active' ? 'lm-bulk-mode' : ''}">${displayedGroups}</div>
                 <p class="lm-no-results" hidden>没有找到匹配的记忆。可以试试人物名、物品名或聊天楼层。</p>
+                ${currentFactView === 'active' && bulkFactMode ? renderBulkFactActionBar() : ''}
             </main>
             ${renderTaskRail()}
         </div>
         ${renderInjectionFooter()}
     `;
+}
+
+function renderBulkFactActionBar() {
+    const selected = selectedFactIds.size;
+    return `<section class="lm-bulk-action-bar" aria-label="批量记忆操作">
+        <div class="lm-bulk-summary">
+            <strong><span data-bulk-count>${selected}</span> 条已选择</strong>
+            <span class="lm-bulk-status" aria-live="polite">${escapeHtml(factMutationStatus)}</span>
+        </div>
+        <button type="button" class="lm-text-button" id="lm-select-visible">全选当前筛选结果</button>
+        <button type="button" class="lm-button lm-button-primary" id="lm-bulk-retire" ${selected && !factMutationSaving ? '' : 'disabled'}>移出当前记忆</button>
+        <button type="button" class="lm-button lm-button-danger" id="lm-bulk-delete" ${selected && !factMutationSaving ? '' : 'disabled'}>永久删除</button>
+    </section>`;
 }
 
 function renderFactCandidateCard(candidate) {
@@ -910,7 +946,7 @@ function renderFactCandidateCard(candidate) {
     </article>`;
 }
 
-function renderArchivedFactCard(record, label) {
+function renderArchivedFactCard(record, label, archiveKey) {
     const fact = record?.entry || {};
     const subject = fact.object
         ? `${displayEntityName(fact.subject)} → ${displayEntityName(fact.object)}`
@@ -924,6 +960,9 @@ function renderArchivedFactCard(record, label) {
         <p>${escapeHtml(readableCandidateText(fact.value, '事实内容未记录'))}</p>
         ${record?.reason ? `<p class="lm-discovery-reason">整理依据：${escapeHtml(record.reason)}</p>` : ''}
         ${fact.evidence ? `<details class="lm-evidence"><summary>查看原文依据</summary><blockquote>${escapeHtml(fact.evidence)}</blockquote></details>` : ''}
+        <div class="lm-discovery-actions">
+            <button type="button" class="lm-button lm-button-secondary" data-restore-archive data-archive-key="${escapeHtml(archiveKey)}" data-archive-id="${escapeHtml(record.id)}" ${factMutationSaving ? 'disabled' : ''}>恢复到当前记忆</button>
+        </div>
     </article>`;
 }
 
@@ -950,7 +989,8 @@ function renderMemoryCard(entry) {
     const floor = formatFloorLabel(entry.updated_floor ?? entry.established_floor);
     const searchable = [entry.subject, entry.object, entry.value, entry.evidence, floor].filter(Boolean).join(' ').toLowerCase();
     return `
-        <article class="lm-memory-card ${entry.pinned ? 'lm-pinned' : ''}" data-id="${escapeHtml(entry.id)}" data-search="${escapeHtml(searchable)}">
+        <article class="lm-memory-card ${entry.pinned ? 'lm-pinned' : ''} ${bulkFactMode ? 'lm-bulk-selectable' : ''} ${selectedFactIds.has(entry.id) ? 'lm-bulk-selected' : ''}" data-id="${escapeHtml(entry.id)}" data-search="${escapeHtml(searchable)}">
+            ${bulkFactMode ? `<label class="lm-bulk-selector"><input type="checkbox" data-bulk-fact value="${escapeHtml(entry.id)}" aria-label="选择 ${escapeHtml(`${subjectName}：${entry.value || '未填写事实'}`)}" ${selectedFactIds.has(entry.id) ? 'checked' : ''}/><span aria-hidden="true"></span></label>` : ''}
             <div class="lm-card-leading">
                 <div class="lm-card-title"><strong>${subject}</strong><span>${escapeHtml(floor)}</span></div>
                 <p>${escapeHtml(entry.value || '未填写事实')}</p>
@@ -1138,8 +1178,19 @@ function renderInjectionFooter() {
 function bindStateTab(body) {
     body.querySelectorAll('[data-fact-view]').forEach(button => button.addEventListener('click', () => {
         currentFactView = button.dataset.factView;
+        if (currentFactView !== 'active') {
+            bulkFactMode = false;
+            selectedFactIds.clear();
+        }
         renderActiveTab();
     }));
+    body.querySelector('#lm-bulk-manage')?.addEventListener('click', () => {
+        if (factMutationSaving) return;
+        bulkFactMode = !bulkFactMode;
+        selectedFactIds.clear();
+        renderActiveTab();
+        document.querySelector('#lm-bulk-manage')?.focus();
+    });
     bindQueueControls(body);
     body.querySelectorAll('[data-dismiss-notice]').forEach(button => button.addEventListener('click', async () => {
         const id = button.closest('[data-notice-id]')?.dataset.noticeId;
@@ -1215,6 +1266,7 @@ function bindStateTab(body) {
         };
         data.state_table.entries.push(entry);
         data.state_table.version += 1;
+        invalidateStagedOrganization(data);
         recordManualEvent(data, { op: 'upsert', before, after: entry, reason: 'manual_add' });
         await saveChatData(data);
         recordMigrationEdit({ beforeEntry: before, afterEntry: entry, op: 'add' });
@@ -1224,6 +1276,30 @@ function bindStateTab(body) {
     body.querySelector('#lm-add-entry')?.addEventListener('click', addEntry);
     body.querySelector('[data-empty-add]')?.addEventListener('click', addEntry);
 
+    const currentVisibleFactIds = () => visibleFactIds([...body.querySelectorAll('.lm-memory-card[data-id]')].map(card => ({
+        id: card.dataset.id,
+        hidden: card.hidden || card.closest('.lm-memory-group')?.hidden,
+    })));
+    const refreshBulkControls = () => {
+        const visibleIds = currentVisibleFactIds();
+        const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedFactIds.has(id));
+        body.querySelectorAll('[data-bulk-fact]').forEach(input => {
+            input.checked = selectedFactIds.has(input.value);
+            input.disabled = factMutationSaving;
+            input.closest('.lm-memory-card')?.classList.toggle('lm-bulk-selected', input.checked);
+        });
+        const count = body.querySelector('[data-bulk-count]');
+        if (count) count.textContent = String(selectedFactIds.size);
+        const selectVisible = body.querySelector('#lm-select-visible');
+        if (selectVisible) {
+            selectVisible.textContent = allVisibleSelected ? '取消选择当前筛选结果' : '全选当前筛选结果';
+            selectVisible.disabled = factMutationSaving || visibleIds.length === 0;
+        }
+        for (const selector of ['#lm-bulk-retire', '#lm-bulk-delete']) {
+            const button = body.querySelector(selector);
+            if (button) button.disabled = factMutationSaving || selectedFactIds.size === 0;
+        }
+    };
     const applyMemoryFilter = () => {
         const query = body.querySelector('#lm-memory-search')?.value.trim().toLowerCase() || '';
         const slot = body.querySelector('#lm-slot-filter')?.value || '';
@@ -1251,9 +1327,104 @@ function bindStateTab(body) {
         if (empty) {
             empty.hidden = visible > 0 || getChatData().state_table.entries.length === 0;
         }
+        refreshBulkControls();
     };
     body.querySelector('#lm-memory-search')?.addEventListener('input', applyMemoryFilter);
     body.querySelector('#lm-slot-filter')?.addEventListener('change', applyMemoryFilter);
+    body.querySelectorAll('[data-bulk-fact]').forEach(input => input.addEventListener('change', () => {
+        if (input.checked) selectedFactIds.add(input.value);
+        else selectedFactIds.delete(input.value);
+        refreshBulkControls();
+    }));
+    body.querySelector('#lm-select-visible')?.addEventListener('click', () => {
+        if (factMutationSaving) return;
+        const visibleIds = currentVisibleFactIds();
+        const shouldClear = visibleIds.length > 0 && visibleIds.every(id => selectedFactIds.has(id));
+        for (const id of visibleIds) {
+            if (shouldClear) selectedFactIds.delete(id);
+            else selectedFactIds.add(id);
+        }
+        refreshBulkControls();
+    });
+
+    const runBulkFactMutation = async action => {
+        if (factMutationSaving || selectedFactIds.size === 0) return;
+        const data = getChatData();
+        const ids = [...selectedFactIds];
+        const selected = data.state_table.entries.filter(entry => selectedFactIds.has(entry.id));
+        if (!selected.length) return;
+        const deleting = action === 'delete';
+        const confirmed = await openConfirmDialog({
+            kicker: deleting ? '批量永久删除' : '批量移出当前记忆',
+            title: deleting ? `永久删除这 ${selected.length} 条记忆？` : `把这 ${selected.length} 条移出当前记忆？`,
+            description: deleting
+                ? '这些旧发现会留下删除标记，除非后续剧情出现新的证据，否则不会被自动加回来。'
+                : '它们会进入“退役”，不再随每轮聊天发送；之后仍可逐条恢复。',
+            details: [`本次共处理 ${selected.length} 条`, ...selected.slice(0, 4).map(entry => `${entry.subject || '未命名'}：${entry.value || '未填写事实'}`)],
+            confirmLabel: deleting ? `永久删除 ${selected.length} 条` : `移出 ${selected.length} 条`,
+            cancelLabel: '取消',
+            tone: deleting ? 'danger' : 'default',
+        });
+        if (!confirmed || factMutationSaving) return;
+        factMutationSaving = true;
+        factMutationStatus = '正在保存…';
+        let result;
+        try {
+            result = await commitFactMutation(data, target => (
+                deleting ? permanentlyDeleteCurrentFacts(target, ids) : retireCurrentFacts(target, ids)
+            ), {
+                onOptimistic: () => renderActiveTab(),
+                onRollback: () => renderActiveTab(),
+            });
+        } catch (error) {
+            factMutationSaving = false;
+            factMutationStatus = '';
+            renderActiveTab();
+            toastr?.error?.(`保存失败，刚才的 ${selected.length} 条改动已全部恢复。`);
+            return;
+        }
+        for (const entry of result.affected || []) {
+            recordMigrationEdit({ beforeEntry: entry, afterEntry: null, op: 'delete' });
+        }
+        selectedFactIds.clear();
+        factMutationSaving = false;
+        factMutationStatus = '';
+        updateInjection();
+        renderActiveTab();
+        toastr?.success?.(deleting
+            ? `已永久删除 ${result.affected.length} 条记忆。`
+            : `已将 ${result.affected.length} 条记忆移入退役，可随时恢复。`);
+    };
+    body.querySelector('#lm-bulk-retire')?.addEventListener('click', () => runBulkFactMutation('retire'));
+    body.querySelector('#lm-bulk-delete')?.addEventListener('click', () => runBulkFactMutation('delete'));
+
+    body.querySelectorAll('[data-restore-archive]').forEach(button => button.addEventListener('click', async () => {
+        if (factMutationSaving) return;
+        const data = getChatData();
+        const archiveKey = button.dataset.archiveKey;
+        const archiveId = button.dataset.archiveId;
+        const record = data[archiveKey]?.find(item => item.id === archiveId);
+        if (!record?.entry) return;
+        factMutationSaving = true;
+        factMutationStatus = '正在保存…';
+        try {
+            await commitFactMutation(data, target => restoreArchivedFact(target, archiveKey, archiveId), {
+                onOptimistic: () => renderActiveTab(),
+                onRollback: () => renderActiveTab(),
+            });
+        } catch (error) {
+            factMutationSaving = false;
+            factMutationStatus = '';
+            renderActiveTab();
+            toastr?.error?.('保存失败，这条记忆仍保留在原归档中。');
+            return;
+        }
+        factMutationSaving = false;
+        factMutationStatus = '';
+        updateInjection();
+        renderActiveTab();
+        toastr?.success?.('已恢复到当前记忆。');
+    }));
 
     body.querySelectorAll('.lm-discovery-card[data-candidate-id]').forEach(card => {
         const candidateId = card.dataset.candidateId;
@@ -1263,6 +1434,7 @@ function bindStateTab(body) {
         };
         card.querySelector('[data-candidate-action="activate"]')?.addEventListener('click', async () => {
             const data = getChatData();
+            const versionBefore = Number(data.state_table.version || 0);
             const result = activateFactCandidate(data, candidateId, anchor());
             if (!result || result.error) {
                 const candidate = factCandidateView(data).find(item => item.id === candidateId);
@@ -1277,6 +1449,7 @@ function bindStateTab(body) {
                 }
                 recordManualEvent(data, { op: 'upsert', before: null, after: result.entry, reason: 'candidate_activate', sourceCandidate: result.candidate });
             }
+            if (Number(data.state_table.version || 0) !== versionBefore) invalidateStagedOrganization(data);
             await saveChatData(data);
             updateInjection();
             toastr?.success?.('已加入当前记忆，会用于你之后发起的聊天。');
@@ -1284,12 +1457,14 @@ function bindStateTab(body) {
         });
         card.querySelector('[data-candidate-action="edit"]')?.addEventListener('click', async () => {
             const data = getChatData();
+            const versionBefore = Number(data.state_table.version || 0);
             const candidate = factCandidateView(data).find(item => item.id === candidateId);
             const draft = await openEntryEditor(editableCandidateFact(candidate?.fact));
             if (!draft) return;
             const edited = activateEditedFactCandidate(data, candidateId, { ...draft, topic: candidate?.fact?.topic || draft.value, evidence: '' }, anchor());
             for (const replaced of edited?.replaced || []) recordManualEvent(data, { op: 'delete', before: replaced, after: null, reason: 'candidate_edit_superseded', sourceCandidate: edited.candidate });
             if (edited?.entry && !edited.existed) recordManualEvent(data, { op: 'upsert', before: null, after: edited.entry, reason: 'candidate_edit_activate', sourceCandidate: edited.candidate });
+            if (Number(data.state_table.version || 0) !== versionBefore) invalidateStagedOrganization(data);
             await saveChatData(data);
             updateInjection();
             renderActiveTab();
@@ -1346,6 +1521,8 @@ function bindStateTab(body) {
                 const data = getChatData();
                 const before = structuredClone(e);
                 e.pinned = !e.pinned;
+                data.state_table.version += 1;
+                invalidateStagedOrganization(data);
                 recordManualEvent(data, { op: 'upsert', before, after: e, reason: 'manual_pin' });
                 await saveChatData(data);
                 renderActiveTab();
@@ -1365,6 +1542,7 @@ function bindStateTab(body) {
             Object.assign(e, draft);
             e.source = e.source === 'auto' ? 'manual' : e.source;
             data.state_table.version += 1;
+            invalidateStagedOrganization(data);
             recordManualEvent(data, { op: 'upsert', before, after: e, reason: 'manual_edit' });
             await saveChatData(data);
             recordMigrationEdit({ beforeEntry: before, afterEntry: e, op: 'update' });
@@ -1372,6 +1550,7 @@ function bindStateTab(body) {
             renderActiveTab();
         });
         li.querySelector('[data-act="del"]')?.addEventListener('click', async () => {
+            if (factMutationSaving) return;
             const data = getChatData();
             const found = data.state_table.entries.find(x => x.id === id);
             if (!found) return;
@@ -1387,10 +1566,22 @@ function bindStateTab(body) {
                 return;
             }
             const before = structuredClone(found);
-            data.state_table.entries = data.state_table.entries.filter(x => x.id !== id);
-            data.state_table.version += 1;
-            recordManualEvent(data, { op: 'delete', before, after: null, reason: 'manual_delete' });
-            await saveChatData(data);
+            factMutationSaving = true;
+            factMutationStatus = '正在保存…';
+            try {
+                await commitFactMutation(data, target => permanentlyDeleteCurrentFacts(target, [id]), {
+                    onOptimistic: () => renderActiveTab(),
+                    onRollback: () => renderActiveTab(),
+                });
+            } catch (error) {
+                factMutationSaving = false;
+                factMutationStatus = '';
+                renderActiveTab();
+                toastr?.error?.('保存失败，这条记忆已恢复。');
+                return;
+            }
+            factMutationSaving = false;
+            factMutationStatus = '';
             recordMigrationEdit({ beforeEntry: before, afterEntry: null, op: 'delete' });
             updateInjection();
             renderActiveTab();
@@ -1947,6 +2138,7 @@ function bindReviewTab(body) {
         });
         li.querySelector('[data-act="approve"]')?.addEventListener('click', async () => {
             const data = getChatData();
+            const versionBefore = Number(data.state_table.version || 0);
             const item = data.review_queue.find(x => x.id === id);
             if (!item) {
                 return;
@@ -2063,6 +2255,7 @@ function bindReviewTab(body) {
                 applied = true;
             }
             if (!applied) return;
+            if (Number(data.state_table.version || 0) !== versionBefore) invalidateStagedOrganization(data);
             data.review_queue = data.review_queue.filter(x => x.id !== id);
             await saveChatData(data);
             updateInjection();

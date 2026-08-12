@@ -56,6 +56,7 @@ const { EMPTY_CHAT_DATA } = await import('../src/constants.js');
 const { ensureMessageIds, getPairs } = await import('../src/ids.js');
 const { normalizeExtractOutput, validateEntry } = await import('../src/validate.js');
 const { mergeExtractResult, rollbackFloor } = await import('../src/merge.js');
+const { permanentlyDeleteCurrentFacts } = await import('../src/fact-management.js');
 const { renderL1Block, renderL2Block } = await import('../src/render.js');
 const { updateInjection } = await import('../src/inject.js');
 const { testAuxModelConnection } = await import('../src/aux-model.js');
@@ -112,6 +113,21 @@ assert.deepEqual(merged, { applied: 1, discarded: 0, conflicts: 0 });
 assert.match(renderL1Block(chatData), /护送她到北港/);
 assert.equal(chatData.turn_summaries.length, 1, '逐轮整理应同时保存剧情记录');
 assert.equal(chatData.floor_events.length, 1, '逐轮整理应保存可供 Fork 重放的楼层事件');
+const mergedEntryId = chatData.state_table.entries[0].id;
+permanentlyDeleteCurrentFacts(chatData, [mergedEntryId]);
+const blockedOldEvidence = await mergeExtractResult(normalized, {
+    pipeline: 'per_floor', sourceText: '周衡答应护送林晚到北港', stateTable: chatData.state_table,
+    floorKey: 'floor-1', contentFingerprint: 'floor-1-content', pairIndex: 1, floorLabel: 1, source: 'auto', persist: false,
+});
+assert.deepEqual(blockedOldEvidence, { applied: 0, discarded: 1, conflicts: 0 },
+    'permanent deletion must block the same old discovery if its floor is extracted again');
+const acceptedNewEvidence = await mergeExtractResult(normalized, {
+    pipeline: 'per_floor', sourceText: '周衡答应护送林晚到北港', stateTable: chatData.state_table,
+    floorKey: 'floor-6', contentFingerprint: 'floor-6-content', pairIndex: 6, floorLabel: 6, source: 'auto', persist: false,
+});
+assert.deepEqual(acceptedNewEvidence, { applied: 1, discarded: 0, conflicts: 0 },
+    'later evidence may establish the same fact again after deletion');
+await rollbackFloor('floor-6');
 assert.equal((await rollbackFloor('floor-1')), 1, '按楼回滚应移除变更');
 assert.equal(chatData.state_table.entries.length, 0);
 assert.equal(chatData.turn_summaries.length, 0, '按楼回滚必须同时移除剧情记录');

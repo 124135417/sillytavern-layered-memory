@@ -65,7 +65,15 @@ export function recordFloorEvent(data, event) {
     } else data.floor_events.push(normalized);
 }
 
-export function recordManualEvent(data, { op, before = null, after = null, reason = 'manual', sourceCandidate = null }) {
+export function recordManualEvent(data, {
+    op,
+    before = null,
+    after = null,
+    reason = 'manual',
+    sourceCandidate = null,
+    archiveKey = null,
+    archiveId = null,
+}) {
     if (op !== 'upsert' && op !== 'delete') return null;
     const anchor = currentAnchor();
     const event = {
@@ -82,6 +90,8 @@ export function recordManualEvent(data, { op, before = null, after = null, reaso
         sourceFloorKey: sourceCandidate?.floorKey || null,
         sourcePairIndex: Number.isFinite(Number(sourceCandidate?.floor)) ? Number(sourceCandidate.floor) : null,
         sourceFingerprint: sourceCandidate?.contentFingerprint || null,
+        archiveKey,
+        archiveId,
         recordedAt: Date.now(),
     };
     data.manual_events = Array.isArray(data.manual_events) ? data.manual_events : [];
@@ -275,6 +285,10 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
         data[key] = (parentData[key] || [])
             .filter(item => withinTrustedPrefix(item)
                 && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')).map(clone);
+    }
+    for (const event of data.manual_events.filter(item => item.reason === 'manual_restore_archived')) {
+        if (!['retired_facts', 'dormant_facts', 'historical_facts'].includes(event.archiveKey)) continue;
+        data[event.archiveKey] = data[event.archiveKey].filter(item => item.id !== event.archiveId);
     }
     // A branch can change which old states are still current. Keep the durable
     // retirement history above, but require a fresh lifecycle pass for this branch.

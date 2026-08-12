@@ -1,7 +1,7 @@
 import { appendLog, getChatData, saveChatData } from './settings.js';
 import { validateEntry, validateUpdateId } from './validate.js';
 import { recordFloorEvent } from './branch.js';
-import { factIdentityKey, makeFactCandidate, upsertFactCandidate } from './facts.js';
+import { factIdentityKey, isFactCandidateDeleted, makeFactCandidate, upsertFactCandidate } from './facts.js';
 import { normalizeStoryTime } from './story-time.js';
 import { locateFactEvidence } from './fact-source.js';
 
@@ -64,6 +64,19 @@ export function mergeExtractResult(normalized, ctx) {
 
     for (let itemIndex = 0; itemIndex < normalized.adds.length; itemIndex += 1) {
         const item = normalized.adds[itemIndex];
+        const discovery = makeFactCandidate({
+            fact: item,
+            floor: Number(ctx.pairIndex ?? ctx.floorLabel),
+            floorKey,
+            contentFingerprint: ctx.contentFingerprint || null,
+            source: ctx.source || 'auto',
+            index: itemIndex,
+        });
+        if (isFactCandidateDeleted(data, discovery)) {
+            data.fact_ledger = upsertFactCandidate(data.fact_ledger, discovery);
+            discarded += 1;
+            continue;
+        }
         const dup = findDuplicate(table.entries, item);
         if (dup) {
             // treat as update

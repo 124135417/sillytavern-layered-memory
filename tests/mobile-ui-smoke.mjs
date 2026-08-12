@@ -27,6 +27,14 @@ assert.match(panel, /id="lm-proof-now"[^>]*>[\s\S]{0,160}检查记忆<\/span>/u,
     'the mobile proofread action must retain visible text');
 assert.match(panel, /id="lm-add-entry"[^>]*>[\s\S]{0,160}添加记忆<\/button>/u,
     'the mobile add action must retain visible text');
+assert.match(panel, /id="lm-bulk-manage"[^>]*aria-pressed=/u,
+    'bulk management must expose a real toggle state');
+assert.match(panel, /data-bulk-fact[^>]*aria-label="选择/u,
+    'each bulk checkbox must have a fact-specific accessible name');
+assert.match(panel, /id="lm-select-visible">全选当前筛选结果/u,
+    'select-all must state that it affects only the current filter');
+assert.match(panel, /aria-live="polite">\$\{escapeHtml\(factMutationStatus\)\}/u,
+    'optimistic persistence status must be announced without stealing focus');
 
 assert.match(css, /--lm-space-1: 4px;[\s\S]*--lm-space-8: 32px;/u,
     'the shared 4/8/12/16/24/32 spacing scale must exist');
@@ -66,6 +74,12 @@ assert.match(css, /@media \(max-width: 360px\) and \(max-height: 650px\)[\s\S]*\
 assert.match(css, /\.lm-page-heading \{ display: grid; grid-template-columns: minmax\(0, 1fr\)/u,
     'phone page headings must use one column');
 assert.match(css, /\.lm-button-danger/u, 'dangerous actions need a distinct button style');
+assert.match(css, /\.lm-bulk-action-bar \{[\s\S]*position: sticky;[\s\S]*bottom: 12px;/u,
+    'desktop bulk actions must remain reachable while reviewing a long list');
+assert.match(css, /@media \(max-width: 599px\)[\s\S]*\.lm-bulk-action-bar \{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u,
+    'phone bulk actions must fit without horizontal overflow');
+assert.match(css, /\.lm-bulk-selector \{[\s\S]*width: 44px;[\s\S]*min-height: 44px;/u,
+    'bulk selection must retain a coarse-pointer touch target');
 assert.doesNotMatch(css, /lm-disclosure-label::before/u,
     'disclosure text must be real DOM text rather than generated CSS content');
 assert.doesNotMatch(css, /font-size:\s*(?:[0-9]|1[0-3])px/u,
