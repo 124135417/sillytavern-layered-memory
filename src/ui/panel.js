@@ -759,9 +759,12 @@ function renderStateTab() {
     });
     const rebuild = data.history_rebuild;
     const rebuilding = rebuild && !['complete', 'idle'].includes(rebuild.status);
+    const lifecycle = data.state_lifecycle || {};
+    const retiredCount = Array.isArray(data.retired_facts) ? data.retired_facts.length : 0;
     const stagedFactCount = Array.isArray(rebuild?.entries) ? rebuild.entries.length : 0;
     const ignoredFactCount = Array.isArray(rebuild?.warnings) ? rebuild.warnings.length : 0;
     const statusBannerItems = [
+        lifecycle.status === 'running' ? `<aside class="lm-quality-alert"><div><strong>正在逐条重审当前记忆</strong><p>已检查 ${Number(lifecycle.active_run?.cursor || 0)} / ${Number(lifecycle.active_run?.candidate_ids?.length || entries.length)} 条；审计完成前不会应用半批删除。</p></div></aside>` : '',
         rebuilding ? `<aside class="lm-quality-alert"><div><strong>当前显示旧正式事实 ${entries.length} 条；新暂存事实 ${stagedFactCount} 条</strong><p>暂存结果尚未加入当前记忆；完成章节后才会一次性采用。${ignoredFactCount ? `另有 ${ignoredFactCount} 条因原文证据不可靠而被忽略。` : ''}</p></div></aside>` : '',
         quarantined.length ? `<aside class="lm-quality-alert"><div><strong>已隔离 ${quarantined.length} 条异常结果</strong><p>它们缺少主体、事实或原文证据，不会加入当前记忆。完成安全重建后会由新结果替换。</p></div></aside>` : '',
         notices.length ? `<section class="lm-notice-strip" aria-label="状态通知">${notices.slice(-3).map(item => `<article data-notice-id="${escapeHtml(item.id)}"><span>${escapeHtml(item.note || '')}</span><button type="button" class="lm-text-button" data-dismiss-notice>知道了</button></article>`).join('')}</section>` : '',
@@ -811,7 +814,7 @@ function renderStateTab() {
                         <button type="button" data-fact-view="all" class="${currentFactView === 'all' ? 'active' : ''}"><strong>${candidates.length}</strong><span>${FACT_VIEW_LABELS.all}</span></button>
                         <button type="button" data-fact-view="inactive" class="${currentFactView === 'inactive' ? 'active' : ''}"><strong>${inactiveCandidates.length}</strong><span>${FACT_VIEW_LABELS.inactive}</span></button>
                     </div>
-                    <p class="lm-fact-explainer">当前记忆会随你之后发出的聊天请求一起提供给模型；发现历史只用于查看和追溯。</p>
+                    <p class="lm-fact-explainer">当前记忆会随你之后发出的聊天请求一起提供给模型；发现历史只用于查看和追溯。${retiredCount ? `另有 ${retiredCount} 条已退出当前状态，仍保留证据和恢复记录。` : ''}</p>
                 </section>
                 <div class="lm-memory-toolbar">
                     <label class="lm-search">
@@ -1202,22 +1205,23 @@ function bindStateTab(body) {
         const data = getChatData();
         const existing = (data.review_queue || []).find(item => item.kind === STATE_REVIEW_KIND);
         const confirmed = await openConfirmDialog({
-            kicker: '当前记忆整理',
-            title: '检查哪些旧状态已经失效？',
-            description: '记忆模型会对照剧情提出移出建议，但现在不会改动任何记忆。完成后仍要由你在“待处理”里确认。',
+            kicker: '当前记忆大整理',
+            title: '立即重审整张当前记忆？',
+            description: '插件会逐条核对完整剧情。只有两轮审计一致、引用有效且高置信的旧状态会自动移出当前记忆；不确定项仍放到“待处理”。',
             details: [
                 `本次检查 ${usableMemoryEntries(data).length} 条当前记忆`,
-                '置顶和人工编写的记忆不会进入自动移出建议',
-                existing ? '新的检查结果会替换尚未处理的上一批建议' : '检查结果只保存为一批待处理建议',
+                '置顶和人工编写的记忆永远不会被自动移出',
+                '被移出的条目仍保留原文证据、退役原因和恢复记录',
+                existing ? '新的不确定项会替换尚未处理的上一批整理建议' : '不确定项会保存为一批待处理建议',
             ],
-            confirmLabel: '开始检查',
+            confirmLabel: '开始大整理',
             cancelLabel: '暂不检查',
             tone: 'default',
         });
         if (!confirmed) return;
-        const jobId = enqueue('state_review', {}, QUEUE_PRIORITY.state_review);
-        if (jobId) toastr?.info?.('正在重新整理当前记忆；完成后会放到“待处理”。');
-        else toastr?.info?.('当前记忆已经在重新整理中。');
+        const jobId = enqueue('state_review', { automatic: true, reason: 'manual_full_audit', requestedAt: Date.now() }, QUEUE_PRIORITY.state_review);
+        if (jobId) toastr?.info?.('正在逐条重审当前记忆；高置信旧状态会自动退役，不确定项会进入“待处理”。');
+        else toastr?.info?.('当前记忆已经在进行大整理。');
     });
 
     body.querySelector('#lm-report-error')?.addEventListener('click', () => openReportDialog({}));

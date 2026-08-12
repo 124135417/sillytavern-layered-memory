@@ -8,6 +8,7 @@ import { QUEUE_PRIORITY } from './constants.js';
 import { enqueue } from './queue.js';
 import { extractAiBody } from './body.js';
 import { stripStyleResetCommands } from './style-reset.js';
+import { automaticStateReviewRequest } from './state-review.js';
 
 const extractCommitStateByChat = new WeakMap();
 const EXTRACT_MUTATION_KEYS = [
@@ -206,6 +207,7 @@ export async function handleExtractJob(payload) {
                 if (!payload.ignoreBaseline) {
                     maybeEnqueueChapter(pair.pairIndex);
                     maybeEnqueueProofread();
+                    maybeEnqueueStateLifecycleReview(pair.pairIndex);
                 }
                 return;
             } catch (err) {
@@ -256,6 +258,18 @@ function maybeEnqueueProofread() {
         enqueue('proofread', {}, QUEUE_PRIORITY.proofread);
         data.progress.pairs_since_proofread = 0;
     }
+}
+
+function maybeEnqueueStateLifecycleReview(pairIndex) {
+    const data = getChatData();
+    const settings = getSettings();
+    const size = settings.chapterSize || 25;
+    const liveOrdinal = Number(pairIndex) - getBaselinePair();
+    if (liveOrdinal <= 0 || liveOrdinal % size !== 0) return;
+    const payload = automaticStateReviewRequest(data, {
+        chapterSize: size,
+    });
+    if (payload) enqueue('state_review', payload, QUEUE_PRIORITY.state_review);
 }
 
 export async function extractFromChapterSummary({ chapter, stateTableSnapshot }) {

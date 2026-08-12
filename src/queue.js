@@ -188,6 +188,7 @@ function hydrateCurrentScope() {
 }
 
 function sameWork(a, type, payload) {
+    if (['state_review', 'state_gc'].includes(a.type) && ['state_review', 'state_gc'].includes(type)) return true;
     if (a.type !== type) return false;
     if (type === 'extract') return a.payload?.floorKey && a.payload.floorKey === payload.floorKey;
     if (type === 'narrative_summary') {

@@ -203,11 +203,11 @@ export const STATE_GC_SYSTEM = `你是状态表整理员。合并同类冗余条
 pinned 条目不得改动。
 只输出 JSON：{"keep_ids":["e_0001"],"drop_ids":["e_0002"],"merged":[{"from_ids":["e_0003","e_0004"],"entry":{"slot":"...","subject":"...","object":"","value":"..."}}]}`;
 
-export const STATE_REVIEW_SYSTEM = `你是“当前记忆”审计员，不是剧情作者。输入包含带 ID 的当前状态表和按楼层连续的剧情记忆。
+export const STATE_REVIEW_SYSTEM = `你是“当前记忆”生命周期审计员，不是剧情作者。输入包含一批必须逐条判定的当前状态，以及带稳定 source_id 的完整剧情证据目录。
 
-目标：找出状态表中已经不再描述“现在”的条目。你只能建议把现有条目移出当前记忆，不能新增、改写或补完事实；完整剧情历史会继续保存在逐楼记录和章节摘要中。
+目标：逐条判断状态是否仍描述“现在”。你不能新增、改写或补完事实；完整剧情历史会继续保存在逐楼记录和章节摘要中。这里提供的是按章节压缩的全局目录和最新尾部楼层，用于定位依据；后续程序会再展开对应范围的逐字原文。
 
-可以建议移出的情况：
+可以判定 retire 的情况：
 - 已经履行、取消、拒绝、过期或被后文替代的承诺与期限；
 - 已痊愈、已取出异物、已消失或被更新状态明确取代的身体状态；
 - 已经结束的冷战、分离、禁止接近、临时互动阶段，且后文已建立更新的关系状态；
@@ -215,26 +215,75 @@ export const STATE_REVIEW_SYSTEM = `你是“当前记忆”审计员，不是�
 - 只对当时场景成立的姿势、情绪、位置、普通行动或未决问题；
 - 后文明确证伪、纠正或完成的旧世界状态与持有物状态。
 
-不得仅因为条目很老、很少被提到或你觉得不重要就移出。身份秘密、关键持有物、世界规则和长期关系只要没有明确失效就必须保留。不得建议移出 pinned 或 manual 条目。证据不足就不提建议。
+不得仅因为条目很老、很少被提到或你觉得不重要就退役。身份秘密、关键持有物、世界规则和长期关系只要没有明确失效就必须 keep。证据不足必须 uncertain，不能猜。
 
-每组 change：
-- retire_ids：应移出当前记忆的现有 ID；
-- keep_id：同一事项已有更准确现行条目时填写那个现有 ID，否则为空；
-- category：expired|superseded|redundant|scene_local|contradicted；
-- reason：用一句话说明后文如何使其失效；
-- confidence：high|medium。不要输出 low。
+必须为“本批待审 ID”中的每个 ID 恰好返回一项，不能遗漏、重复或返回别的 ID：
+- verdict：keep|retire|uncertain；
+- category：retire 时填写 expired|superseded|redundant|scene_local|contradicted，否则为空；
+- keep_id：同一事项已有更准确现行条目时填写那个事实 ID，否则为空；
+- reason：一句话说明判断；
+- confidence：high|medium；证据不足必须 medium + uncertain；
+- evidence：retire 时必须填写一项或多项 {source_id, quote}。source_id 必须来自全局剧情目录或 fact:ID；quote 必须逐字复制该来源中的连续文本。scene_local 可引用该事实自身的 fact:ID 来源，其余类别应指向明确显示失效的章节或楼层，供下一步展开原文。
 
-只输出 JSON：{"changes":[{"retire_ids":["e_0001"],"keep_id":"e_0009","category":"superseded","reason":"后文已经恢复合作，旧冷战状态不再成立","confidence":"high"}]}`;
+只输出 JSON：{"decisions":[{"entry_id":"e_0001","verdict":"retire","category":"superseded","keep_id":"e_0009","reason":"后文已经恢复合作，旧冷战状态不再成立","confidence":"high","evidence":[{"source_id":"floor:88","quote":"双方恢复合作"}]}]}`;
+
+export const STATE_REVIEW_EVIDENCE_SYSTEM = `你是“当前记忆”退役证据员。输入只包含第一轮提出的退役项，以及它们所指章节范围内的逐楼记录和原文连续引句。
+
+你的任务不是重新讲剧情，而是判断每个退役项能否被这些原文直接支持：
+- supported：存在明确原文，能够证明旧状态已经结束、被替代、被证伪或本来就只是一时场景状态；
+- unsupported：原文与判断相反，或明显张冠李戴；
+- uncertain：原文没有说清、只有角色单方面主张、或找不到足够依据。
+
+必须为每个输入 ID 恰好返回一项。supported 必须给出一项或多项 {source_id, quote}，source_id 必须是输入中的 floor:ID 或 fact:ID，quote 必须逐字复制其“可引用原文”中的连续文本。禁止引用章节摘要、事件转述、第一轮理由或你自己的改写。
+
+只输出 JSON：{"resolutions":[{"entry_id":"e_0001","verdict":"supported","reason":"原文明示双方结束冷战","evidence":[{"source_id":"floor:88","quote":"结束冷战并恢复合作"}]}]}`;
+
+export const STATE_REVIEW_VERIFY_SYSTEM = `你是第二名独立的“当前记忆”核验员。你只核验第一轮提出的退役项，不能因为第一轮已经同意而顺从它。
+
+逐项检查：
+1. 引用是否真的支持“该状态现在已经失效”，而不只是说它曾经发生；
+2. 人物、物品、地点、数字、时间和行动归属是否对应同一实体与属性；
+3. scene_local 是否确实只是当时动作、情绪、姿势、地点或一次性问题；
+4. superseded/redundant 的 keep_id 是否真是同一事项的现行版本；
+5. 若证据可能只是角色误解、单方面主张或含糊暗示，必须 uncertain 或 reject。
+
+必须为每个输入 ID 恰好返回一项。verdict 只能是 confirm|reject|uncertain。只输出 JSON：{"checks":[{"entry_id":"e_0001","verdict":"confirm","reason":"引用明确说明旧状态已被后文取代"}]}`;
 
 export const STATE_REVIEW_JSON_SCHEMA = {
     name: 'CurrentMemoryReview',
-    description: 'Review-only retirement proposals for obsolete current facts',
+    description: 'Complete per-entry lifecycle decisions for current facts',
     strict: false,
     value: {
         type: 'object',
         properties: {
-            changes: { type: 'array' },
+            decisions: { type: 'array' },
         },
-        required: ['changes'],
+        required: ['decisions'],
+    },
+};
+
+export const STATE_REVIEW_VERIFY_JSON_SCHEMA = {
+    name: 'CurrentMemoryRetirementVerification',
+    description: 'Independent verification of proposed current-fact retirements',
+    strict: false,
+    value: {
+        type: 'object',
+        properties: {
+            checks: { type: 'array' },
+        },
+        required: ['checks'],
+    },
+};
+
+export const STATE_REVIEW_EVIDENCE_JSON_SCHEMA = {
+    name: 'CurrentMemoryRetirementEvidence',
+    description: 'Exact raw-evidence resolution for proposed current-fact retirements',
+    strict: false,
+    value: {
+        type: 'object',
+        properties: {
+            resolutions: { type: 'array' },
+        },
+        required: ['resolutions'],
     },
 };

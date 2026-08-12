@@ -2,7 +2,7 @@ import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { summarizeChapterNotes, validateChapterArchive } from './archive.js';
 import { extractAiBody } from './body.js';
 import { buildKeywordIndex } from './chapter.js';
-import { QUEUE_PRIORITY, SLOTS } from './constants.js';
+import { EMPTY_CHAT_DATA, QUEUE_PRIORITY, SLOTS } from './constants.js';
 import { captureBranchCheckpoint } from './branch.js';
 import { getPairTexts, getPairs } from './ids.js';
 import { HISTORY_SEGMENT_JSON_SCHEMA, HISTORY_SEGMENT_SYSTEM } from './prompts.js';
@@ -176,6 +176,8 @@ function backupCurrent(data) {
         fact_ledger: clone(data.fact_ledger || []),
         fact_decisions: clone(data.fact_decisions || []),
         manual_events: clone(data.manual_events || []),
+        retired_facts: clone(data.retired_facts || []),
+        state_lifecycle: clone(data.state_lifecycle || null),
         history_backfill: clone(data.history_backfill || {}),
         review_queue: clone(data.review_queue || []),
         notices: clone(data.notices || []),
@@ -614,6 +616,7 @@ export async function handleHistoryRebuildCommit() {
     data.quarantined_entries = (data.quarantined_entries || []).filter(entry => entry.source === 'manual'
         || entry.pinned || entry.manual_override);
     data.review_queue = [];
+    data.state_lifecycle = clone(EMPTY_CHAT_DATA().state_lifecycle);
     data.progress.last_chapter_end_pair = Math.max(-1, ...data.chapters.map(chapter => Number(chapter.floor_range?.[1])).filter(Number.isFinite));
     data.progress.next_entry_seq = entryIds.peek();
     data.progress.next_chapter_seq = chapterIds.peek();
@@ -948,7 +951,7 @@ export async function restoreRebuildBackup() {
     if (!backup || ['running', 'stopping'].includes(data.history_rebuild?.status)) return false;
     for (const key of ['state_table', 'turn_summaries', 'floor_events', 'branch_checkpoints', 'chapters', 'volumes',
         'keyword_index', 'extracted_keys', 'quarantined_entries', 'history_backfill', 'review_queue', 'notices',
-        'progress', 'fact_ledger', 'fact_decisions', 'manual_events']) {
+        'progress', 'fact_ledger', 'fact_decisions', 'manual_events', 'retired_facts', 'state_lifecycle']) {
         data[key] = clone(backup[key]);
     }
     data.history_rebuild = null;

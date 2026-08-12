@@ -78,7 +78,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 export const EMPTY_CHAT_DATA = () => ({
-    version: 7,
+    version: 8,
     state_table: {
         version: 1,
         entries: [],
@@ -116,6 +116,18 @@ export const EMPTY_CHAT_DATA = () => ({
     fact_ledger: [],
     /** User choices over immutable discoveries; anchored for Fork-safe replay. */
     fact_decisions: [],
+    /** Facts removed from the current-state view, with their evidence and reason. */
+    retired_facts: [],
+    /** Durable cursor for full and incremental current-state lifecycle audits. */
+    state_lifecycle: {
+        version: 1,
+        status: 'idle',
+        active_run: null,
+        last_completed_at: null,
+        last_state_signature: '',
+        last_narrative_floor: -1,
+        last_result: null,
+    },
     /** Non-canon player/narrator discussions and their swipe-safe revisions. */
     backstage: {
         version: 1,
