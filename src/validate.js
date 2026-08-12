@@ -140,7 +140,8 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
     if (Array.isArray(raw.conflicts)) {
         for (const c of raw.conflicts) {
             if (c?.entry_id) {
-                out.conflicts.push({ entry_id: c.entry_id, note: c.note || '' });
+                const action = ['replace', 'retire', 'review'].includes(c.action) ? c.action : 'review';
+                out.conflicts.push({ entry_id: c.entry_id, action, note: c.note || '' });
             }
         }
     }

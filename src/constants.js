@@ -27,6 +27,7 @@ export const QUEUE_PRIORITY = {
     chapter_summary: 80,
     volume_compress: 60,
     proofread: 50,
+    state_review: 45,
     state_gc: 40,
     migrate: 10,
     migrate_complete: 9,

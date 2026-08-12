@@ -10,7 +10,13 @@ export const EXTRACT_SYSTEM = `你是逐轮剧情记录员兼事实记录员，�
 - 用户角色统一写作“<user>”；不要写“本轮”“用户输入”“AI 回复”等元话语。
 - 只写这一轮新发生的内容，不滚动重写以前的剧情。
 
-再检查持久事实：只记录已在文本中明确发生、之后仍会成立的变化，不推测、不补完、不评价重要性。
+再检查当前事实：L1 不是第二份剧情档案，只保存本楼结束后仍然成立、模型在下一轮需要知道的状态。已经结束的事件留在 turn_summary，不要再复制进 facts。
+- 承诺在本楼内已经履行、取消或过期，只属于历史，不得新增为当前事实；如果状态表里仍有对应旧条目，放进 conflicts。
+- 临时情绪、姿势、所在房间、普通动作、当场说过的一句话、一次性谈话结果都不属于当前事实。
+- 身体条目记录本楼结束时仍存在的伤势、永久变化或能力状态；伤势已经痊愈、异物已经取出时，必须指出旧条目已失效。
+- 关系条目只描述当前关系状态，不能把已经结束的疏远、冷战、禁止接近等阶段继续保留为现在。
+- 如果本楼明确更新状态表里的同一事项，尽量逐字复用旧条目的 topic，让程序更新原条目；不要另造近义 topic 留下两个版本。
+- 不推测、不补完、不因戏剧性评价重要性。没有需要模型持续记住的当前状态时，facts 全部输出“无变化”是正确结果。
 
 另写 story_time：只记录本轮原文明示的剧情内时间。格式为 {"label":"次日清晨","kind":"absolute|relative|time_of_day","evidence":"原文连续引文"}；没有明确依据就写 null，禁止用现实聊天时间或自行推算日期。
 
@@ -27,7 +33,7 @@ AI 回复可能同时包含叙事正文，以及预设附加的回顾摘要、�
 - possession：关键持有物变更了吗？
 - world：产生新的世界事实了吗（仅扮演中新产生的）？
 - other：其它会持续为真的事实？必须含 why_persistent。
-- conflicts：表中条目与本楼矛盾时填写 [{entry_id, note}]
+- conflicts：表中条目已被本楼替换、解决、取消、证伪或需要人工核对时填写 [{entry_id, action:"replace|retire|review", note}]。这里只提出待确认建议，不得省略 entry_id。
 
 每条事实必须含 topic 与 evidence。topic 是这条事实具体在说什么，例如“右手图案”“组织内职位”“停止讨论某人”，用于区分同一人物的多条承诺、身份或物品；不同事项不得使用同一个 topic。evidence 是原文中的直接引文（≤50字）。引不出原句就不许填。
 单条 value ≤80 字。只输出 JSON，不要其它说明。
@@ -196,3 +202,39 @@ export const STATE_GC_SYSTEM = `你是状态表整理员。合并同类冗余条
 禁止新增事实，禁止改写尚存条目的含义或措辞（除非合并时保留原意）。
 pinned 条目不得改动。
 只输出 JSON：{"keep_ids":["e_0001"],"drop_ids":["e_0002"],"merged":[{"from_ids":["e_0003","e_0004"],"entry":{"slot":"...","subject":"...","object":"","value":"..."}}]}`;
+
+export const STATE_REVIEW_SYSTEM = `你是“当前记忆”审计员，不是剧情作者。输入包含带 ID 的当前状态表和按楼层连续的剧情记忆。
+
+目标：找出状态表中已经不再描述“现在”的条目。你只能建议把现有条目移出当前记忆，不能新增、改写或补完事实；完整剧情历史会继续保存在逐楼记录和章节摘要中。
+
+可以建议移出的情况：
+- 已经履行、取消、拒绝、过期或被后文替代的承诺与期限；
+- 已痊愈、已取出异物、已消失或被更新状态明确取代的身体状态；
+- 已经结束的冷战、分离、禁止接近、临时互动阶段，且后文已建立更新的关系状态；
+- 同一事项的重复或旧版本，后文已有一个更准确的现有条目；
+- 只对当时场景成立的姿势、情绪、位置、普通行动或未决问题；
+- 后文明确证伪、纠正或完成的旧世界状态与持有物状态。
+
+不得仅因为条目很老、很少被提到或你觉得不重要就移出。身份秘密、关键持有物、世界规则和长期关系只要没有明确失效就必须保留。不得建议移出 pinned 或 manual 条目。证据不足就不提建议。
+
+每组 change：
+- retire_ids：应移出当前记忆的现有 ID；
+- keep_id：同一事项已有更准确现行条目时填写那个现有 ID，否则为空；
+- category：expired|superseded|redundant|scene_local|contradicted；
+- reason：用一句话说明后文如何使其失效；
+- confidence：high|medium。不要输出 low。
+
+只输出 JSON：{"changes":[{"retire_ids":["e_0001"],"keep_id":"e_0009","category":"superseded","reason":"后文已经恢复合作，旧冷战状态不再成立","confidence":"high"}]}`;
+
+export const STATE_REVIEW_JSON_SCHEMA = {
+    name: 'CurrentMemoryReview',
+    description: 'Review-only retirement proposals for obsolete current facts',
+    strict: false,
+    value: {
+        type: 'object',
+        properties: {
+            changes: { type: 'array' },
+        },
+        required: ['changes'],
+    },
+};

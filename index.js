@@ -14,6 +14,7 @@ import { handleProofreadJob } from './src/proofread.js';
 import { rebuildAndEnqueuePending, registerHandler, releaseInactiveQueueScopes } from './src/queue.js';
 import { appendLog, getChatData, getSettings } from './src/settings.js';
 import { handleStateGcJob } from './src/state-gc.js';
+import { handleStateReviewJob } from './src/state-review.js';
 import { injectPanel, registerMessageMenu, renderActiveTab } from './src/ui/panel.js';
 import { handleVolumeCompressJob } from './src/volume.js';
 import {
@@ -53,6 +54,7 @@ function wireHandlers() {
     registerHandler('chapter_summary', handleChapterSummaryJob);
     registerHandler('volume_compress', handleVolumeCompressJob);
     registerHandler('proofread', handleProofreadJob);
+    registerHandler('state_review', handleStateReviewJob);
     registerHandler('state_gc', handleStateGcJob);
     registerHandler('migrate_chapter', handleMigrateChapterJob);
     registerHandler('migrate_extract_chapter', handleMigrateExtractChapterJob);
@@ -296,7 +298,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.16.9`);
+    console.log(`[${MODULE}] 已加载 v0.17.0`);
 });
 
 export async function onActivate() {

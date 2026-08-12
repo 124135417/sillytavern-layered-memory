@@ -184,6 +184,7 @@ export function mergeExtractResult(normalized, ctx) {
             id: crypto.randomUUID(),
             kind: 'flag_conflict',
             entry_id: c.entry_id,
+            action: c.action || 'review',
             note: c.note || '',
             floorKey,
             createdAt: Date.now(),

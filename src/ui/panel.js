@@ -31,7 +31,7 @@ import {
 import { QUEUE_PRIORITY } from '../constants.js';
 import { getChatData, getSettings, saveChatData, saveSettings } from '../settings.js';
 import { buildCoreMemoryParts, getPresetAnchorStatus, updateInjection } from '../inject.js';
-import { renderL4Block } from '../render.js';
+import { renderL4Block, selectL1Entries } from '../render.js';
 import { retrieveHits } from '../retrieve.js';
 import { estimateTokens } from '../tokens.js';
 import { extractAiBody } from '../body.js';
@@ -39,6 +39,7 @@ import { recordManualEvent } from '../branch.js';
 import { displayEntityName, displayNarrativeText, usableMemoryEntries } from '../quality.js';
 import { markChapterStaleForTurnSummaryEdit } from '../chapter.js';
 import { activateEditedFactCandidate, activateFactCandidate, dismissFactCandidate, factCandidateView } from '../facts.js';
+import { applyStateReviewBatch, stateReviewEntries, STATE_REVIEW_KIND } from '../state-review.js';
 import { openConfirmDialog, openFormDialog, openMessageDialog, openTextEditorDialog } from './dialogs.js';
 import {
     FACT_STATUS_LABELS,
@@ -822,6 +823,7 @@ function renderStateTab() {
                         <option value="">全部类型</option>
                         ${SLOTS.map(slot => `<option value="${slot}">${escapeHtml(SLOT_LABELS[slot])}</option>`).join('')}
                     </select>
+                    <button type="button" class="lm-button lm-button-secondary" id="lm-reorganize-state"><span class="fa-solid fa-broom" aria-hidden="true"></span><span>重新整理当前记忆</span></button>
                     <button type="button" class="lm-button lm-button-secondary" id="lm-proof-now"><span class="fa-solid fa-spell-check" aria-hidden="true"></span><span>检查记忆</span></button>
                     <button type="button" class="lm-button lm-button-primary" id="lm-add-entry"><span aria-hidden="true">＋</span> 添加记忆</button>
                 </div>
@@ -954,6 +956,7 @@ function renderTask(job, state) {
         chapter_summary: '整理一段剧情摘要',
         volume_compress: '精简很久以前的剧情摘要',
         proofread: '检查已有记忆',
+        state_review: '检查哪些当前记忆已经失效',
         state_gc: '合并重复的记忆',
         migrate_chapter: '补写旧聊天的剧情摘要',
         migrate_extract_chapter: '补记旧聊天的重要内容',
@@ -1038,6 +1041,7 @@ function renderInjectionFooter() {
     const l4 = settings.l4Enabled ? renderL4Block(hits, settings.budgetL4) : '';
     const presentation = injectionPresentation(false);
     const anchor = presetAnchorPresentation(getPresetAnchorStatus(context));
+    const l1Selection = selectL1Entries(data, settings.budgetL1, context);
     const preview = [
         coreMemory && `【核心剧情记忆】\n${coreMemory}`,
         l4 && `【与当前剧情相关的旧记忆】\n${l4}`,
@@ -1049,7 +1053,7 @@ function renderInjectionFooter() {
                 <strong>${presentation.title}</strong>
             </div>
             <div class="lm-budget-chips">
-                <span>当前事实 ${estimateTokens(l1)} / ${settings.budgetL1}</span>
+                <span>当前事实 ${l1Selection.entries.length} / ${l1Selection.total} 条 · ${estimateTokens(l1)} / ${settings.budgetL1}</span>
                 <span>剧情摘要 ${estimateTokens(l2)}</span>
                 <span>近期完整原文 ${coreParts.rawWindow.tokens} / ${settings.recentRawTokens}</span>
                 <span>相关旧记忆 ${settings.l4Enabled ? `${hits.length} 条` : '未开启'}</span>
@@ -1192,6 +1196,28 @@ function bindStateTab(body) {
     body.querySelector('#lm-proof-now')?.addEventListener('click', () => {
         enqueue('proofread', {}, QUEUE_PRIORITY.proofread);
         toastr?.info?.('已经开始检查记忆');
+    });
+
+    body.querySelector('#lm-reorganize-state')?.addEventListener('click', async () => {
+        const data = getChatData();
+        const existing = (data.review_queue || []).find(item => item.kind === STATE_REVIEW_KIND);
+        const confirmed = await openConfirmDialog({
+            kicker: '当前记忆整理',
+            title: '检查哪些旧状态已经失效？',
+            description: '记忆模型会对照剧情提出移出建议，但现在不会改动任何记忆。完成后仍要由你在“待处理”里确认。',
+            details: [
+                `本次检查 ${usableMemoryEntries(data).length} 条当前记忆`,
+                '置顶和人工编写的记忆不会进入自动移出建议',
+                existing ? '新的检查结果会替换尚未处理的上一批建议' : '检查结果只保存为一批待处理建议',
+            ],
+            confirmLabel: '开始检查',
+            cancelLabel: '暂不检查',
+            tone: 'default',
+        });
+        if (!confirmed) return;
+        const jobId = enqueue('state_review', {}, QUEUE_PRIORITY.state_review);
+        if (jobId) toastr?.info?.('正在重新整理当前记忆；完成后会放到“待处理”。');
+        else toastr?.info?.('当前记忆已经在重新整理中。');
     });
 
     body.querySelector('#lm-report-error')?.addEventListener('click', () => openReportDialog({}));
@@ -1770,22 +1796,29 @@ function bindChaptersTab(body) {
 }
 
 function renderReviewTab() {
-    const q = (getChatData().review_queue || []).filter(item => item.kind !== 'alert');
-    const entries = getChatData().state_table?.entries || [];
+    const data = getChatData();
+    const q = (data.review_queue || []).filter(item => item.kind !== 'alert');
+    const entries = data.state_table?.entries || [];
     let html = `<div class="lm-page-heading"><div><span class="lm-kicker">待处理</span><h3>待处理</h3><p>插件不会悄悄修改有冲突的记忆。请在这里决定是否采用建议。</p></div><div class="lm-page-count">${q.length} 项</div></div><div class="lm-page-content lm-review-content"><div class="lm-review-list">`;
     for (const item of q) {
-        const kind = item.kind === 'flag_conflict' ? '两条记忆互相矛盾' : item.kind === 'proofread' ? '检查后发现的建议' : item.kind === 'volume_compress_ask' ? '整理旧摘要前确认' : '需要注意';
-        const risk = item.kind === 'flag_conflict' ? 'error' : item.kind === 'proofread' ? 'warning' : 'info';
+        const cleanupView = item.kind === STATE_REVIEW_KIND ? stateReviewEntries(data, item) : null;
+        const kind = item.kind === STATE_REVIEW_KIND ? '当前记忆重新整理建议'
+            : item.kind === 'flag_conflict' && item.action === 'retire' ? '旧状态可能已经失效'
+                : item.kind === 'flag_conflict' ? '两条记忆互相矛盾'
+                    : item.kind === 'proofread' ? '检查后发现的建议'
+                        : item.kind === 'volume_compress_ask' ? '整理旧摘要前确认' : '需要注意';
+        const risk = item.kind === 'flag_conflict' ? 'error' : item.kind === 'proofread' || item.kind === STATE_REVIEW_KIND ? 'warning' : 'info';
         const relatedEntry = entries.find(entry => entry.id === item.entry_id);
-        const title = item.subject || relatedEntry?.subject || '一条记忆建议';
-        const needsEdit = (item.kind === 'flag_conflict' && !item.candidate_id)
+        const title = cleanupView ? `建议移出 ${cleanupView.retired.length} 条过期或重复状态` : item.subject || relatedEntry?.subject || '一条记忆建议';
+        const needsEdit = (item.kind === 'flag_conflict' && item.action !== 'retire' && !item.candidate_id)
             || (item.kind === 'proofread' && item.op !== 'add');
-        const canApprove = item.kind === 'volume_compress_ask' || Boolean(item.candidate_id)
+        const canApprove = item.kind === STATE_REVIEW_KIND || item.kind === 'volume_compress_ask' || Boolean(item.candidate_id)
             || item.kind === 'proofread' || Boolean(relatedEntry);
-        const approveLabel = needsEdit ? '查看并编辑' : '采用这条建议';
+        const approveLabel = item.kind === STATE_REVIEW_KIND ? '查看并确认' : needsEdit ? '查看并编辑' : '采用这条建议';
+        const cleanupDetails = cleanupView ? `<details class="lm-evidence"><summary>查看全部整理建议</summary><ul>${cleanupView.retired.map(({ entry, proposal }) => `<li><strong>${escapeHtml(displayEntityName(entry.subject))}</strong>：${escapeHtml(entry.value)}<br><small>${escapeHtml(proposal.reason)}</small></li>`).join('')}</ul></details>` : '';
         html += `<article class="lm-review-card" data-rid="${escapeHtml(item.id)}">
             <div class="lm-review-mark" data-state="${risk}" aria-hidden="true"></div>
-            <div class="lm-review-copy"><span class="lm-state-tag" data-state="${risk}">${kind}</span><h4>${escapeHtml(title)}</h4><p>${escapeHtml(formatReviewNote(item.note || item.value || '需要你的确认'))}</p>${item.object ? `<small>关联：${escapeHtml(item.object)}</small>` : ''}</div>
+            <div class="lm-review-copy"><span class="lm-state-tag" data-state="${risk}">${kind}</span><h4>${escapeHtml(title)}</h4><p>${escapeHtml(formatReviewNote(cleanupView ? '这些条目仍保留在完整剧情与发现历史中；确认后只会移出“当前记忆”。' : item.note || item.value || '需要你的确认'))}</p>${cleanupDetails}${item.object ? `<small>关联：${escapeHtml(item.object)}</small>` : ''}</div>
             <div class="lm-row-actions">
                 <button type="button" data-act="reject" class="lm-text-button">不采用</button>
                 ${canApprove ? `<button type="button" data-act="approve" class="lm-button lm-button-primary">${approveLabel}</button>` : ''}
@@ -1825,7 +1858,30 @@ function bindReviewTab(body) {
                 return;
             }
             let applied = false;
-            if (item.kind === 'volume_compress_ask') {
+            if (item.kind === STATE_REVIEW_KIND) {
+                const view = stateReviewEntries(data, item);
+                const confirmed = await openConfirmDialog({
+                    kicker: '应用整理结果',
+                    title: `从当前记忆移出 ${view.retired.length} 条？`,
+                    description: '这里只改变下一次发送给模型的当前状态；逐楼记录、章节摘要和发现历史不会删除。',
+                    details: view.retired.map(({ entry, proposal }) => `${displayEntityName(entry.subject)}：${entry.value}（${proposal.reason}）`),
+                    confirmLabel: '应用这些修改',
+                    cancelLabel: '返回继续检查',
+                    tone: 'danger',
+                });
+                if (!confirmed) return;
+                const result = applyStateReviewBatch(data, item);
+                if (result.error === 'stale') {
+                    toastr?.error?.('当前记忆在检查后又发生了变化。请重新运行一次整理，旧建议没有被应用。');
+                    return;
+                }
+                if (result.error) {
+                    toastr?.error?.('这批建议已经没有可安全应用的内容，旧建议仍会保留。');
+                    return;
+                }
+                toastr?.success?.(`已从当前记忆移出 ${result.removed} 条旧状态。`);
+                applied = true;
+            } else if (item.kind === 'volume_compress_ask') {
                 enqueue('volume_compress', { confirmed: true, force: true }, QUEUE_PRIORITY.volume_compress);
                 applied = true;
             } else if (item.kind === 'proofread') {
@@ -1877,6 +1933,26 @@ function bindReviewTab(body) {
                     }
                     recordManualEvent(data, { op: 'upsert', before: null, after: result.entry, reason: 'conflict_candidate_approval', sourceCandidate: result.candidate });
                 }
+                applied = true;
+            } else if (item.kind === 'flag_conflict' && item.action === 'retire' && item.entry_id) {
+                const current = data.state_table.entries.find(entry => entry.id === item.entry_id);
+                if (!current || current.pinned || current.source === 'manual' || current.manual_override) {
+                    toastr?.error?.('这条记忆已不存在或受人工保护，待处理项没有被应用。');
+                    return;
+                }
+                const confirmed = await openConfirmDialog({
+                    kicker: '旧状态失效',
+                    title: '把这条内容移出当前记忆？',
+                    description: item.note || '后文可能已经使这条状态失效。确认后仍可在发现历史中追溯。',
+                    details: [current.value],
+                    confirmLabel: '移出当前记忆',
+                    cancelLabel: '继续保留',
+                    tone: 'danger',
+                });
+                if (!confirmed) return;
+                recordManualEvent(data, { op: 'delete', before: current, after: null, reason: 'conflict_retire_approval' });
+                data.state_table.entries = data.state_table.entries.filter(entry => entry.id !== current.id);
+                data.state_table.version += 1;
                 applied = true;
             } else if (item.kind === 'flag_conflict' && item.entry_id) {
                 const current = data.state_table.entries.find(entry => entry.id === item.entry_id);

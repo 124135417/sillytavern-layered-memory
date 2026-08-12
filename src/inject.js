@@ -190,10 +190,6 @@ export function updateInjection({
     if (estimateTokens(renderL2Block(data, { forBudget: true, narrativeSources })) > (settings.budgetL2 || 5000)) {
         enqueue('volume_compress', { reason: 'budget', narrative: true }, QUEUE_PRIORITY.volume_compress);
     }
-    if (estimateTokens(l1) > (settings.budgetL1 || 2000) * 0.95) {
-        enqueue('state_gc', {}, QUEUE_PRIORITY.state_gc);
-    }
-
     let l4 = '';
     if (settings.l4Enabled) {
         const hits = retrieveHits(data, settings.budgetL4, {

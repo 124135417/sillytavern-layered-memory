@@ -2,18 +2,25 @@ import { SLOT_LABELS, SLOTS } from './constants.js';
 import { estimateTokens, truncateToBudget } from './tokens.js';
 import { usableMemoryEntries } from './quality.js';
 
-export function renderL1Block(data, budget = 2000, context = null) {
-    const entries = usableMemoryEntries(data);
-    if (!entries.length) {
-        return '';
-    }
-    const lines = [
-        '## 长期记忆使用规则',
-        '- 最近保留的完整对话负责最新变化；若与旧摘要冲突，以最近完整对话为准。',
-        '- 当前事实描述现在仍然成立的状态；剧情摘要只说明过去发生过什么，不得反向覆盖当前状态。',
-        '- 只需自然地保持连续性，不要复述、解释或提及记忆系统。',
-        '',
-    ];
+function numericFloor(entry) {
+    const value = Number(entry?.updated_floor ?? entry?.established_floor);
+    return Number.isFinite(value) ? value : -1;
+}
+
+function isManualEntry(entry) {
+    return entry?.source === 'manual' || entry?.manual_override === true;
+}
+
+function compareL1Priority(a, b) {
+    if (Boolean(a?.pinned) !== Boolean(b?.pinned)) return a?.pinned ? -1 : 1;
+    if (isManualEntry(a) !== isManualEntry(b)) return isManualEntry(a) ? -1 : 1;
+    const floorDelta = numericFloor(b) - numericFloor(a);
+    if (floorDelta) return floorDelta;
+    return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
+function l1IdentityLines(context = null) {
+    const lines = [];
     const userName = String(context?.name1 || '').trim();
     const roleName = String(context?.name2 || context?.characters?.[context?.characterId]?.name || '').trim();
     if (userName || roleName) {
@@ -22,11 +29,42 @@ export function renderL1Block(data, budget = 2000, context = null) {
         if (roleName) lines.push(`- 当前角色卡：${roleName}`);
         lines.push('');
     }
+    return lines;
+}
+
+function l1HeaderLines(context = null, compact = false) {
+    if (compact) {
+        return [
+            '## 当前确立的事实',
+            '以下条目描述现在仍然成立的状态；若与最近完整原文冲突，以后者为准。',
+            '',
+        ];
+    }
+    const lines = [
+        '## 长期记忆使用规则',
+        '- 最近保留的完整对话负责最新变化；若与旧摘要冲突，以最近完整对话为准。',
+        '- 当前事实描述现在仍然成立的状态；剧情摘要只说明过去发生过什么，不得反向覆盖当前状态。',
+        '- 只需自然地保持连续性，不要复述、解释或提及记忆系统。',
+        '',
+    ];
+    lines.push(...l1IdentityLines(context));
     lines.push(
         '## 当前确立的事实',
         '以下是先前剧情中确立、至今仍然为真的事实。生成时必须与之保持一致，但不要主动复述或提及本列表的存在。',
         '',
     );
+    return lines;
+}
+
+function l1EntryLine(entry) {
+    const obj = entry.object ? `↔${entry.object}` : '';
+    const floor = formatFloor(entry.updated_floor ?? entry.established_floor);
+    const cause = entry.cause ? `（因${entry.cause}，${floor}）` : `（${floor}）`;
+    return `- ${entry.subject}${obj}：${entry.value}${cause}`;
+}
+
+function renderSelectedL1Entries(entries, context = null, { compact = false } = {}) {
+    const lines = l1HeaderLines(context, compact);
     for (const slot of SLOTS) {
         const group = entries.filter(e => e.slot === slot);
         if (!group.length) {
@@ -34,14 +72,61 @@ export function renderL1Block(data, budget = 2000, context = null) {
         }
         lines.push(`### ${SLOT_LABELS[slot]}`);
         for (const e of group) {
-            const obj = e.object ? `↔${e.object}` : '';
-            const floor = formatFloor(e.updated_floor ?? e.established_floor);
-            const cause = e.cause ? `（因${e.cause}，${floor}）` : `（${floor}）`;
-            lines.push(`- ${e.subject}${obj}：${e.value}${cause}`);
+            lines.push(l1EntryLine(e));
         }
         lines.push('');
     }
-    return truncateToBudget(lines.join('\n').trim(), budget);
+    return lines.join('\n').trim();
+}
+
+function l1CandidateOrder(entries) {
+    const ordered = [];
+    const seen = new Set();
+    const add = entry => {
+        if (!entry || seen.has(entry.id)) return;
+        seen.add(entry.id);
+        ordered.push(entry);
+    };
+    entries.filter(entry => entry.pinned || isManualEntry(entry)).sort(compareL1Priority).forEach(add);
+    for (const slot of SLOTS) {
+        entries.filter(entry => entry.slot === slot).sort(compareL1Priority).slice(0, 1).forEach(add);
+    }
+    entries.slice().sort(compareL1Priority).forEach(add);
+    return ordered;
+}
+
+function selectWithinBudget(entries, budget, context, compact) {
+    const selected = [];
+    for (const entry of l1CandidateOrder(entries)) {
+        const candidate = [...selected, entry];
+        const text = renderSelectedL1Entries(candidate, context, { compact });
+        if (estimateTokens(text) <= budget) selected.push(entry);
+    }
+    return {
+        entries: selected,
+        text: selected.length ? renderSelectedL1Entries(selected, context, { compact }) : '',
+    };
+}
+
+/** Select complete current facts before rendering so no entry is cut mid-sentence. */
+export function selectL1Entries(data, budget = 2000, context = null) {
+    const entries = usableMemoryEntries(data);
+    if (!entries.length || Number(budget) <= 0) {
+        return { entries: [], text: '', total: entries.length, omitted: entries.length, tokens: 0 };
+    }
+    const allowance = Math.max(1, Number(budget) || 0);
+    let selection = selectWithinBudget(entries, allowance, context, false);
+    if (!selection.entries.length) selection = selectWithinBudget(entries, allowance, context, true);
+    return {
+        ...selection,
+        total: entries.length,
+        omitted: Math.max(0, entries.length - selection.entries.length),
+        tokens: estimateTokens(selection.text),
+    };
+}
+
+export function renderL1Block(data, budget = 2000, context = null) {
+    return selectL1Entries(data, budget, context).text;
 }
 
 function validFloorRange(value) {
