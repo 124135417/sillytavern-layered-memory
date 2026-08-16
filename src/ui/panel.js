@@ -1860,7 +1860,7 @@ function renderTurnsTab() {
             const scene = item.scene_context || {};
             const sceneLabels = [scene.time, scene.location].filter(Boolean).map(value => `<em class="lm-time-label">${escapeHtml(value)}</em>`).join('');
             const status = scene.status === 'matched' ? '精确场景' : scene.status === 'inherited' ? '沿用上一角色楼' : '时间地点未识别';
-            return `<li><span>第 ${item.messageIndex} 楼 · ${item.role === 'user' ? '玩家' : '角色'}${item.manual_override ? '<em>人工修改</em>' : ''}${sceneLabels}</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p><small>${escapeHtml(status)}</small><button type="button" class="lm-text-button" data-narrative-edit="${escapeHtml(item.messageKey)}">编辑</button></li>`;
+            return `<li><span class="lm-turn-record-meta">第 ${item.messageIndex} 楼 · ${item.role === 'user' ? '玩家' : '角色'}${item.manual_override ? '<em>人工修改</em>' : ''}${sceneLabels}</span><p class="lm-turn-record-copy">${escapeHtml(displayNarrativeText(item.summary))}</p><small class="lm-turn-record-status">${escapeHtml(status)}</small><button type="button" class="lm-text-button lm-turn-record-action" data-narrative-edit="${escapeHtml(item.messageKey)}">编辑</button></li>`;
         }).join('')}</ol></details>`;
     }
     if (!records.length) {
@@ -1957,7 +1957,7 @@ function renderTurnSummaryDisclosure(items, { loose = false, draft = false, edit
         <summary><span>${escapeHtml(closedLabel)}</span></summary>
         ${loose ? '<p>这些记录还没有凑满一章；Fork 或精简到这里时，插件会直接使用它们。</p>' : ''}
         ${draft && partial ? '<p>这部分会保留为对话记录，不会因为不足一章而丢失；以后凑满章节所需记录后再合并。</p>' : ''}
-        <ol>${items.map(item => `<li><span>${pairFloorRangeLabel(item.pairIndex)}${item.manual_override ? '<em>人工修改</em>' : ''}${item.story_time?.label ? `<em class="lm-time-label">${escapeHtml(item.story_time.label)}</em>` : ''}</span><p>${escapeHtml(displayNarrativeText(item.summary))}</p>${editable ? `<button type="button" class="lm-text-button" data-turn-edit="${item.pairIndex}" data-draft="${draft ? 'true' : 'false'}">编辑</button>` : ''}</li>`).join('')}</ol>
+        <ol>${items.map(item => `<li><span class="lm-turn-record-meta">${pairFloorRangeLabel(item.pairIndex)}${item.manual_override ? '<em>人工修改</em>' : ''}${item.story_time?.label ? `<em class="lm-time-label">${escapeHtml(item.story_time.label)}</em>` : ''}</span><p class="lm-turn-record-copy">${escapeHtml(displayNarrativeText(item.summary))}</p>${editable ? `<button type="button" class="lm-text-button lm-turn-record-action" data-turn-edit="${item.pairIndex}" data-draft="${draft ? 'true' : 'false'}">编辑</button>` : ''}</li>`).join('')}</ol>
     </details>`;
 }
 

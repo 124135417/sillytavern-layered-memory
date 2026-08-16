@@ -1,4 +1,4 @@
-/* v0.16.2 filename is versioned so extension/CDN updates cannot retain stale backstage geometry. */
+/* v0.20.1 filename is versioned so extension/CDN updates cannot retain stale responsive geometry. */
 :root {
     --lm-bg: #121212;
     --lm-surface: #1b1b1b;
@@ -716,13 +716,21 @@ body.lm-memory-center-open {
 .lm-turn-records > summary::marker { color: var(--lm-accent); }
 .lm-turn-records > p { margin: 0 0 10px; color: var(--lm-muted); font-size: var(--lm-type-small); font-weight: var(--lm-weight-body); line-height: 1.55; }
 .lm-turn-records ol { display: grid; padding: 0; margin: 0; list-style: none; }
-.lm-turn-records li { display: grid; grid-template-columns: 80px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 0; border-top: 1px solid var(--lm-border); color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.6; }
-.lm-turn-records li > span { color: var(--lm-muted); font-weight: 700; white-space: nowrap; }
+.lm-turn-records li { display: grid; grid-template-columns: minmax(112px, .25fr) minmax(0, 1fr) max-content auto; gap: 12px; align-items: start; padding: 10px 0; border-top: 1px solid var(--lm-border); color: var(--lm-text); font-size: var(--lm-type-small); line-height: 1.6; }
+.lm-turn-record-meta,
+.lm-turn-records li > span { min-width: 0; color: var(--lm-muted); font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; white-space: normal; }
+.lm-turn-record-meta em,
 .lm-turn-records li > span em { display: block; color: var(--lm-accent); font-size: var(--lm-type-caption); font-style: normal; font-weight: 700; }
+.lm-turn-record-meta .lm-time-label,
 .lm-turn-records li > span .lm-time-label { color: var(--lm-text); }
 .lm-story-time { display: block; margin-top: 5px; color: var(--lm-text); font-size: var(--lm-type-small); font-weight: 700; }
 .lm-time-unknown { color: var(--lm-muted); }
+.lm-turn-record-copy,
 .lm-turn-records li > p { min-width: 0; margin: 0; color: var(--lm-text); font-weight: var(--lm-weight-body); overflow-wrap: anywhere; }
+.lm-turn-record-status,
+.lm-turn-records li > small { min-width: 0; color: var(--lm-faint); font-size: var(--lm-type-caption); line-height: 1.45; overflow-wrap: anywhere; }
+.lm-turn-record-action,
+.lm-turn-records li > button { align-self: start; justify-self: end; }
 .lm-turn-records-loose { width: 100%; max-width: none; margin: 0; padding: 0 var(--lm-card-padding) var(--lm-space-2); background: var(--lm-surface-soft); border: 1px solid var(--lm-border-strong); border-radius: var(--lm-radius-sm); }
 .lm-keywords { display: flex; flex-wrap: wrap; gap: 5px; }
 .lm-row-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 9px; }
@@ -891,6 +899,15 @@ body.lm-memory-center-open {
     .lm-injection-footer { grid-template-columns: 1fr auto; }
     .lm-budget-chips { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
     .lm-rebuild-workflows { grid-template-columns: 1fr; }
+    .lm-turn-records li { grid-template-columns: minmax(0, 1fr) auto; gap: var(--lm-space-1) var(--lm-space-3); }
+    .lm-turn-record-meta,
+    .lm-turn-records li > span { grid-column: 1; grid-row: 1; }
+    .lm-turn-record-copy,
+    .lm-turn-records li > p { grid-column: 1 / -1; grid-row: 2; }
+    .lm-turn-record-status,
+    .lm-turn-records li > small { grid-column: 1 / -1; grid-row: 3; }
+    .lm-turn-record-action,
+    .lm-turn-records li > button { grid-column: 2; grid-row: 1; }
 }
 
 @media (max-width: 599px) {
@@ -944,7 +961,6 @@ body.lm-memory-center-open {
     .lm-page-content { padding: var(--lm-space-4) var(--lm-page-gutter) var(--lm-space-6); }
     .lm-chapter-card > header { display: grid; }
     .lm-key-events li { grid-template-columns: 1fr; gap: 2px; }
-    .lm-turn-records li { grid-template-columns: 1fr; gap: 2px; }
     .lm-turn-records-loose { padding-right: var(--lm-card-padding); padding-left: var(--lm-card-padding); }
     .lm-notice-strip article { align-items: flex-start; }
     .lm-review-card { grid-template-columns: 3px 1fr; }

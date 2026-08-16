@@ -4,9 +4,9 @@
     "requires": [],
     "optional": [],
     "js": "index.js",
-    "css": "style-v0.16.2.css",
+    "css": "style-v0.20.1.css",
     "author": "124135417",
-    "version": "0.20.0",
+    "version": "0.20.1",
     "homePage": "https://github.com/124135417/sillytavern-layered-memory",
     "auto_update": true,
     "generate_interceptor": "layeredMemoryIntercept"

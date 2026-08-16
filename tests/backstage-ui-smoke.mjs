@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const [ui, css, manifest, index] = await Promise.all([
     readFile(new URL('../src/ui/backstage.js', import.meta.url), 'utf8'),
-    readFile(new URL('../style-v0.16.2.css', import.meta.url), 'utf8'),
+    readFile(new URL('../style-v0.20.1.css', import.meta.url), 'utf8'),
     readFile(new URL('../manifest.json', import.meta.url), 'utf8'),
     readFile(new URL('../index.js', import.meta.url), 'utf8'),
 ]);
@@ -81,8 +81,8 @@ assert.match(css, /\.lm-backstage-compose\[hidden\] \{ display: none; \}/u,
 
 const parsed = JSON.parse(manifest);
 assert.equal(parsed.js, 'index.js');
-assert.equal(parsed.css, 'style-v0.16.2.css');
-assert.equal(parsed.version, '0.20.0');
+assert.equal(parsed.css, 'style-v0.20.1.css');
+assert.equal(parsed.version, '0.20.1');
 assert.match(index, /injectBackstageUi\(\)/u);
 assert.match(index, /MESSAGE_SENT[\s\S]*handleBackstageMessageSent/u);
 assert.match(index, /MESSAGE_RECEIVED[\s\S]*handleBackstageMessageReceived/u);

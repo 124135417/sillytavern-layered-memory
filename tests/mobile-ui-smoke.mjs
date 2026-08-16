@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const [panel, css] = await Promise.all([
     readFile(new URL('../src/ui/panel.js', import.meta.url), 'utf8'),
-    readFile(new URL('../style-v0.16.2.css', import.meta.url), 'utf8'),
+    readFile(new URL('../style-v0.20.1.css', import.meta.url), 'utf8'),
 ]);
 
 assert.match(panel, /id="lm-tab-turns"[^>]*data-tab="turns"[^>]*>对话记录</u);
@@ -41,6 +41,12 @@ assert.match(css, /--lm-space-1: 4px;[\s\S]*--lm-space-8: 32px;/u,
 assert.match(css, /--lm-page-gutter: 24px/u, 'desktop page gutters must be 24px');
 assert.match(css, /@media \(max-width: 599px\)[\s\S]*--lm-page-gutter: 16px/u,
     'phone page gutters must be 16px');
+assert.match(panel, /class="lm-turn-record-meta"[\s\S]*class="lm-turn-record-copy"[\s\S]*class="lm-turn-record-status"[\s\S]*lm-turn-record-action/u,
+    'dialogue rows need explicit metadata, copy, status, and action layout hooks');
+assert.match(css, /\.lm-turn-record-meta,\s*\.lm-turn-records li > span \{[^}]*overflow-wrap: anywhere;[^}]*white-space: normal;/u,
+    'dialogue metadata must wrap instead of spilling into the summary text');
+assert.match(css, /@media \(max-width: 899px\)[\s\S]*\.lm-turn-record-copy,\s*\.lm-turn-records li > p \{ grid-column: 1 \/ -1; grid-row: 2; \}/u,
+    'narrow dialogue summaries must own a separate row below their metadata');
 assert.match(panel, /class="lm-page-content lm-turns-content"/u,
     'turn progress, notices, and records must share one page-level spacing container');
 assert.match(panel, /class="lm-page-content lm-chapters-content"/u,

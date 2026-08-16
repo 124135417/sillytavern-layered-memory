@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
     <title>分层长程记忆 UI Harness</title>
-    <link rel="stylesheet" href="../style-v0.16.2.css"/>
+    <link rel="stylesheet" href="../style-v0.20.1.css"/>
     <style>
         :root {
             --SmartThemeBlurTintColor: #15171f;
@@ -81,6 +81,20 @@
             summary: `<user>推进第 ${pairIndex} 轮对话，林许作出回应，双方留下后续事项。`,
             ...(pairIndex === 0 ? { story_time: { label: '次日清晨', evidence: '次日清晨', kind: 'relative' } } : {}),
         }));
+        const narrativeSummaries = chat.slice(0, 18).map((message, messageIndex) => ({
+            messageKey: message.extra.layered_memory_id,
+            messageIndex,
+            role: message.is_user ? 'user' : 'assistant',
+            summary: messageIndex === 17
+                ? '林许在北港旧灯塔外确认了下一步安排，同时提醒伯滔潮汐正在上涨；两人决定先检查入口附近留下的痕迹，再进入地下通道。LongUnbrokenMobileRegressionToken-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                : `${message.is_user ? '<user>' : '林许'}推进第 ${messageIndex} 楼剧情，并留下需要在后续对话继续处理的线索。`,
+            scene_context: message.is_user ? { status: 'inherited' } : {
+                status: 'matched',
+                time: messageIndex === 17 ? '次日清晨潮汐上涨前' : '次日清晨',
+                location: messageIndex === 17 ? '北港旧灯塔地下入口附近' : '北港旧灯塔',
+                sourceMessageIndex: messageIndex,
+            },
+        }));
         const chapter = (index, start, end) => ({
             id: `ch_${String(index).padStart(3, '0')}`,
             summary: `<user>与林许完成第 ${start}–${end} 轮的阶段剧情，双方的目标和关系继续变化。`,
@@ -100,6 +114,7 @@
                 ],
             }],
             turn_summaries: turnSummaries,
+            narrative_summaries: narrativeSummaries,
             chapters: [
                 chapter(1, 0, 24), chapter(2, 25, 49), chapter(3, 50, 74), chapter(4, 75, 99),
                 { ...chapter(5, 100, 124), ...(harnessMode === 'target' ? { stale: true, stale_reason: 'turn_summary_edit' } : {}), summary: '伯滔说明自己不喜欢熟鱼、偏好贝类和刺身，林许据此调整居酒屋的用餐安排。两人在交谈中继续确认彼此的边界，伯滔明确要求林许不要采取极端手段；林许接受要求，并承诺之后先沟通再行动。随着身份和动机逐步坦白，双方从互相试探转向有限信任，同时约定完成北港旧灯塔的调查后再讨论下一步安排。', keywords: ['伯滔', '林许', '居酒屋', '饮食偏好'], key_events: [{ floor_range: [100, 108], text: '伯滔说明饮食偏好，林许调整居酒屋安排。' }, { floor_range: [109, 117], text: '双方讨论行动边界，伯滔要求林许不要走极端。' }, { floor_range: [118, 124], text: '关系继续推进，并确认调查后的后续安排。' }] },
@@ -160,7 +175,7 @@
             event.floorKey = pair.floorKey;
             event.contentFingerprint = pair.contentFingerprint;
         }
-        const { injectPanel, openMemoryCenter } = await import('../src/ui/panel.js');
+        const { injectPanel, openMemoryCenter } = await import('../src/ui/panel.js?ui-harness=0.20.1');
         injectPanel();
         openMemoryCenter(true);
     </script>
