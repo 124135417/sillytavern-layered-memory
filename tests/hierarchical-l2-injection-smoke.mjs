@@ -50,7 +50,7 @@ globalThis.SillyTavern = { getContext: () => context, libs: {} };
 
 const { renderL2Block } = await import('../src/render.js');
 const { updateInjection } = await import('../src/inject.js');
-const { getQueueSnapshot } = await import('../src/queue.js');
+const { enqueue, getQueueSnapshot } = await import('../src/queue.js');
 
 const count = (text, pattern) => [...String(text).matchAll(pattern)].length;
 
@@ -149,7 +149,18 @@ assert.equal(coreInjection?.[1], chapterAndTail,
 assert.equal(l2Injection?.[1], '', '独立 L2 key 必须清空，防止核心块被重排');
 assert.doesNotMatch(coreInjection?.[1], /已截断/,
     'budgetL2 再小也不得截断本轮 L2 注入');
+assert.equal(getQueueSnapshot().queued.some(job => job.type === 'volume_compress'), false,
+    '不足 8 个可压缩章节时不得反复入队无效的长期摘要任务');
+
+data.narrative_chapters = Array.from({ length: 8 }, (_, index) => ({
+    id: `compressible_${index}`,
+    floor_range: [index * 25, index * 25 + 24],
+    summary: `可压缩章节 ${index + 1}`,
+    stale: false,
+    demoted: false,
+}));
+enqueue('volume_compress', { reason: 'budget', narrative: true });
 assert.equal(getQueueSnapshot().queued.some(job => job.type === 'volume_compress'), true,
-    '超过 budgetL2 时仍应触发长期摘要压缩任务');
+    '达到 8 个可压缩章节且超过预算后才应入队长期摘要任务');
 
 console.log('hierarchical L2 injection smoke: complete priority fallback passed');

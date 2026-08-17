@@ -102,8 +102,8 @@ const { beginBranchRecovery, buildFreshBranchData, buildLegacyRebuildData, ensur
 const { getMessageFloors, getPairs } = await import('../src/ids.js');
 const indexSource = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 const queueSource = await readFile(new URL('../src/queue.js', import.meta.url), 'utf8');
-assert.match(indexSource, /event_types\.GENERATION_STARTED[\s\S]*await ensureCurrentBranchRecovery\(\)[\s\S]*await waitForBranchRecovery\(\)[\s\S]*updateInjection\(\{ generationType: type, excludeTrailingAssistant \}\)/u,
-    'generation-start refresh must recover the active branch before updating injection');
+assert.match(indexSource, /layeredMemoryIntercept[\s\S]*await ensureCurrentBranchRecovery\(\)[\s\S]*await waitForBranchRecovery\(\)[\s\S]*updateInjection\(\{ generationType: type, excludeTrailingAssistant \}\)/u,
+    'prompt interception must recover the active branch before updating injection');
 assert.match(queueSource, /async function pump\(\)[\s\S]*await waitForBranchRecovery\(\)/u,
     'background jobs must wait for branch recovery');
 

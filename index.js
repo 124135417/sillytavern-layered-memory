@@ -43,8 +43,28 @@ import {
 
 const MODULE = 'layered-memory';
 
+let injectionRefreshScheduled = false;
+
 function ctx() {
     return SillyTavern.getContext();
+}
+
+function reportBackgroundError(label, error) {
+    if (error?.code === 'CHAT_SCOPE_CHANGED') return;
+    console.error(`[${MODULE}] ${label}`, error);
+}
+
+function scheduleInjectionRefresh() {
+    if (injectionRefreshScheduled) return;
+    injectionRefreshScheduled = true;
+    setTimeout(() => {
+        injectionRefreshScheduled = false;
+        try {
+            updateInjection();
+        } catch (error) {
+            reportBackgroundError('后台更新记忆注入失败', error);
+        }
+    }, 0);
 }
 
 function wireHandlers() {
@@ -113,6 +133,17 @@ const historyMutations = createHistoryMutationCoordinator((work, originMetadata)
     onMessageEvents(work.mesId, work, originMetadata)
 ));
 
+async function maintainCompletedMessage(_work, originMetadata) {
+    await waitForBranchRecovery();
+    if (ctx().chatMetadata !== originMetadata) return;
+    ensureMessageIds();
+    await rebuildAndEnqueuePending();
+    if (ctx().chatMetadata !== originMetadata) return;
+    updateInjection();
+}
+
+const completedMessageMaintenance = createHistoryMutationCoordinator(maintainCompletedMessage);
+
 function historyMutationKey({ excludeTrailingAssistant = false } = {}) {
     ensureMessageIds();
     const pairs = getPairs({ excludeTrailingAssistant });
@@ -135,6 +166,23 @@ function queueHistoryMutation(mesId, { excludeTrailingAssistant = false } = {}) 
         globalThis.toastr?.error?.(`聊天历史同步失败：${error?.message ?? error}`);
     });
     return pending;
+}
+
+function queueCompletedMessageMaintenance(mesId) {
+    const originMetadata = ctx().chatMetadata;
+    const work = { mesId };
+    // MESSAGE_RECEIVED is awaited by SillyTavern's stream finalizer. Cross a
+    // macrotask boundary so the reply paints and the native save gets priority
+    // before memory maintenance starts.
+    setTimeout(() => {
+        if (ctx().chatMetadata !== originMetadata) return;
+        const pending = completedMessageMaintenance.schedule(
+            originMetadata,
+            work,
+            historyMutationKey(),
+        );
+        void pending.catch(error => reportBackgroundError('回复后的记忆维护失败', error));
+    }, 0);
 }
 
 async function waitForGenerationHistory(chat, type) {
@@ -164,6 +212,8 @@ async function waitForGenerationHistory(chat, type) {
 globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, _contextSize, _abort, type) {
     let excludeTrailingAssistant;
     try {
+        await ensureCurrentBranchRecovery();
+        await waitForBranchRecovery();
         ({ excludeTrailingAssistant } = await waitForGenerationHistory(chat, type));
     } catch (err) {
         console.error(`[${MODULE}] 聊天历史尚未安全同步，已中止本次生成`, err);
@@ -205,37 +255,24 @@ jQuery(async () => {
         void onChatChanged();
     });
 
-    eventSource.on(event_types.MESSAGE_RECEIVED, async (mesId, type) => {
+    eventSource.on(event_types.MESSAGE_RECEIVED, (mesId, type) => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
-        await handleBackstageMessageReceived(normalizedId, type);
+        handleBackstageMessageReceived(normalizedId, type);
         refreshBackstageTriggerState();
         if (type === 'swipe') {
             queueHistoryMutation(normalizedId);
             return;
         }
-        const originMetadata = ctx().chatMetadata;
-        await waitForBranchRecovery();
-        if (ctx().chatMetadata !== originMetadata) return;
-        ensureMessageIds();
-        await rebuildAndEnqueuePending();
-        if (ctx().chatMetadata !== originMetadata) return;
-        updateInjection();
+        queueCompletedMessageMaintenance(normalizedId);
     });
 
-    eventSource.on(event_types.MESSAGE_SENT, async (mesId) => {
+    eventSource.on(event_types.MESSAGE_SENT, (mesId) => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
-        const createdBackstageMarker = await handleBackstageMessageSent(normalizedId);
+        const createdBackstageMarker = handleBackstageMessageSent(normalizedId);
         if (createdBackstageMarker) refreshBackstageMarkers(normalizedId);
         refreshBackstageTriggerState();
-        const originMetadata = ctx().chatMetadata;
-        await waitForBranchRecovery();
-        if (ctx().chatMetadata !== originMetadata) return;
-        ensureMessageIds();
-        await rebuildAndEnqueuePending();
-        if (ctx().chatMetadata !== originMetadata) return;
-        updateInjection();
     });
 
     const historyMutationHandler = (mesId) => {
@@ -260,39 +297,28 @@ jQuery(async () => {
         });
     }
     if (event_types.GENERATION_STARTED) {
-        eventSource.on(event_types.GENERATION_STARTED, async (type, _params, isDryRun) => {
-            await handleBackstageGenerationStarted(type, isDryRun);
+        eventSource.on(event_types.GENERATION_STARTED, (type, _params, isDryRun) => {
+            handleBackstageGenerationStarted(type, isDryRun);
             refreshBackstageTriggerState();
             setActiveGenerationType(type);
-            const originMetadata = ctx().chatMetadata;
-            const { excludeTrailingAssistant } = await waitForGenerationHistory(ctx().chat, type);
-            await ensureCurrentBranchRecovery();
-            await waitForBranchRecovery();
-            if (ctx().chatMetadata !== originMetadata) return;
-            if (isDryRun) {
-                updateInjection({ generationType: type, excludeTrailingAssistant });
-                return;
-            }
-            await rebuildAndEnqueuePending({ excludeTrailingAssistant });
-            if (ctx().chatMetadata !== originMetadata) return;
-            updateInjection({ generationType: type, excludeTrailingAssistant });
+            if (isDryRun) scheduleInjectionRefresh();
         });
     }
     const clearGenerationState = () => {
         clearActiveGenerationType();
-        updateInjection();
         refreshBackstageTriggerState();
+        scheduleInjectionRefresh();
     };
     if (event_types.GENERATION_ENDED) {
-        eventSource.on(event_types.GENERATION_ENDED, async () => {
+        eventSource.on(event_types.GENERATION_ENDED, () => {
             clearGenerationState();
-            await handleBackstageGenerationStopped({ includeDiscussion: false });
+            handleBackstageGenerationStopped({ includeDiscussion: false });
         });
     }
     if (event_types.GENERATION_STOPPED) {
-        eventSource.on(event_types.GENERATION_STOPPED, async () => {
+        eventSource.on(event_types.GENERATION_STOPPED, () => {
             clearGenerationState();
-            await handleBackstageGenerationStopped();
+            handleBackstageGenerationStopped();
         });
     }
     if (event_types.GENERATE_AFTER_DATA) {
@@ -311,7 +337,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.20.1`);
+    console.log(`[${MODULE}] 已加载 v0.20.2`);
 });
 
 export async function onActivate() {

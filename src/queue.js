@@ -11,6 +11,7 @@ import { waitForBranchRecovery } from './branch.js';
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [2_000, 8_000];
 const MAX_CONCURRENT_JOBS = 3;
+const MIN_ACTIVE_CHAPTERS_FOR_VOLUME = 8;
 const PARALLEL_JOB_TYPES = new Set([
     'extract',
     'narrative_summary',
@@ -230,6 +231,16 @@ function isDuplicateJob(scopeId, type, payload) {
         || failed.some(j => sameWork(j, type, payload));
 }
 
+function hasAutomaticVolumeInput(chatData, payload = {}) {
+    if (payload.force || payload.confirmed) return true;
+    if (!['budget', 'budget_check'].includes(payload.reason)) return true;
+    const chapters = payload.narrative
+        ? (chatData.narrative_chapters || [])
+        : (chatData.chapters || []);
+    const active = chapters.filter(chapter => !chapter.demoted && !chapter.pinned);
+    return active.length >= MIN_ACTIVE_CHAPTERS_FOR_VOLUME;
+}
+
 function writeStateFor(scopeId, chatData) {
     const state = ensureQueueState(chatData);
     state.queued = memoryQueue
@@ -265,6 +276,7 @@ async function persistScope(scopeId, chatData) {
 
 export function enqueue(type, payload = {}, priority = QUEUE_PRIORITY[type] ?? 50) {
     const { chatData, scopeId } = hydrateCurrentScope();
+    if (type === 'volume_compress' && !hasAutomaticVolumeInput(chatData, payload)) return null;
     if (isDuplicateJob(scopeId, type, payload)) return null;
 
     const job = normalizeJob({ type, priority, payload }, chatData, scopeId);

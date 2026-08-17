@@ -3,7 +3,6 @@ import {
     getChatData,
     getContext,
     saveChatData,
-    saveChatMessages,
 } from './settings.js';
 import { isBackstageMarker } from './backstage.js';
 
@@ -22,14 +21,9 @@ export function ensureMessageIds() {
             changed = true;
         }
     }
-    if (changed) {
-        void saveChatMessages().catch(err => {
-            // Do not append to metadata here: the rejection may arrive after a
-            // chat switch, in which case logging through getChatData() would
-            // attach the error to the newly opened chat.
-            console.error(`[layered-memory] 消息稳定 ID 保存失败: ${err?.message ?? err}`);
-        });
-    }
+    // Do not save here. SillyTavern emits MESSAGE_SENT before its own native
+    // save, so the ID is persisted by that existing save. Starting another
+    // whole-chat upload here makes the send path both slower and racy.
     return changed;
 }
 

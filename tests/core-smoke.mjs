@@ -85,7 +85,7 @@ function setPairs(count) {
 setPairs(6);
 assert.equal(ensureMessageIds(), true, '首次应生成稳定消息 ID');
 await new Promise(resolve => setTimeout(resolve, 0));
-assert.equal(chatSaveCount, 1, '稳定消息 ID 应明确保存一次');
+assert.equal(chatSaveCount, 0, '稳定消息 ID 必须复用 SillyTavern 紧随其后的原生保存');
 assert.equal(ensureMessageIds(), false, '重复扫描不应再次改写 ID');
 assert.equal(getPairs().length, 6, '六对消息应正确配对');
 const originalFingerprint = getPairs()[0].contentFingerprint;

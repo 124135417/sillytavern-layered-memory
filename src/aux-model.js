@@ -3,6 +3,22 @@ import { getContext, getSettings, appendLog, saveSettings } from './settings.js'
 const CONNECTION_TEST_TIMEOUT_MS = 15_000;
 const CONNECTION_TEST_SYSTEM_PROMPT = 'You are a connection health check. Follow the user instruction exactly.';
 const CONNECTION_TEST_USER_PROMPT = 'Reply with exactly OK.';
+const USAGE_SAVE_IDLE_MS = 30_000;
+
+let usageSaveTimer = null;
+
+function scheduleUsageHistorySave() {
+    if (usageSaveTimer) clearTimeout(usageSaveTimer);
+    usageSaveTimer = setTimeout(() => {
+        usageSaveTimer = null;
+        try {
+            saveSettings();
+        } catch (error) {
+            console.warn('[layered-memory] 记忆模型用量后台保存失败', error);
+        }
+    }, USAGE_SAVE_IDLE_MS);
+    usageSaveTimer?.unref?.();
+}
 
 /**
  * Test the effective auxiliary-model route without exposing provider details.
@@ -285,7 +301,10 @@ function recordDirectUsage({ purpose, baseUrl, model, usage: rawUsage }) {
     try {
         const settings = getSettings();
         settings.usageHistory = [...settings.usageHistory, entry].slice(-500);
-        saveSettings();
+        // Usage is telemetry, not generation state. Persist once after the
+        // auxiliary queue becomes quiet instead of uploading all settings for
+        // every completed model call.
+        scheduleUsageHistorySave();
     } catch (error) {
         // Telemetry must never turn a successful model response into a failed
         // memory task. The normalized usage is still returned to the caller.

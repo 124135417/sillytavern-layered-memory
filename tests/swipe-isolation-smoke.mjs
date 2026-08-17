@@ -170,8 +170,8 @@ assert.match(indexSource, /const historyMutationHandler = \(mesId\) =>[\s\S]*que
     'swipe UI handling must return immediately after registering isolated cleanup');
 assert.match(indexSource, /MESSAGE_RECEIVED[\s\S]*type === 'swipe'[\s\S]*queueHistoryMutation/u,
     'a completed generated swipe must reconcile against its own fingerprint');
-assert.match(indexSource, /GENERATION_STARTED[\s\S]*async \(type,[\s\S]*waitForGenerationHistory/u,
-    'generation start must consume the swipe type and project away the replaced assistant');
+assert.match(indexSource, /GENERATION_STARTED[\s\S]*\(type, _params, isDryRun\) =>[\s\S]*setActiveGenerationType\(type\)/u,
+    'generation start must record the swipe type without blocking the foreground UI');
 assert.match(indexSource, /layeredMemoryIntercept[\s\S]*await waitForGenerationHistory/u,
     'the final prompt interceptor must wait for swipe cleanup even if event timing changes');
 assert.match(indexSource, /GENERATE_AFTER_DATA[\s\S]*isDryRun[\s\S]*clearGenerationState/u,
