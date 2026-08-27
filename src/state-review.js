@@ -12,6 +12,7 @@ import {
 import { usableMemoryEntries } from './quality.js';
 import { appendLog, assertChatData, getChatData, saveChatData } from './settings.js';
 import { backfillFactSourceCoordinates, sourceOrder } from './fact-source.js';
+import { applyDormancyPolicy } from './lifecycle-policy.js';
 
 const REVIEW_KIND = 'state_cleanup';
 const AUDIT_BATCH_SIZE = 30;
@@ -374,6 +375,7 @@ export function normalizeLifecycleAudit(raw, data = getChatData(), entries = nul
         }
         let verdict = VERDICTS.has(item.verdict) ? item.verdict : 'uncertain';
         if (isProtected(entry)) verdict = 'keep';
+        const proposedVerdict = verdict;
         const needsLifecycleEvidence = verdict === 'retire' || verdict === 'history';
         const category = needsLifecycleEvidence && CATEGORIES.has(item.category)
             ? item.category
@@ -390,6 +392,7 @@ export function normalizeLifecycleAudit(raw, data = getChatData(), entries = nul
         return {
             entry_id: entry.id,
             verdict,
+            proposed_verdict: proposedVerdict,
             category,
             keep_id: keepValid ? keepId : '',
             reason: cleanText(item.reason || (verdict === 'keep' ? '没有可靠证据表明该状态已经失效。' : '证据不足。')),
@@ -644,13 +647,16 @@ export function applyLifecycleAudit(data, audit, { recordEvent = recordManualEve
         return { error: 'stale', removed: 0, pending: 0 };
     }
     const byId = new Map((data.state_table?.entries || []).map(entry => [entry.id, entry]));
+    const decisions = applyDormancyPolicy(data, audit?.decisions || []);
     const automatic = [];
     const pending = [];
-    for (const decision of audit?.decisions || []) {
+    for (const decision of decisions) {
         const entry = byId.get(decision.entry_id);
         if (!entry || isProtected(entry)) continue;
-        const destination = verifiedDestination(decision);
-        if (destination !== 'current' && decision.confidence === 'high') automatic.push({ entry, decision, destination });
+        const destination = verifiedDestination(decision, { allowDormant: true });
+        if (destination === 'dormant' || (destination !== 'current' && decision.confidence === 'high')) {
+            automatic.push({ entry, decision, destination });
+        }
         else if (['retire', 'history'].includes(decision.verdict)
             && decision.verification?.verdict !== 'reject') pending.push({ entry, decision });
     }
@@ -699,15 +705,17 @@ export function applyLifecycleAudit(data, audit, { recordEvent = recordManualEve
         removed: removedIds.size,
         removedIds: [...removedIds],
         pending: pending.length,
-        reviewed: (audit?.decisions || []).length,
+        reviewed: decisions.length,
     };
 }
 
 function organizationCounts(decisions = [], data = null) {
     const entries = new Map((data?.state_table?.entries || []).map(entry => [entry.id, entry]));
+    const reviewedIds = new Set();
     const counts = { current: 0, dormant: 0, retired: 0, historical: 0, uncertain: 0 };
     for (const decision of decisions) {
         const entry = entries.get(decision.entry_id);
+        if (entry) reviewedIds.add(entry.id);
         if (entry && isProtected(entry)) {
             counts.current += 1;
             continue;
@@ -719,6 +727,9 @@ function organizationCounts(decisions = [], data = null) {
             counts.uncertain += 1;
         } else counts.current += 1;
     }
+    // Facts appended after the preview are deliberately outside its decisions
+    // and remain current. Include them so the visible totals describe reality.
+    counts.current += [...entries.keys()].filter(id => !reviewedIds.has(id)).length;
     return counts;
 }
 
@@ -728,12 +739,14 @@ export function stageOrganizationBatch(data, audit) {
         return { error: 'stale' };
     }
     const organization = organizationState(data);
+    const decisions = applyDormancyPolicy(data, audit.decisions || []);
     const staged = {
         id: audit.run_id || crypto.randomUUID(),
         base_version: Number(audit.base_version),
         state_signature: stateReviewSignature(data),
-        decisions: structuredClone(audit.decisions || []),
-        counts: organizationCounts(audit.decisions || [], data),
+        decisions: structuredClone(decisions),
+        counts: organizationCounts(decisions, data),
+        policy_version: 2,
         floorKey: audit.floorKey || null,
         anchor_pair: audit.anchor_pair ?? null,
         anchor_fingerprint: audit.anchor_fingerprint || null,
@@ -742,6 +755,25 @@ export function stageOrganizationBatch(data, audit) {
     organization.status = 'staged';
     organization.staged = staged;
     return { error: null, staged };
+}
+
+/** Upgrade an already-generated preview with reversible lifecycle policy only. */
+export function refreshStagedOrganizationPolicy(data) {
+    const organization = organizationState(data);
+    const staged = organization.staged;
+    if (!staged) return false;
+    const policyChanged = Number(staged.policy_version || 0) < 2;
+    const decisions = policyChanged
+        ? applyDormancyPolicy(data, staged.decisions || [])
+        : staged.decisions || [];
+    const counts = organizationCounts(decisions, data);
+    const countsChanged = JSON.stringify(staged.counts || {}) !== JSON.stringify(counts);
+    if (!policyChanged && !countsChanged) return false;
+    staged.decisions = structuredClone(decisions);
+    staged.counts = counts;
+    staged.policy_version = 2;
+    staged.policy_updated_at = Date.now();
+    return true;
 }
 
 function organizationSnapshot(data, staged) {
@@ -1011,7 +1043,14 @@ async function auditChunk(data, entries, overview, rawCatalog) {
         };
     }
 
-    const proposed = normalized.decisions.filter(item => ['retire', 'history'].includes(item.verdict) && item.evidence_valid);
+    const proposed = normalized.decisions
+        .filter(item => ['retire', 'history'].includes(item.proposed_verdict || item.verdict))
+        .map(item => ['retire', 'history'].includes(item.verdict) ? item : {
+            ...item,
+            verdict: item.proposed_verdict,
+            evidence_valid: false,
+            evidence_exact: false,
+        });
     if (!proposed.length) return normalized.decisions;
     const resolved = await resolveExactRetirementEvidence(data, proposed, overview, rawCatalog);
     const resolvedById = new Map(resolved.map(item => [item.entry_id, item]));

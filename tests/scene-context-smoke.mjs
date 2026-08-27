@@ -7,6 +7,7 @@ const {
 } = await import('../src/scene-context.js');
 const { buildNarrativeBatchPrompt } = await import('../src/narrative.js');
 const { renderDormantRetrievalBlock } = await import('../src/render.js');
+const { dormantRelevance } = await import('../src/lifecycle-policy.js');
 
 const pattern = '<meow_FM>([\\s\\S]*?)</meow_FM>';
 const assistantText = `<content>他推门走进石室。</content>
@@ -60,6 +61,12 @@ const dormantData = {
     }],
 };
 assert.match(renderDormantRetrievalBlock(dormantData, '阿尔德瑞思重新拿出了恶魔之书。', 500), /仍保管恶魔之书/u);
+assert.equal(renderDormantRetrievalBlock(dormantData, '阿尔德瑞思坐下来吃晚饭。', 500), '',
+    'mentioning a subject alone must not recall every dormant fact about them');
 assert.equal(renderDormantRetrievalBlock(dormantData, '他们讨论晚饭。', 500), '');
+assert.equal(dormantRelevance({
+    subject: '伯滔', topic: '第三个持有者', value: '伯滔是恶魔之书的第三个持有者',
+}, '矿洞第三组本月产量最高。').matched, false,
+    'shared fragments such as “第三” must not refresh an unrelated fact');
 
 console.log('scene context smoke: compact extraction, deterministic inheritance, input isolation, ranges, and dormant retrieval passed');

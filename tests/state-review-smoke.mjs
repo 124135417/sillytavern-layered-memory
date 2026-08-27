@@ -16,9 +16,11 @@ const {
     latestNarrativeFloor,
     stageOrganizationBatch,
     applyStagedOrganization,
+    refreshStagedOrganizationPolicy,
     stagedOrganizationCompatibility,
     rollbackLastOrganization,
 } = await import('../src/state-review.js');
+const { applyDormancyPolicy, dormancyAssessment } = await import('../src/lifecycle-policy.js');
 
 const entry = (id, extra = {}) => ({
     id,
@@ -187,6 +189,16 @@ assert.equal(primary.complete, true);
 assert.equal(primary.decisions.find(item => item.entry_id === 'old_cold_war').evidence_valid, true);
 assert.equal(primary.decisions.find(item => item.entry_id === 'protected_secret').verdict, 'keep', 'protected facts must be forced to keep');
 
+const unresolvedProposal = normalizeLifecycleAudit({
+    decisions: [{
+        entry_id: 'old_cold_war', verdict: 'retire', category: 'superseded', keep_id: 'current_relation',
+        reason: '后文已经取代旧状态', confidence: 'high', evidence: [],
+    }],
+}, lifecycleData, [lifecycleData.state_table.entries[0]], catalog).decisions[0];
+assert.equal(unresolvedProposal.verdict, 'uncertain', 'missing exact evidence must still fail closed');
+assert.equal(unresolvedProposal.proposed_verdict, 'retire',
+    'the retirement intent must survive so the raw-evidence resolver can still investigate it');
+
 const verified = normalizeLifecycleVerification({
     checks: [
         { entry_id: 'old_cold_war', verdict: 'confirm', reason: '后文直接取代旧关系状态' },
@@ -219,6 +231,50 @@ assert.equal(lifecycleData.retired_facts[0].anchorPairIndex, 44);
 assert.equal(lifecycleEvents[0].reason, 'state_lifecycle_auto_retired');
 assert.equal(lifecycleData.review_queue[0].base_version, 21, 'pending review must bind to the post-auto-retirement version');
 
+const dormantPolicyData = {
+    state_table: {
+        version: 1,
+        entries: [
+            entry('cold_route', {
+                slot: 'world', topic: '北段黑市位置', value: '北段黑市离旧矿区一天半',
+                updated_source: { status: 'exact', messageIndex: 10 },
+            }),
+            entry('core_identity', {
+                slot: 'identity', topic: '真实身份', value: '真实身份仍未公开',
+                updated_source: { status: 'exact', messageIndex: 10 },
+            }),
+        ],
+    },
+    narrative_summaries: [{ messageIndex: 600, summary: '他们一直在主堡讨论晚饭。', segments: [] }],
+    dormant_facts: [], retired_facts: [], historical_facts: [], review_queue: [], manual_events: [],
+};
+assert.equal(dormancyAssessment(dormantPolicyData, dormantPolicyData.state_table.entries[0]).eligible, true);
+const policyDecisions = applyDormancyPolicy(dormantPolicyData, [
+    { entry_id: 'cold_route', verdict: 'keep', confidence: 'high', evidence: [] },
+    { entry_id: 'core_identity', verdict: 'dormant', confidence: 'high', evidence: [] },
+]);
+assert.equal(policyDecisions[0].verdict, 'dormant');
+assert.equal(policyDecisions[1].verdict, 'keep', 'identity facts must stay awake even if the model asks to sleep them');
+const recentlyRelevantRouteData = structuredClone(dormantPolicyData);
+recentlyRelevantRouteData.narrative_summaries = [
+    { messageIndex: 590, summary: '他们正在重新核对北段黑市位置。', segments: [] },
+    { messageIndex: 600, summary: '他们回到主堡。', segments: [] },
+];
+const recentRoute = dormancyAssessment(recentlyRelevantRouteData, recentlyRelevantRouteData.state_table.entries[0]);
+assert.equal(recentRoute.eligible, false, 'a specific recent item mention must postpone dormancy');
+assert.equal(recentRoute.recentlyRelevant, true);
+assert.equal(applyDormancyPolicy(recentlyRelevantRouteData, [
+    { entry_id: 'cold_route', verdict: 'dormant', confidence: 'high', evidence: [] },
+])[0].verdict, 'keep', 'a model suggestion cannot bypass the recent-relevance guard');
+const dormantApplied = applyLifecycleAudit(dormantPolicyData, {
+    run_id: 'dormant-run', base_version: 1, decisions: policyDecisions,
+}, {
+    recordEvent: () => ({ anchorFloorKey: 'head', anchorPairIndex: 150, anchorFingerprint: 'fp' }),
+});
+assert.equal(dormantApplied.removed, 1);
+assert.equal(dormantPolicyData.dormant_facts[0].entry_id, 'cold_route');
+assert.deepEqual(dormantPolicyData.state_table.entries.map(item => item.id), ['core_identity']);
+
 lifecycleData.state_lifecycle.last_completed_at = 999;
 lifecycleData.state_lifecycle.last_state_signature = stateReviewSignature(lifecycleData);
 lifecycleData.state_lifecycle.last_narrative_floor = latestNarrativeFloor(lifecycleData);
@@ -232,14 +288,14 @@ const organizationData = {
     state_table: {
         version: 3,
         entries: [
-            entry('stay'),
+            entry('stay', { slot: 'identity' }),
             entry('sleep'),
             entry('past_action'),
             entry('protected', { pinned: true }),
         ],
     },
     dormant_facts: [], retired_facts: [], historical_facts: [], review_queue: [], manual_events: [],
-    narrative_summaries: [{ messageIndex: 20, summary: '当前剧情。', segments: [] }],
+    narrative_summaries: [{ messageIndex: 600, summary: '当前剧情。', segments: [] }],
     memory_organization: {
         version: 1, status: 'idle', staged: null, last_snapshot: null,
         last_applied_at: null, last_applied_floor: -1,
@@ -271,6 +327,10 @@ organizationData.state_table.entries.push(entry('fresh'));
 organizationData.state_table.version += 1;
 assert.deepEqual(stagedOrganizationCompatibility(organizationData), { compatible: true, additionsPreserved: 1 },
     'a preview remains safe when its reviewed entries are unchanged and only new facts were appended');
+assert.equal(refreshStagedOrganizationPolicy(organizationData), true,
+    'preview totals must refresh when a new fact is preserved outside its decisions');
+assert.equal(organizationData.memory_organization.staged.counts.current, 3);
+assert.equal(refreshStagedOrganizationPolicy(organizationData), false, 'unchanged preview totals must not cause save loops');
 const adopted = applyStagedOrganization(organizationData, {
     recordEvent: () => ({ anchorFloorKey: 'head', anchorPairIndex: 10, anchorFingerprint: 'fp' }),
 });

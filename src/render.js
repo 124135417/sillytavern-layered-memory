@@ -1,6 +1,7 @@
 import { SLOT_LABELS, SLOTS } from './constants.js';
 import { estimateTokens, truncateToBudget } from './tokens.js';
 import { usableMemoryEntries } from './quality.js';
+import { dormantRelevance } from './lifecycle-policy.js';
 
 function numericFloor(entry) {
     const value = Number(entry?.updated_floor ?? entry?.established_floor);
@@ -133,26 +134,15 @@ function dormantFactEntry(record) {
     return record?.entry && typeof record.entry === 'object' ? record.entry : record;
 }
 
-function dormantMatchTerms(entry) {
-    const terms = [entry?.subject, entry?.object, entry?.topic]
-        .map(value => String(value || '').trim())
-        .filter(value => [...value].length >= 2 && [...value].length <= 40);
-    return [...new Set(terms)];
-}
-
 /** Retrieve dormant facts for this request only; never promote them to current. */
 export function renderDormantRetrievalBlock(data, recentNarrativeText, budget = 500) {
-    const haystack = String(recentNarrativeText || '').toLowerCase();
-    if (!haystack || Number(budget) <= 0) return '';
+    if (!String(recentNarrativeText || '').trim() || Number(budget) <= 0) return '';
     const matches = (data?.dormant_facts || [])
         .map(record => ({ record, entry: dormantFactEntry(record) }))
         .filter(({ entry }) => entry?.subject && entry?.value)
-        .map(item => ({
-            ...item,
-            score: dormantMatchTerms(item.entry)
-                .reduce((total, term) => total + (haystack.includes(term.toLowerCase()) ? [...term].length : 0), 0),
-        }))
-        .filter(item => item.score > 0)
+        .map(item => ({ ...item, relevance: dormantRelevance(item.entry, recentNarrativeText) }))
+        .filter(item => item.relevance.matched)
+        .map(item => ({ ...item, score: item.relevance.score }))
         .sort((a, b) => b.score - a.score || numericFloor(b.entry) - numericFloor(a.entry));
     if (!matches.length) return '';
     const lines = [

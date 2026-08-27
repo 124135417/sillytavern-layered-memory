@@ -52,6 +52,7 @@ import {
     applyStagedOrganization,
     applyStateReviewBatch,
     discardStagedOrganization,
+    refreshStagedOrganizationPolicy,
     rollbackLastOrganization,
     stagedOrganizationCompatibility,
     stateReviewEntries,
@@ -783,6 +784,9 @@ function renderShellStatus() {
 
 function renderStateTab() {
     const data = getChatData();
+    if (refreshStagedOrganizationPolicy(data)) {
+        void saveChatData(data).catch(error => console.warn('[layered-memory] 整理预览策略升级保存失败', error));
+    }
     const rebuildSnapshot = getHistoryRebuildSnapshot();
     const entries = usableMemoryEntries(data);
     const currentEntryIds = new Set(entries.map(entry => entry.id));
