@@ -106,6 +106,13 @@ assert.ok(!panel.includes('第 ${item.pairIndex} 轮'),
     'zero-based pair indexes must never be exposed');
 assert.ok(panel.includes('pairFloorRangeLabel(item.pairIndex)'),
     'each generated record must display its real SillyTavern floor range');
+assert.ok(panel.includes("stagedOrganization && !panel.querySelector('.lm-organization-preview')")
+    && panel.includes('revealOrganizationPreview(panel)')
+    && panel.includes('整理预览已生成，已显示在当前记忆顶部'),
+    'a completed organization preview must replace the stale running UI and announce where the result is');
+assert.ok(panel.includes('if (data.memory_organization?.staged)')
+    && panel.includes('请先采用或放弃，再重新生成'),
+    'a stale organization button must not enqueue and charge for the same full preview again');
 assert.ok(!panel.includes('id="lm-d1"') && !panel.includes('id="lm-d2"'),
     'mandatory L1/L2 prompts must not expose ineffective depth controls');
 assert.ok(panel.includes('id="lm-d4"'),

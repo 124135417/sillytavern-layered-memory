@@ -298,6 +298,12 @@ function refreshQueueUi() {
     if (activeTab() !== 'state') {
         return;
     }
+    const stagedOrganization = getChatData().memory_organization?.staged;
+    if (stagedOrganization && !panel.querySelector('.lm-organization-preview')) {
+        revealOrganizationPreview(panel);
+        toastr?.success?.('整理预览已生成，已显示在当前记忆顶部；正式记忆尚未改变。');
+        return;
+    }
     const current = panel.querySelector('.lm-task-rail');
     if (!current) {
         return;
@@ -307,6 +313,15 @@ function refreshQueueUi() {
     const next = template.content.firstElementChild;
     current.replaceWith(next);
     bindQueueControls(panel.querySelector('.lm-body'));
+}
+
+function revealOrganizationPreview(panel = document.getElementById(ROOT_ID)) {
+    if (!panel || activeTab() !== 'state') return false;
+    if (!panel.querySelector('.lm-organization-preview')) renderActiveTab();
+    const preview = panel.querySelector('.lm-organization-preview');
+    if (!preview) return false;
+    preview.scrollIntoView({ block: 'start', behavior: 'auto' });
+    return true;
 }
 
 function renderHistoryBackfillStatus(snapshot = getHistoryRebuildSnapshot()) {
@@ -1491,6 +1506,11 @@ function bindStateTab(body) {
 
     body.querySelector('#lm-reorganize-state')?.addEventListener('click', async () => {
         const data = getChatData();
+        if (data.memory_organization?.staged) {
+            revealOrganizationPreview();
+            toastr?.info?.('已经有一份整理预览；请先采用或放弃，再重新生成。');
+            return;
+        }
         const confirmed = await openConfirmDialog({
             kicker: '当前记忆大整理',
             title: '生成一份完整整理预览？',
