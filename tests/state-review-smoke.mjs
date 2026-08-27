@@ -16,6 +16,7 @@ const {
     latestNarrativeFloor,
     stageOrganizationBatch,
     applyStagedOrganization,
+    stagedOrganizationCompatibility,
     rollbackLastOrganization,
 } = await import('../src/state-review.js');
 
@@ -266,15 +267,34 @@ const staged = stageOrganizationBatch(organizationData, {
 assert.equal(staged.error, null);
 assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'sleep', 'past_action', 'protected'],
     'staging a preview must not mutate formal memory');
+organizationData.state_table.entries.push(entry('fresh'));
+organizationData.state_table.version += 1;
+assert.deepEqual(stagedOrganizationCompatibility(organizationData), { compatible: true, additionsPreserved: 1 },
+    'a preview remains safe when its reviewed entries are unchanged and only new facts were appended');
 const adopted = applyStagedOrganization(organizationData, {
     recordEvent: () => ({ anchorFloorKey: 'head', anchorPairIndex: 10, anchorFingerprint: 'fp' }),
 });
 assert.equal(adopted.error, null);
-assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'protected']);
+assert.equal(adopted.additionsPreserved, 1);
+assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'protected', 'fresh']);
 assert.equal(organizationData.dormant_facts[0].entry_id, 'sleep');
 assert.equal(organizationData.historical_facts[0].entry_id, 'past_action');
 assert.ok(organizationData.memory_organization.last_snapshot, 'adoption must retain one rollback snapshot');
 assert.equal(rollbackLastOrganization(organizationData).error, null);
-assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'sleep', 'past_action', 'protected']);
+assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'sleep', 'past_action', 'protected', 'fresh']);
+
+const changedData = structuredClone(organizationData);
+const changedStage = stageOrganizationBatch(changedData, {
+    run_id: 'organize-changed', base_version: changedData.state_table.version,
+    decisions: changedData.state_table.entries.map(item => ({
+        entry_id: item.id, verdict: 'keep', confidence: 'high', evidence: [],
+    })),
+});
+assert.equal(changedStage.error, null);
+changedData.state_table.entries.find(item => item.id === 'stay').value = '预览后被修改';
+changedData.state_table.version += 1;
+assert.deepEqual(stagedOrganizationCompatibility(changedData), { compatible: false, additionsPreserved: 0 },
+    'changing any reviewed fact must invalidate the old preview');
+assert.equal(applyStagedOrganization(changedData).error, 'stale');
 
 console.log('state review smoke: preview adoption, post-source evidence, protection, rollback, and incremental gating passed');

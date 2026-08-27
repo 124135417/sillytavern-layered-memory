@@ -38,8 +38,8 @@ function hashText(value) {
     return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-export function stateReviewSignature(data = getChatData()) {
-    const rows = (data.state_table?.entries || [])
+function stateReviewSignatureForEntries(entries = []) {
+    const rows = entries
         .map(entry => [
             entry.id,
             entry.slot,
@@ -54,6 +54,10 @@ export function stateReviewSignature(data = getChatData()) {
         ].join('\u0000'))
         .sort();
     return `v1:${hashText(rows.join('\u0001'))}:${rows.length}`;
+}
+
+export function stateReviewSignature(data = getChatData()) {
+    return stateReviewSignatureForEntries(data.state_table?.entries || []);
 }
 
 export function latestNarrativeFloor(data = getChatData()) {
@@ -763,13 +767,43 @@ function organizationSnapshot(data, staged) {
     };
 }
 
+/**
+ * A completed preview remains safe when the reviewed entries are unchanged and
+ * the only difference is that new entries were appended afterwards. Those new
+ * entries are outside the staged decisions and remain current on adoption.
+ */
+export function stagedOrganizationCompatibility(data, staged = organizationState(data).staged) {
+    if (!staged) return { compatible: false, additionsPreserved: 0 };
+    const currentEntries = data.state_table?.entries || [];
+    const currentVersion = Number(data.state_table?.version || 0);
+    if (Number(staged.base_version) === currentVersion
+        && staged.state_signature === stateReviewSignature(data)) {
+        return { compatible: true, additionsPreserved: 0 };
+    }
+
+    const decisionIds = (staged.decisions || []).map(decision => String(decision?.entry_id || ''));
+    const reviewedIds = new Set(decisionIds);
+    if (!decisionIds.length || reviewedIds.has('') || reviewedIds.size !== decisionIds.length) {
+        return { compatible: false, additionsPreserved: 0 };
+    }
+    const reviewedEntries = currentEntries.filter(entry => reviewedIds.has(String(entry?.id || '')));
+    if (reviewedEntries.length !== reviewedIds.size
+        || stateReviewSignatureForEntries(reviewedEntries) !== staged.state_signature) {
+        return { compatible: false, additionsPreserved: 0 };
+    }
+    return {
+        compatible: true,
+        additionsPreserved: currentEntries.length - reviewedEntries.length,
+    };
+}
+
 /** Adopt one staged preview atomically and keep one exact rollback snapshot. */
 export function applyStagedOrganization(data, { recordEvent = recordManualEvent } = {}) {
     const organization = organizationState(data);
     const staged = organization.staged;
     if (!staged) return { error: 'missing', moved: 0 };
-    if (Number(staged.base_version) !== Number(data.state_table?.version || 0)
-        || staged.state_signature !== stateReviewSignature(data)) {
+    const compatibility = stagedOrganizationCompatibility(data, staged);
+    if (!compatibility.compatible) {
         organization.status = 'stale';
         return { error: 'stale', moved: 0 };
     }
@@ -808,8 +842,20 @@ export function applyStagedOrganization(data, { recordEvent = recordManualEvent 
     lifecycle.last_completed_at = archivedAt;
     lifecycle.last_state_signature = stateReviewSignature(data);
     lifecycle.last_narrative_floor = latestNarrativeFloor(data);
-    lifecycle.last_result = { reviewed: staged.decisions?.length || 0, moved, reason: 'full_organization_adopted', run_id: staged.id };
-    return { error: null, moved: removedIds.size, destinations: moved, reviewed: staged.decisions?.length || 0 };
+    lifecycle.last_result = {
+        reviewed: staged.decisions?.length || 0,
+        moved,
+        additionsPreserved: compatibility.additionsPreserved,
+        reason: 'full_organization_adopted',
+        run_id: staged.id,
+    };
+    return {
+        error: null,
+        moved: removedIds.size,
+        destinations: moved,
+        reviewed: staged.decisions?.length || 0,
+        additionsPreserved: compatibility.additionsPreserved,
+    };
 }
 
 export function discardStagedOrganization(data) {

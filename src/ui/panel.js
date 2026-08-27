@@ -53,6 +53,7 @@ import {
     applyStateReviewBatch,
     discardStagedOrganization,
     rollbackLastOrganization,
+    stagedOrganizationCompatibility,
     stateReviewEntries,
     STATE_REVIEW_KIND,
 } from '../state-review.js';
@@ -1217,6 +1218,10 @@ function bindStateTab(body) {
     body.querySelector('#lm-adopt-organization')?.addEventListener('click', async () => {
         const data = getChatData();
         const counts = data.memory_organization?.staged?.counts || {};
+        const compatibility = stagedOrganizationCompatibility(data);
+        const additionDetail = compatibility.compatible && compatibility.additionsPreserved > 0
+            ? `预览后新增 ${compatibility.additionsPreserved} 条，将原样保留在当前记忆`
+            : null;
         const confirmed = await openConfirmDialog({
             kicker: '采用整理预览',
             title: '把这次分类应用到正式记忆？',
@@ -1226,6 +1231,7 @@ function bindStateTab(body) {
                 `退役 ${counts.retired || 0} 条`,
                 `转入剧情历史 ${counts.historical || 0} 条`,
                 `不确定 ${counts.uncertain || 0} 条继续留在当前记忆`,
+                ...(additionDetail ? [additionDetail] : []),
             ],
             confirmLabel: '采用并保留回滚快照',
             cancelLabel: '继续查看预览',
@@ -1239,7 +1245,10 @@ function bindStateTab(body) {
         }
         await saveChatData(data);
         updateInjection();
-        toastr?.success?.(`整理结果已采用，共移动 ${result.moved} 条；可随时回到整理前。`);
+        const additionNote = result.additionsPreserved > 0
+            ? `；另保留预览后新增的 ${result.additionsPreserved} 条`
+            : '';
+        toastr?.success?.(`整理结果已采用，共移动 ${result.moved} 条${additionNote}；可随时回到整理前。`);
         renderActiveTab();
     });
     body.querySelector('#lm-discard-organization')?.addEventListener('click', async () => {
