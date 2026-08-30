@@ -3,7 +3,9 @@ import {
     appendBackstageMessage,
     backstageMarkerMeta,
     backstageOutputMeta,
+    buildBackstageCarryoverRequest,
     buildBackstageDiscussionRequest,
+    clearBackstageCarryover as clearBackstageCarryoverState,
     clearBackstageWorkingCopy,
     closeBackstageSessions,
     createBackstageRevision,
@@ -16,16 +18,20 @@ import {
     markBackstageMarkerMessage,
     markBackstageOutputMessage,
     markerDisplayText,
+    renderBackstageCarryoverBlock,
+    setBackstageCarryover,
+    setBackstageCarryoverRequested,
     setBackstageComposerDraft,
     setBackstageWorkingCopy,
 } from './backstage.js';
 import { ensureMessageIds, getActiveMesText, messageStableKey } from './ids.js';
-import { buildCoreMemoryParts } from './inject.js';
+import { buildCoreMemoryParts, updateInjection } from './inject.js';
 import { getChatData, getContext, saveChatData, saveChatMessages } from './settings.js';
 import { estimateTokens } from './tokens.js';
 
 const subscribers = new Set();
 let activeDiscussion = null;
+let activeCarryoverRequest = null;
 let discussionEpoch = 0;
 let pendingSubmission = null;
 let lastPersistenceErrorAt = 0;
@@ -152,7 +158,9 @@ export function getBackstageSnapshot() {
     const session = getBackstageSession(data, state.activeSessionId);
     return {
         session: session ? clone(session) : null,
+        activeCarryover: state.activeCarryover ? clone(state.activeCarryover) : null,
         discussionInFlight: Boolean(activeDiscussion),
+        carryoverInFlight: Boolean(activeCarryoverRequest),
         pendingGeneration: state.pendingGeneration ? clone(state.pendingGeneration) : null,
     };
 }
@@ -170,6 +178,14 @@ export function beginBackstageSession({ messageIndex = null } = {}) {
         const session = getBackstageSession(data, meta.sessionId);
         const revision = getBackstageRevision(session, meta.revisionId);
         if (!session || !revision) throw new Error('这次幕间讨论已经无法读取');
+        const markerIsActiveWorkingCopy = Boolean(marker)
+            && messageIndex === chat.length - 1
+            && state.activeSessionId === session.id
+            && session.working?.baseRevisionId === revision.id;
+        if (markerIsActiveWorkingCopy) {
+            notify();
+            return clone(session);
+        }
         const targetIndex = output ? messageIndex : findMessageIndexByKey(revision.targetMessageKey);
         const target = chat[targetIndex];
         const targetMeta = backstageOutputMeta(target);
@@ -219,6 +235,80 @@ export function saveBackstageComposerDraft(text) {
     return true;
 }
 
+export function saveBackstageCarryoverRequested(value) {
+    const data = getChatData();
+    const session = activeWorkingSession();
+    if (!session || !setBackstageCarryoverRequested(data, session.id, value)) return false;
+    notify();
+    void queueBackstageSave(data);
+    return true;
+}
+
+export function saveBackstageCarryoverText(text) {
+    const value = String(text ?? '').trim();
+    if (!value) throw new Error('后续约定不能为空');
+    const data = getChatData();
+    const current = ensureBackstageState(data).activeCarryover;
+    const carryover = setBackstageCarryover(data, { ...current, text: value });
+    updateInjection();
+    notify();
+    void queueBackstageSave(data);
+    return clone(carryover);
+}
+
+export function stopBackstageCarryover() {
+    const data = getChatData();
+    if (!clearBackstageCarryoverState(data)) return false;
+    updateInjection();
+    notify();
+    void queueBackstageSave(data);
+    return true;
+}
+
+export async function prepareBackstageCarryover() {
+    if (activeCarryoverRequest) return activeCarryoverRequest.promise;
+    const data = getChatData();
+    const session = activeWorkingSession();
+    const context = getContext();
+    if (!session?.working?.messages?.length) throw new Error('还没有可以整理的幕间讨论');
+    if (isBackstageDiscussionInFlight()) throw new Error('叙述者还在回应，请稍等片刻');
+    if (hostIsGenerating()) throw new Error('酒馆正在生成正文，请等这一轮结束');
+    if (typeof context.generateRaw !== 'function') throw new Error('当前 SillyTavern 版本无法整理后续约定');
+    const request = {
+        data,
+        sessionId: session.id,
+        promise: null,
+    };
+    request.promise = (async () => {
+        try {
+            const state = ensureBackstageState(data);
+            const generation = buildBackstageCarryoverRequest(session, state.activeCarryover);
+            const text = cleanModelReply(await context.generateRaw(generation));
+            if (activeCarryoverRequest !== request || getChatData() !== data) return null;
+            if (!text) throw new Error('模型没有返回可保存的后续约定');
+            const currentSession = getBackstageSession(data, session.id);
+            if (!currentSession?.working) throw new Error('幕间已经切换，未保存迟到的后续约定');
+            const carryover = setBackstageCarryover(data, {
+                text,
+                sourceSessionId: session.id,
+                sourceRevisionId: null,
+                anchorMessageKey: null,
+            });
+            updateInjection();
+            void queueBackstageSave(data);
+            return clone(carryover);
+        } finally {
+            if (activeCarryoverRequest === request) {
+                activeCarryoverRequest = null;
+                notify();
+            }
+        }
+    })();
+    activeCarryoverRequest = request;
+    notify();
+    return request.promise;
+}
+
 async function runBackstageNarratorReply(request) {
     const { data, sessionId, userMessageId, context } = request;
     try {
@@ -228,6 +318,7 @@ async function runBackstageNarratorReply(request) {
             narratorName: context.name2 || '叙述者',
             l2,
             raw,
+            carryover: renderBackstageCarryoverBlock(data),
         });
         const text = cleanModelReply(await context.generateRaw(generation));
         if (!discussionIsCurrent(request)) return null;
@@ -326,6 +417,7 @@ export function clearBackstageSession() {
 
 export function handleBackstageChatChanged() {
     pendingSubmission = null;
+    activeCarryoverRequest = null;
     return invalidateDiscussion({ stop: true });
 }
 
@@ -406,6 +498,13 @@ export async function continueBackstageToStory() {
     const state = ensureBackstageState(data);
     if (state.pendingGeneration) throw new Error('这一版剧情已经在生成');
     const revision = createBackstageRevision(data, session.id);
+    const carryover = state.activeCarryover;
+    if (carryover?.sourceSessionId === session.id && !carryover.sourceRevisionId) {
+        setBackstageCarryover(data, {
+            ...carryover,
+            sourceRevisionId: revision.id,
+        });
+    }
     state.pendingGeneration = {
         sessionId: session.id,
         revisionId: revision.id,
@@ -460,6 +559,13 @@ export function handleBackstageMessageSent(messageIndex) {
         ensureMessageIds();
         session.markerMessageKey = messageStableKey(message);
         revision.markerMessageKey = session.markerMessageKey;
+        const carryover = state.activeCarryover;
+        if (carryover?.sourceSessionId === session.id && carryover.sourceRevisionId === revision.id) {
+            setBackstageCarryover(data, {
+                ...carryover,
+                anchorMessageKey: session.markerMessageKey,
+            });
+        }
         session.updatedAt = Date.now();
         notify();
         void queueBackstageSave(data);
@@ -534,6 +640,7 @@ export function handleBackstageGenerationStopped({ includeDiscussion = true } = 
 
 export function backstageSessionForMessage(messageIndex) {
     const data = getChatData();
+    const state = ensureBackstageState(data);
     const chat = getContext().chat || [];
     const message = chat[messageIndex];
     const marker = backstageMarkerMeta(message);
@@ -546,11 +653,61 @@ export function backstageSessionForMessage(messageIndex) {
     const targetIndex = output ? messageIndex : findMessageIndexByKey(revision.targetMessageKey);
     const target = chat[targetIndex];
     const targetMeta = backstageOutputMeta(target);
-    const editable = targetIndex === chat.length - 1
+    const markerIndex = marker ? messageIndex : findMessageIndexByKey(revision.markerMessageKey);
+    const markerIsActiveWorkingCopy = Boolean(marker)
+        && markerIndex === chat.length - 1
+        && state.activeSessionId === session.id
+        && session.working?.baseRevisionId === revision.id;
+    const outputIsEditable = targetIndex === chat.length - 1
         && !target?.is_user
         && targetMeta?.sessionId === session.id
         && targetMeta?.revisionId === revision.id;
-    return { session: clone(session), revision: clone(revision), output: Boolean(output), editable };
+    const editable = markerIsActiveWorkingCopy || outputIsEditable;
+    return {
+        session: clone(session),
+        revision: clone(revision),
+        output: Boolean(output),
+        editable,
+        sourceIndex: messageIndex,
+        markerIndex,
+        targetIndex,
+    };
+}
+
+export function listBackstageRecords() {
+    const data = getChatData();
+    const state = ensureBackstageState(data);
+    const records = [];
+    for (const session of state.sessions) {
+        for (const revision of session.revisions || []) {
+            const markerIndex = findMessageIndexByKey(revision.markerMessageKey || session.markerMessageKey);
+            if (markerIndex < 0) continue;
+            const targetIndex = findMessageIndexByKey(revision.targetMessageKey);
+            const lastMessage = revision.messages?.at(-1);
+            records.push({
+                sessionId: session.id,
+                revisionId: revision.id,
+                markerIndex,
+                targetIndex,
+                createdAt: revision.createdAt,
+                messageCount: revision.messages?.length || 0,
+                preview: String(lastMessage?.text || '').trim(),
+                editable: backstageSessionForMessage(markerIndex)?.editable || false,
+            });
+        }
+    }
+    return records.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+}
+
+export async function branchFromBackstage(messageIndex) {
+    const linked = backstageSessionForMessage(messageIndex);
+    if (!linked || linked.markerIndex < 0) throw new Error('找不到这次幕间在聊天中的位置');
+    await queueBackstageSave(getChatData());
+    const { branchChat } = await import('/scripts/bookmarks.js');
+    if (typeof branchChat !== 'function') throw new Error('当前 SillyTavern 版本不支持创建分支');
+    const fileName = await branchChat(linked.markerIndex);
+    if (!fileName) throw new Error('没有成功创建幕间分支');
+    return fileName;
 }
 
 export function isBackstageDiscussionInFlight() {

@@ -39,6 +39,7 @@ import {
     injectBackstageUi,
     refreshBackstageMarkers,
     refreshBackstageTriggerState,
+    scheduleBackstageMarkerRefresh,
 } from './src/ui/backstage.js';
 
 const MODULE = 'layered-memory';
@@ -259,6 +260,7 @@ jQuery(async () => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
         handleBackstageMessageReceived(normalizedId, type);
+        scheduleBackstageMarkerRefresh(normalizedId - 1);
         refreshBackstageTriggerState();
         if (type === 'swipe') {
             queueHistoryMutation(normalizedId);
@@ -271,7 +273,7 @@ jQuery(async () => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
         const createdBackstageMarker = handleBackstageMessageSent(normalizedId);
-        if (createdBackstageMarker) refreshBackstageMarkers(normalizedId);
+        if (createdBackstageMarker) scheduleBackstageMarkerRefresh(normalizedId);
         refreshBackstageTriggerState();
     });
 
@@ -337,7 +339,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.20.2`);
+    console.log(`[${MODULE}] 已加载 v0.22.0`);
 });
 
 export async function onActivate() {

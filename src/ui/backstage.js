@@ -2,12 +2,18 @@ import {
     backstageInputTokenEstimate,
     backstageSessionForMessage,
     beginBackstageSession,
+    branchFromBackstage,
     clearBackstageSession,
     continueBackstageToStory,
     getBackstageSnapshot,
     isBackstageDiscussionInFlight,
+    listBackstageRecords,
+    prepareBackstageCarryover,
     requestBackstageNarratorReply,
+    saveBackstageCarryoverRequested,
+    saveBackstageCarryoverText,
     saveBackstageComposerDraft,
+    stopBackstageCarryover,
     stopBackstageNarratorReply,
     submitBackstageUserMessage,
     subscribeBackstage,
@@ -19,9 +25,12 @@ const TRIGGER_ID = 'lm-backstage-trigger';
 const DIALOG_ID = 'lm-backstage-dialog';
 let lastTrigger = null;
 let archivedView = null;
+let linkedView = null;
+let historyView = false;
 let isComposing = false;
 let draftSaveTimer = null;
 let triggerRetryTimer = null;
+const markerRefreshTimers = new Map();
 let uiInjected = false;
 let dialogReady = false;
 let hydrationGeneration = 0;
@@ -43,6 +52,55 @@ function dialog() {
 function activeMessages(snapshot) {
     if (archivedView) return archivedView.revision.messages || [];
     return snapshot.session?.working?.messages || [];
+}
+
+function formatRecordTime(value) {
+    const date = new Date(Number(value) || Date.now());
+    return new Intl.DateTimeFormat('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(date);
+}
+
+function renderBackstageHistory() {
+    const root = dialog();
+    const history = root?.querySelector('.lm-backstage-history');
+    const list = history?.querySelector('.lm-backstage-history-list');
+    const empty = history?.querySelector('.lm-backstage-history-empty');
+    if (!history || !list || !empty) return;
+    const records = listBackstageRecords();
+    empty.hidden = records.length > 0;
+    list.hidden = records.length === 0;
+    list.innerHTML = records.map(record => `
+        <li>
+            <button type="button" class="lm-backstage-history-item" data-message-index="${record.markerIndex}">
+                <span class="lm-backstage-history-meta">
+                    <strong>幕间讨论 · ${record.messageCount} 条</strong>
+                    <time>${escapeHtml(formatRecordTime(record.createdAt))}</time>
+                </span>
+                <span class="lm-backstage-history-preview">${escapeHtml(record.preview || '打开查看这次完整讨论')}</span>
+                <span class="lm-backstage-history-state">${record.editable ? '仍可继续修改' : '只读记录'} <i class="fa-solid fa-chevron-right" aria-hidden="true"></i></span>
+            </button>
+        </li>`).join('');
+}
+
+function renderCarryover(snapshot) {
+    const root = dialog();
+    const panel = root?.querySelector('.lm-backstage-carryover');
+    const note = snapshot.activeCarryover;
+    if (!panel) return;
+    panel.hidden = !note;
+    if (!note) return;
+    const textarea = panel.querySelector('.lm-backstage-carryover-text');
+    if (textarea && document.activeElement !== textarea && textarea.value !== note.text) {
+        textarea.value = note.text;
+    }
+    const saving = snapshot.carryoverInFlight;
+    if (textarea) textarea.disabled = saving;
+    panel.querySelector('.lm-backstage-carryover-save')?.toggleAttribute('disabled', saving);
+    panel.querySelector('.lm-backstage-carryover-stop')?.toggleAttribute('disabled', saving);
 }
 
 function renderNarratorText(text) {
@@ -109,12 +167,27 @@ function scheduleTokenEstimate({ readOnly, messages }) {
 function renderTranscript(snapshot, { preserveScroll = false } = {}) {
     const root = dialog();
     if (!root) return;
+    renderCarryover(snapshot);
+    const history = root.querySelector('.lm-backstage-history');
+    const story = root.querySelector('.lm-backstage-story-view');
+    const footer = root.querySelector('.lm-backstage-footer');
+    const historyButton = root.querySelector('.lm-backstage-history-open');
+    if (history) history.hidden = !historyView;
+    if (story) story.hidden = historyView;
+    if (footer) footer.hidden = historyView;
+    if (historyButton) historyButton.textContent = historyView ? '回到当前幕间' : '幕间记录';
+    if (historyView) {
+        const mode = root.querySelector('.lm-backstage-mode');
+        if (mode) mode.textContent = '以前商量过的内容都在这里';
+        renderBackstageHistory();
+        return;
+    }
     const session = archivedView?.session || snapshot.session;
     const revision = archivedView?.revision || null;
     const working = session?.working;
     const messages = activeMessages(snapshot);
     const readOnly = Boolean(archivedView);
-    const loading = snapshot.discussionInFlight || isBackstageDiscussionInFlight();
+    const loading = snapshot.discussionInFlight || snapshot.carryoverInFlight || isBackstageDiscussionInFlight();
     const scroller = root.querySelector('.lm-backstage-transcript');
     const distanceFromBottom = scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight : 0;
     const list = root.querySelector('.lm-backstage-turns');
@@ -168,6 +241,20 @@ function renderTranscript(snapshot, { preserveScroll = false } = {}) {
         continueButton.hidden = readOnly;
         continueButton.disabled = loading || !hasNarratorReply || messages.at(-1)?.role !== 'narrator';
         continueButton.textContent = working?.baseRevisionId ? '好了，重写这段' : '可以了，继续！';
+    }
+    const carryoverChoice = root.querySelector('.lm-backstage-carryover-choice');
+    if (carryoverChoice) {
+        carryoverChoice.hidden = readOnly;
+        const checkbox = carryoverChoice.querySelector('input');
+        if (checkbox) {
+            checkbox.checked = Boolean(working?.carryoverRequested);
+            checkbox.disabled = loading;
+        }
+    }
+    const branchButton = root.querySelector('.lm-backstage-branch');
+    if (branchButton) {
+        branchButton.hidden = !linkedView || linkedView.markerIndex < 0;
+        branchButton.disabled = loading;
     }
     scheduleTokenEstimate({ readOnly, messages });
 
@@ -292,17 +379,74 @@ async function continueStory() {
     setError('');
     button.disabled = true;
     button.textContent = '正在回到剧情…';
-    const closePromise = closeBackstageDialog({ restoreFocus: false });
     try {
+        const snapshot = getBackstageSnapshot();
+        if (snapshot.session?.working?.carryoverRequested) {
+            button.textContent = '正在整理后续约定…';
+            await prepareBackstageCarryover();
+            if (!dialog()?.open || !dialogReady) return;
+            button.textContent = '正在回到剧情…';
+        }
+        const closePromise = closeBackstageDialog({ restoreFocus: false });
         const generation = continueBackstageToStory();
         await Promise.all([closePromise, generation]);
     } catch (error) {
-        await closePromise;
         globalThis.toastr?.error?.(`没有继续成功：${error?.message ?? error}`);
-        await openBackstageDialog({ trigger: lastTrigger });
-        if (dialogReady) {
-            setError(`没有继续成功：${error?.message ?? error}。幕间讨论仍然保留。`);
-        }
+        if (!dialog()?.open) await openBackstageDialog({ trigger: lastTrigger });
+        if (dialogReady) setError(`没有继续成功：${error?.message ?? error}。幕间讨论仍然保留。`);
+        renderTranscript(getBackstageSnapshot());
+    }
+}
+
+function toggleHistoryView() {
+    if (!dialogReady) return;
+    setError('');
+    if (!historyView) {
+        historyView = true;
+        archivedView = null;
+        linkedView = null;
+        renderTranscript(getBackstageSnapshot());
+        return;
+    }
+    historyView = false;
+    archivedView = null;
+    linkedView = null;
+    beginBackstageSession();
+    renderTranscript(getBackstageSnapshot());
+    dialog()?.querySelector('#lm-backstage-input')?.focus();
+}
+
+function saveCarryoverText() {
+    const textarea = dialog()?.querySelector('.lm-backstage-carryover-text');
+    try {
+        saveBackstageCarryoverText(textarea?.value || '');
+        globalThis.toastr?.success?.('后续约定已更新');
+    } catch (error) {
+        setError(`没有保存后续约定：${error?.message ?? error}`);
+    }
+}
+
+function stopCarryover() {
+    if (!stopBackstageCarryover()) return;
+    globalThis.toastr?.info?.('后续约定已停止生效');
+    renderTranscript(getBackstageSnapshot());
+}
+
+async function branchLinkedBackstage() {
+    const markerIndex = linkedView?.markerIndex;
+    if (!Number.isInteger(markerIndex) || markerIndex < 0) return;
+    const button = dialog()?.querySelector('.lm-backstage-branch');
+    if (button) {
+        button.disabled = true;
+        button.textContent = '正在创建分支…';
+    }
+    try {
+        await closeBackstageDialog({ restoreFocus: false });
+        const fileName = await branchFromBackstage(markerIndex);
+        globalThis.toastr?.success?.(`已从这次幕间创建分支：${fileName}`);
+    } catch (error) {
+        globalThis.toastr?.error?.(`没有创建成功：${error?.message ?? error}`);
+        await openBackstageDialog({ messageIndex: markerIndex, trigger: lastTrigger });
     }
 }
 
@@ -318,6 +462,16 @@ function showDialogShell() {
     setError('');
     const rejected = root.querySelector('.lm-backstage-rejected');
     if (rejected) rejected.hidden = true;
+    const carryover = root.querySelector('.lm-backstage-carryover');
+    if (carryover) carryover.hidden = true;
+    const history = root.querySelector('.lm-backstage-history');
+    if (history) history.hidden = true;
+    const story = root.querySelector('.lm-backstage-story-view');
+    if (story) story.hidden = false;
+    const footer = root.querySelector('.lm-backstage-footer');
+    if (footer) footer.hidden = false;
+    const historyButton = root.querySelector('.lm-backstage-history-open');
+    if (historyButton) historyButton.textContent = '幕间记录';
     const empty = root.querySelector('.lm-backstage-empty');
     if (empty) empty.hidden = true;
     const hydrating = root.querySelector('.lm-backstage-hydrating');
@@ -348,6 +502,14 @@ function showDialogShell() {
         continueButton.disabled = true;
         continueButton.textContent = '可以了，继续！';
     }
+    const branchButton = root.querySelector('.lm-backstage-branch');
+    if (branchButton) {
+        branchButton.hidden = true;
+        branchButton.disabled = false;
+        branchButton.textContent = '从这次幕间分支';
+    }
+    const carryoverChoice = root.querySelector('.lm-backstage-carryover-choice');
+    if (carryoverChoice) carryoverChoice.hidden = false;
     const token = root.querySelector('.lm-backstage-token-count');
     if (token) token.textContent = '正在准备…';
 }
@@ -364,9 +526,12 @@ async function hydrateDialog({ messageIndex }, generation) {
     if (generation !== hydrationGeneration || !root?.open) return false;
     try {
         archivedView = null;
+        linkedView = null;
+        historyView = false;
         if (Number.isInteger(messageIndex)) {
             const linked = backstageSessionForMessage(messageIndex);
             if (!linked) throw new Error('找不到这条消息关联的幕间讨论');
+            linkedView = linked;
             if (linked.editable) beginBackstageSession({ messageIndex });
             else archivedView = linked;
         } else {
@@ -409,6 +574,8 @@ export async function openBackstageDialog({ messageIndex = null, trigger = null 
     lastTrigger = trigger || document.activeElement;
     lastOpenRequest = { messageIndex, trigger: lastTrigger };
     archivedView = null;
+    linkedView = null;
+    historyView = false;
     const generation = ++hydrationGeneration;
     showDialogShell();
     return hydrateDialog({ messageIndex }, generation);
@@ -437,28 +604,53 @@ function makeDialog() {
                     <p class="lm-backstage-mode">剧情暂停在这里。直接说说你的想法。</p>
                 </div>
                 <div class="lm-backstage-window-actions">
+                    <button type="button" class="lm-backstage-history-open">幕间记录</button>
                     <button type="button" class="lm-backstage-clear" disabled>清空本次幕间</button>
                     <button type="button" class="lm-backstage-icon lm-backstage-expand fa-solid fa-expand" aria-label="展开幕间窗口" aria-pressed="false" title="展开窗口"></button>
                     <button type="button" class="lm-backstage-icon lm-backstage-close fa-solid fa-xmark" aria-label="关闭幕间窗口" title="关闭窗口"></button>
                 </div>
             </header>
+            <details class="lm-backstage-carryover" hidden>
+                <summary>
+                    <span><i class="fa-solid fa-thumbtack" aria-hidden="true"></i> 后续约定 · 正在生效</span>
+                    <span class="lm-backstage-carryover-hint">展开查看或修改</span>
+                </summary>
+                <div class="lm-backstage-carryover-editor">
+                    <label for="lm-backstage-carryover-text">这些方向会持续影响后续正文，但不属于剧情事实</label>
+                    <textarea id="lm-backstage-carryover-text" class="lm-backstage-carryover-text" rows="5"></textarea>
+                    <div class="lm-backstage-carryover-actions">
+                        <button type="button" class="lm-backstage-carryover-stop">停止生效</button>
+                        <button type="button" class="lm-backstage-carryover-save">保存修改</button>
+                    </div>
+                </div>
+            </details>
             <main class="lm-backstage-transcript">
-                <div class="lm-backstage-hydrating" role="status" aria-live="polite" hidden>
-                    <span class="lm-backstage-hydrating-mark" aria-hidden="true"><i class="fa-solid fa-masks-theater"></i></span>
-                    <span>正在接上这段剧情…</span>
-                </div>
-                <details class="lm-backstage-rejected" hidden>
-                    <summary>上一版正文</summary>
-                    <p></p>
-                </details>
-                <div class="lm-backstage-empty">
-                    <span>剧情已经暂停</span>
-                    <p>问清刚才发生了什么，或者直接告诉叙述者下一段想要怎样的感觉。</p>
-                </div>
-                <ol class="lm-backstage-turns" aria-live="polite" aria-relevant="additions"></ol>
-                <div class="lm-backstage-thinking" role="status" aria-live="polite" hidden>
-                    <span class="lm-backstage-thinking-label">叙述者正在回应</span>
-                    <span class="lm-backstage-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                <section class="lm-backstage-history" hidden>
+                    <div class="lm-backstage-history-intro">
+                        <span class="lm-backstage-history-mark" aria-hidden="true"><i class="fa-solid fa-box-archive"></i></span>
+                        <div><strong>以前的幕间没有消失</strong><p>打开任意一次记录，可以查看完整讨论或从那里另开一条剧情线。</p></div>
+                    </div>
+                    <p class="lm-backstage-history-empty" hidden>这个聊天里还没有已完成的幕间讨论。</p>
+                    <ol class="lm-backstage-history-list"></ol>
+                </section>
+                <div class="lm-backstage-story-view">
+                    <div class="lm-backstage-hydrating" role="status" aria-live="polite" hidden>
+                        <span class="lm-backstage-hydrating-mark" aria-hidden="true"><i class="fa-solid fa-masks-theater"></i></span>
+                        <span>正在接上这段剧情…</span>
+                    </div>
+                    <details class="lm-backstage-rejected" hidden>
+                        <summary>上一版正文</summary>
+                        <p></p>
+                    </details>
+                    <div class="lm-backstage-empty">
+                        <span>剧情已经暂停</span>
+                        <p>问清刚才发生了什么，或者直接告诉叙述者下一段想要怎样的感觉。</p>
+                    </div>
+                    <ol class="lm-backstage-turns" aria-live="polite" aria-relevant="additions"></ol>
+                    <div class="lm-backstage-thinking" role="status" aria-live="polite" hidden>
+                        <span class="lm-backstage-thinking-label">叙述者正在回应</span>
+                        <span class="lm-backstage-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                    </div>
                 </div>
             </main>
             <footer class="lm-backstage-footer">
@@ -474,6 +666,11 @@ function makeDialog() {
                     <button type="button" class="lm-backstage-retry">重新询问</button>
                 </div>
                 <div class="lm-backstage-actions">
+                    <label class="lm-backstage-carryover-choice" title="把已经商量好的长期方向整理成短便签，继续影响后面的正文">
+                        <input type="checkbox">
+                        <span>后续仍需记住</span>
+                    </label>
+                    <button type="button" class="lm-backstage-branch" hidden>从这次幕间分支</button>
                     <span class="lm-backstage-token-count">约 0 token</span>
                     <button type="button" class="lm-backstage-continue" disabled>可以了，继续！</button>
                 </div>
@@ -487,11 +684,25 @@ function makeDialog() {
     });
     root.querySelector('.lm-backstage-close')?.addEventListener('click', () => closeBackstageDialog());
     root.querySelector('.lm-backstage-expand')?.addEventListener('click', event => toggleExpanded(event.currentTarget));
+    root.querySelector('.lm-backstage-history-open')?.addEventListener('click', toggleHistoryView);
     root.querySelector('.lm-backstage-clear')?.addEventListener('click', clearCurrentBackstage);
+    root.querySelector('.lm-backstage-carryover-save')?.addEventListener('click', saveCarryoverText);
+    root.querySelector('.lm-backstage-carryover-stop')?.addEventListener('click', stopCarryover);
     root.querySelector('.lm-backstage-send')?.addEventListener('click', sendBackstageMessage);
     root.querySelector('.lm-backstage-retry')?.addEventListener('click', retryBackstageError);
     root.querySelector('.lm-backstage-stop')?.addEventListener('click', stopBackstageNarratorReply);
+    root.querySelector('.lm-backstage-branch')?.addEventListener('click', () => { void branchLinkedBackstage(); });
     root.querySelector('.lm-backstage-continue')?.addEventListener('click', continueStory);
+    root.querySelector('.lm-backstage-carryover-choice input')?.addEventListener('change', event => {
+        saveBackstageCarryoverRequested(event.currentTarget.checked);
+    });
+    root.querySelector('.lm-backstage-history-list')?.addEventListener('click', event => {
+        const item = event.target.closest?.('.lm-backstage-history-item[data-message-index]');
+        if (!item) return;
+        const messageIndex = Number(item.dataset.messageIndex);
+        if (!Number.isInteger(messageIndex)) return;
+        void openBackstageDialog({ messageIndex, trigger: item });
+    });
     const textarea = root.querySelector('#lm-backstage-input');
     textarea?.addEventListener('compositionstart', () => { isComposing = true; });
     textarea?.addEventListener('compositionend', () => { isComposing = false; });
@@ -508,8 +719,10 @@ function updateTriggerState() {
     const trigger = document.getElementById(TRIGGER_ID);
     if (!trigger) return;
     const context = getContext();
+    const snapshot = getBackstageSnapshot();
     const generating = document.body?.dataset?.generating === 'true'
-        || isBackstageDiscussionInFlight();
+        || isBackstageDiscussionInFlight()
+        || snapshot.carryoverInFlight;
     trigger.disabled = !(context.chat?.length) || generating;
     trigger.setAttribute('aria-disabled', String(trigger.disabled));
     trigger.title = trigger.disabled
@@ -576,6 +789,25 @@ export function refreshBackstageMarkers(messageIndex = null) {
         const index = Number(element.getAttribute('mesid'));
         setMarkerAccessibility(element, isBackstageMarker(context.chat?.[index]));
     });
+}
+
+export function scheduleBackstageMarkerRefresh(messageIndex, attempt = 0) {
+    if (!Number.isInteger(messageIndex) || messageIndex < 0) return;
+    clearTimeout(markerRefreshTimers.get(messageIndex));
+    markerRefreshTimers.delete(messageIndex);
+    const message = getContext().chat?.[messageIndex];
+    if (!isBackstageMarker(message)) return;
+    const element = document.querySelector(`#chat .mes[mesid="${messageIndex}"]`);
+    if (element) {
+        setMarkerAccessibility(element, true);
+        return;
+    }
+    if (attempt >= 12) return;
+    const timer = setTimeout(() => {
+        markerRefreshTimers.delete(messageIndex);
+        scheduleBackstageMarkerRefresh(messageIndex, attempt + 1);
+    }, Math.min(240, 24 * (attempt + 1)));
+    markerRefreshTimers.set(messageIndex, timer);
 }
 
 export function refreshBackstageTriggerState() {

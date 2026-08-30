@@ -31,6 +31,9 @@ const context = {
     event_types: { MESSAGE_EDITED: 'message_edited' },
     async generateRaw(options) {
         rawRequest = structuredClone(options);
+        if (options.systemPrompt?.includes('整理玩家与叙述者已经完成的幕后创作讨论')) {
+            return '- 闯入者先在山门外施压，不立刻开战\n- 暂时不揭晓幕后主使';
+        }
         return generatedCount === 0
             ? '可以。下一段我会让一群来历不明的人闯入，但先不给出幕后主使。'
             : '明白。闯入者会先用言语施压，不会一上来就替你决定是否动手。';
@@ -75,6 +78,7 @@ const {
     formatBackstagePlayerInput,
 } = await import('../src/backstage.js');
 const { getPairTexts, getPairs } = await import('../src/ids.js');
+const { renderCoreMemoryPayload } = await import('../src/inject.js');
 const { currentNarrativeSources, fallbackNarrativeSummary } = await import('../src/narrative.js');
 const { renderRecentRawBlock } = await import('../src/recent-raw.js');
 
@@ -93,6 +97,13 @@ assert.equal(Object.hasOwn(rawRequest, 'responseLength'), false,
 assert.deepEqual(rawRequest.prompt.map(message => message.role), ['user'],
     '幕间消息必须以真实角色数组发送，而不是拼进完整正文预设');
 
+runtime.saveBackstageCarryoverRequested(true);
+await runtime.prepareBackstageCarryover();
+let carryover = runtime.getBackstageSnapshot().activeCarryover;
+assert.match(carryover.text, /山门外施压/u, '长线商量应整理成独立的后续约定');
+assert.match(renderCoreMemoryPayload(), /幕后创作约定[\s\S]*山门外施压/u,
+    '后续约定必须进入正文注入，但保持非剧情事实边界');
+
 const fullText = '很长也不能截断：'.repeat(2_000);
 assert.match(formatBackstagePlayerInput({ messages: [{ role: 'user', text: fullText }] }), new RegExp(fullText.slice(-80)),
     '幕间全文不得静默截断');
@@ -108,6 +119,9 @@ assert.equal(marker.extra.display_text, '幕间讨论 · 2 条对话');
 assert.equal(marker.extra.isSmallSys, true);
 assert.ok(marker.extra[BACKSTAGE_MARKER_EXTRA]?.revisionId);
 assert.ok(firstOutput.extra[BACKSTAGE_OUTPUT_EXTRA]?.revisionId);
+carryover = runtime.getBackstageSnapshot().activeCarryover;
+assert.equal(carryover.sourceRevisionId, marker.extra[BACKSTAGE_MARKER_EXTRA].revisionId);
+assert.ok(carryover.anchorMessageKey, '后续约定必须绑定控制楼，供分支安全继承');
 const persistedFirstSession = context.chatMetadata.layered_memory.backstage.sessions[0];
 assert.equal(persistedFirstSession.revisions[0].markerMessageKey, persistedFirstSession.markerMessageKey,
     '修订与控制楼的关联必须真实持久化，不能只存在于临时对象');
@@ -173,5 +187,27 @@ assert.equal(runtime.backstageSessionForMessage(2).editable, false,
     '控制楼关联的正文不再是最后一条后必须退回只读模式');
 assert.throws(() => runtime.beginBackstageSession({ messageIndex: 2 }), /剧情已经继续/u,
     '旧控制楼不得重写已经继续之后的历史');
+
+chat.splice(3);
+const backstageState = context.chatMetadata.layered_memory.backstage;
+const branchSession = backstageState.sessions.find(item => item.id === marker.extra[BACKSTAGE_MARKER_EXTRA].sessionId);
+const branchRevision = branchSession.revisions.find(item => item.id === marker.extra[BACKSTAGE_MARKER_EXTRA].revisionId);
+branchRevision.targetMessageKey = null;
+branchRevision.status = 'pending';
+branchSession.status = 'draft';
+branchSession.working = {
+    baseRevisionId: branchRevision.id,
+    messages: structuredClone(branchRevision.messages),
+    rejectedDraft: '',
+    composerDraft: '',
+    carryoverRequested: false,
+    updatedAt: Date.now(),
+};
+backstageState.activeSessionId = branchSession.id;
+assert.equal(runtime.backstageSessionForMessage(2).editable, true,
+    '分支停在幕间控制楼时必须恢复可编辑入口');
+assert.doesNotThrow(() => runtime.beginBackstageSession({ messageIndex: 2 }),
+    '从幕间控制楼分支后不应要求玩家重新讨论');
+assert.equal(runtime.getBackstageSnapshot().session.working.messages.length, branchRevision.messages.length);
 
 console.log('backstage smoke: narrator chat, full-input send, non-canon isolation, rewrite swipe, and native swipe passed');

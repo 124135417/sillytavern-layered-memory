@@ -244,16 +244,48 @@ function reconcileNarrativeArchives(data, liveMessages, maxFloor) {
 function reconcileBackstageSessions(data, parentData, liveMessageByKey) {
     const source = clone(parentData.backstage || EMPTY_CHAT_DATA().backstage);
     source.pendingGeneration = null;
+    const branchLastMessageIndex = Math.max(-1, ...Array.from(liveMessageByKey.values())
+        .map(message => Number(message.messageIndex))
+        .filter(Number.isFinite));
+    let resumable = null;
     source.sessions = (source.sessions || []).flatMap(session => {
         if (!session.markerMessageKey || !liveMessageByKey.has(session.markerMessageKey)) return [];
-        const revisions = (session.revisions || []).filter(revision =>
-            (!revision.markerMessageKey || liveMessageByKey.has(revision.markerMessageKey))
-            && (!revision.targetMessageKey || liveMessageByKey.has(revision.targetMessageKey)));
-        if (!revisions.length && !session.working) return [];
-        return [{ ...session, revisions }];
+        const revisions = (session.revisions || []).flatMap(revision => {
+            const markerKey = revision.markerMessageKey || session.markerMessageKey;
+            const marker = liveMessageByKey.get(markerKey);
+            if (!marker) return [];
+            if (revision.targetMessageKey && liveMessageByKey.has(revision.targetMessageKey)) {
+                return [revision];
+            }
+            if (Number(marker.messageIndex) !== branchLastMessageIndex) {
+                return revision.targetMessageKey ? [] : [revision];
+            }
+            const pending = { ...revision, targetMessageKey: null, status: 'pending' };
+            resumable = { sessionId: session.id, revision: pending };
+            return [pending];
+        });
+        if (!revisions.length) return [];
+        const resumeHere = resumable?.sessionId === session.id;
+        return [{
+            ...session,
+            status: resumeHere ? 'draft' : session.status,
+            working: resumeHere ? {
+                baseRevisionId: resumable.revision.id,
+                messages: clone(resumable.revision.messages || []),
+                rejectedDraft: String(resumable.revision.rejectedDraft || ''),
+                composerDraft: '',
+                carryoverRequested: false,
+                updatedAt: Date.now(),
+            } : null,
+            revisions,
+        }];
     });
     const sessionIds = new Set(source.sessions.map(session => session.id));
-    if (!sessionIds.has(source.activeSessionId)) source.activeSessionId = null;
+    source.activeSessionId = resumable && sessionIds.has(resumable.sessionId) ? resumable.sessionId : null;
+    if (source.activeCarryover?.anchorMessageKey
+        && !liveMessageByKey.has(source.activeCarryover.anchorMessageKey)) {
+        source.activeCarryover = null;
+    }
     data.backstage = source;
 }
 

@@ -124,6 +124,66 @@ assert.equal(replayed.branch_origin.method, 'checkpoint_replay');
 assert.equal(replayed.branch_checkpoints.every(point => point.stateTable.changelog.length === 0), true,
     'branch checkpoints must not recursively copy the changelog');
 
+const backstageParent = structuredClone(parent);
+backstageParent.backstage = {
+    version: 2,
+    activeSessionId: null,
+    pendingGeneration: null,
+    activeCarryover: {
+        id: 'carry-1',
+        text: '- 三轮后再揭晓幕后主使',
+        sourceSessionId: 'session-1',
+        sourceRevisionId: 'revision-1',
+        anchorMessageKey: 'backstage-marker',
+        createdAt: 1,
+        updatedAt: 2,
+    },
+    sessions: [{
+        id: 'session-1',
+        anchorMessageKey: 'a1',
+        markerMessageKey: 'backstage-marker',
+        createdAt: 1,
+        updatedAt: 2,
+        status: 'generated',
+        working: null,
+        revisions: [{
+            id: 'revision-1',
+            messages: [{ id: 'm1', role: 'user', text: '三轮后再揭晓', createdAt: 1 }],
+            rejectedDraft: '',
+            createdAt: 1,
+            markerMessageKey: 'backstage-marker',
+            targetMessageKey: 'backstage-output',
+            status: 'generated',
+        }],
+    }],
+};
+context.chat = [
+    ...activeChat,
+    {
+        is_user: true,
+        mes: '完整幕间输入',
+        extra: {
+            layered_memory_id: 'backstage-marker',
+            layered_memory_backstage_marker: { sessionId: 'session-1', revisionId: 'revision-1' },
+        },
+    },
+];
+const backstageFork = replayBranchData(backstageParent, getPairs(), 'Parent Chat');
+assert.equal(backstageFork.backstage.activeSessionId, 'session-1',
+    '从幕间控制楼分支时必须恢复为待生成的活动幕间');
+assert.equal(backstageFork.backstage.sessions[0].revisions[0].targetMessageKey, null,
+    '新分支不得继续指向父分支中未包含的正文');
+assert.deepEqual(backstageFork.backstage.sessions[0].working.messages.map(message => message.text), ['三轮后再揭晓'],
+    '新分支必须保留原幕间全文，不要求玩家重新讨论');
+assert.equal(backstageFork.backstage.activeCarryover.text, '- 三轮后再揭晓幕后主使',
+    '锚点仍在分支内时必须继承持续后续约定');
+const backstageForkReplay = replayBranchData(backstageFork, getPairs(), 'Parent Chat');
+assert.equal(backstageForkReplay.backstage.activeSessionId, 'session-1',
+    '同一分支的第二次历史核对不得丢失已恢复的幕间');
+assert.deepEqual(backstageForkReplay.backstage.sessions[0].working.messages.map(message => message.text), ['三轮后再揭晓'],
+    '反复核对分支时仍应保留幕间全文');
+context.chat = activeChat;
+
 const narrativeParent = structuredClone(parent);
 const liveMessages = getMessageFloors({ includeTrailingUser: true });
 narrativeParent.narrative_summaries = liveMessages.map(message => ({

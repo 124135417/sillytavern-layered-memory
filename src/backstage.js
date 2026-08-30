@@ -1,7 +1,7 @@
 export const BACKSTAGE_MARKER_EXTRA = 'layered_memory_backstage_marker';
 export const BACKSTAGE_OUTPUT_EXTRA = 'layered_memory_backstage';
 
-const BACKSTAGE_STATE_VERSION = 1;
+const BACKSTAGE_STATE_VERSION = 2;
 
 function clone(value) {
     return structuredClone(value);
@@ -21,6 +21,7 @@ function blankState() {
         version: BACKSTAGE_STATE_VERSION,
         activeSessionId: null,
         pendingGeneration: null,
+        activeCarryover: null,
         sessions: [],
     };
 }
@@ -48,6 +49,21 @@ function normalizeRevision(revision) {
     };
 }
 
+function normalizeCarryover(carryover) {
+    if (!carryover) return null;
+    const text = cleanText(carryover.text);
+    if (!text) return null;
+    return {
+        id: String(carryover.id || uuid()),
+        text,
+        sourceSessionId: carryover.sourceSessionId || null,
+        sourceRevisionId: carryover.sourceRevisionId || null,
+        anchorMessageKey: carryover.anchorMessageKey || null,
+        createdAt: Number(carryover.createdAt) || Date.now(),
+        updatedAt: Number(carryover.updatedAt) || Date.now(),
+    };
+}
+
 function normalizeWorking(working) {
     if (!working) return null;
     return {
@@ -55,6 +71,7 @@ function normalizeWorking(working) {
         messages: Array.isArray(working.messages) ? working.messages.map(normalizeMessage) : [],
         rejectedDraft: cleanText(working.rejectedDraft),
         composerDraft: String(working.composerDraft ?? ''),
+        carryoverRequested: Boolean(working.carryoverRequested),
         updatedAt: Number(working.updatedAt) || Date.now(),
     };
 }
@@ -83,6 +100,7 @@ export function ensureBackstageState(data) {
     state.pendingGeneration = state.pendingGeneration && typeof state.pendingGeneration === 'object'
         ? state.pendingGeneration
         : null;
+    state.activeCarryover = normalizeCarryover(state.activeCarryover);
     state.sessions = Array.isArray(state.sessions)
         ? needsMigration
             ? state.sessions.map(normalizeSession)
@@ -118,6 +136,7 @@ export function createBackstageSession(data, { anchorMessageKey = null } = {}) {
             messages: [],
             rejectedDraft: '',
             composerDraft: '',
+            carryoverRequested: false,
             updatedAt: now,
         },
         revisions: [],
@@ -142,10 +161,18 @@ export function setBackstageWorkingCopy(data, sessionId, {
     messages = [],
     rejectedDraft = '',
     composerDraft = '',
+    carryoverRequested = false,
 } = {}) {
     const session = getBackstageSession(data, sessionId);
     if (!session) throw new Error('找不到这次幕间讨论');
-    session.working = normalizeWorking({ baseRevisionId, messages, rejectedDraft, composerDraft, updatedAt: Date.now() });
+    session.working = normalizeWorking({
+        baseRevisionId,
+        messages,
+        rejectedDraft,
+        composerDraft,
+        carryoverRequested,
+        updatedAt: Date.now(),
+    });
     session.status = 'draft';
     session.updatedAt = Date.now();
     ensureBackstageState(data).activeSessionId = session.id;
@@ -174,6 +201,15 @@ export function setBackstageComposerDraft(data, sessionId, text) {
     return true;
 }
 
+export function setBackstageCarryoverRequested(data, sessionId, value) {
+    const session = getBackstageSession(data, sessionId);
+    if (!session?.working) return false;
+    session.working.carryoverRequested = Boolean(value);
+    session.working.updatedAt = Date.now();
+    session.updatedAt = Date.now();
+    return true;
+}
+
 export function clearBackstageWorkingCopy(data, sessionId) {
     const session = getBackstageSession(data, sessionId);
     if (!session?.working) return false;
@@ -181,11 +217,13 @@ export function clearBackstageWorkingCopy(data, sessionId) {
     const changed = Boolean(
         working.messages.length
         || working.composerDraft
-        || working.rejectedDraft,
+        || working.rejectedDraft
+        || working.carryoverRequested,
     );
     working.messages = [];
     working.composerDraft = '';
     working.rejectedDraft = '';
+    working.carryoverRequested = false;
     working.updatedAt = Date.now();
     session.updatedAt = Date.now();
     return changed;
@@ -218,6 +256,66 @@ function renderTranscript(messages) {
     }).join('\n\n');
 }
 
+export function buildBackstageCarryoverRequest(session, activeCarryover = null) {
+    const working = session?.working;
+    if (!working?.messages?.length) throw new Error('还没有可以整理的幕间讨论');
+    const existing = normalizeCarryover(activeCarryover);
+    const systemPrompt = [
+        '你在整理玩家与叙述者已经完成的幕后创作讨论。只提取玩家明确同意、明确要求或明确否定的后续叙事方向。',
+        '不要把叙述者单方面的提议当成约定，不要记录已经在正文中发生的事实，不要补充讨论中没有的内容。较晚的修改覆盖较早的意见。',
+        '输出一份简短、可直接继续约束后续正文的中文便签。每项一行，以“- ”开头；保留必要的顺序、节奏、禁止事项和仍待兑现的剧情节点。不要加标题、解释或前言。',
+        '如果已有后续约定，只更新本次讨论明确改变的部分；未被推翻的旧约定继续保留。',
+    ].join('\n');
+    const promptSections = [];
+    if (existing?.text) promptSections.push(`【当前仍在生效的后续约定】\n${existing.text}`);
+    promptSections.push(`【本次完整幕间讨论】\n${renderTranscript(working.messages)}`);
+    return {
+        systemPrompt,
+        prompt: [{ role: 'user', content: promptSections.join('\n\n') }],
+        quietToLoud: true,
+        trimNames: false,
+    };
+}
+
+export function setBackstageCarryover(data, {
+    text,
+    sourceSessionId = undefined,
+    sourceRevisionId = undefined,
+    anchorMessageKey = undefined,
+} = {}) {
+    const state = ensureBackstageState(data);
+    const previous = state.activeCarryover;
+    state.activeCarryover = normalizeCarryover({
+        id: previous?.id || uuid(),
+        text,
+        sourceSessionId: sourceSessionId === undefined ? previous?.sourceSessionId ?? null : sourceSessionId,
+        sourceRevisionId: sourceRevisionId === undefined ? previous?.sourceRevisionId ?? null : sourceRevisionId,
+        anchorMessageKey: anchorMessageKey === undefined ? previous?.anchorMessageKey ?? null : anchorMessageKey,
+        createdAt: previous?.createdAt || Date.now(),
+        updatedAt: Date.now(),
+    });
+    if (!state.activeCarryover) throw new Error('后续约定不能为空');
+    return state.activeCarryover;
+}
+
+export function clearBackstageCarryover(data) {
+    const state = ensureBackstageState(data);
+    if (!state.activeCarryover) return false;
+    state.activeCarryover = null;
+    return true;
+}
+
+export function renderBackstageCarryoverBlock(data) {
+    const carryover = ensureBackstageState(data).activeCarryover;
+    if (!carryover?.text) return '';
+    return [
+        '【幕后创作约定｜不是剧情中已经发生的事件】',
+        '以下是玩家与叙述者在幕间明确保留、仍需在后续兑现的创作方向。请持续遵守，但不要让角色知道这些约定，也不要在正文中提及幕后讨论或玩家要求。',
+        carryover.text,
+        '【幕后创作约定结束】',
+    ].join('\n');
+}
+
 export function formatBackstagePlayerInput(revision) {
     if (!revision) throw new Error('缺少幕间讨论版本');
     const sections = [
@@ -244,6 +342,7 @@ export function buildBackstageDiscussionRequest(session, {
     narratorName = '叙述者',
     l2 = '',
     raw = '',
+    carryover = '',
 } = {}) {
     const working = session?.working;
     if (!working?.messages?.length) throw new Error('还没有幕间对话');
@@ -251,8 +350,9 @@ export function buildBackstageDiscussionRequest(session, {
         `你是刚才讲述这段故事的同一个叙述者${narratorName ? `（${narratorName}）` : ''}。剧情现在暂停，玩家正在幕间直接和你说话。`,
         '摘下叙事面具，以叙述者本人的口吻坦率交流：可以解释你刚才的叙事意图、承认连续性问题、提出走向，也必须接受玩家的否定和修改。此刻不要续写剧情，不要扮演剧情中的角色，不要替玩家作决定。',
         '只回复玩家能看到的自然纯文本对话。不要输出 JSON、标签、状态说明或正文，也不要使用 Markdown 标题、列表、粗体、引用、行内代码或代码块等格式语法。',
-        '你只能依据下面的剧情摘要、最近完整正文和本次幕间对话回答。不要假设你还收到了角色卡、世界书、作者注释、正文预设、事实表、关键词召回或更早的原生聊天记录。',
+        '你只能依据下面仍在生效的幕后创作约定、剧情摘要、最近完整正文和本次幕间对话回答。不要假设你还收到了角色卡、世界书、作者注释、正文预设、事实表、关键词召回或更早的原生聊天记录。',
     ];
+    if (carryover) sections.push(String(carryover).trim());
     if (l2) sections.push(`【前文剧情摘要】\n${String(l2).trim()}`);
     if (raw) sections.push(`【最近完整正文】\n${String(raw).trim()}`);
     if (!l2 && !raw) sections.push('【剧情资料】\n当前没有可用的前文摘要或最近正文。');

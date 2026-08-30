@@ -145,9 +145,10 @@ export const EMPTY_CHAT_DATA = () => ({
     },
     /** Non-canon player/narrator discussions and their swipe-safe revisions. */
     backstage: {
-        version: 1,
+        version: 2,
         activeSessionId: null,
         pendingGeneration: null,
+        activeCarryover: null,
         sessions: [],
     },
     history_rebuild: null,

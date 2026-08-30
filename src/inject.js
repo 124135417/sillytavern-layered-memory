@@ -9,6 +9,7 @@ import { estimateTokens } from './tokens.js';
 import { currentNarrativeSources, fallbackNarrativeSummary } from './narrative.js';
 import { selectRecentRawWindow } from './recent-raw.js';
 import { resolveStyleReset } from './style-reset.js';
+import { renderBackstageCarryoverBlock } from './backstage.js';
 
 let presetMacroRegistered = false;
 let activeGenerationType = null;
@@ -115,9 +116,11 @@ export function buildCoreMemoryParts({
         narrativeSources: resolvedNarrativeSources,
         maxFloor,
     });
+    const backstage = renderBackstageCarryoverBlock(data);
     return {
         l1,
         l2,
+        backstage,
         raw: rawWindow.text,
         rawWindow,
         narrativeSources: resolvedNarrativeSources,
@@ -126,8 +129,8 @@ export function buildCoreMemoryParts({
 }
 
 export function renderCoreMemoryPayload(options = {}) {
-    const { l1, l2, raw } = buildCoreMemoryParts(options);
-    return [l1, l2, raw].filter(Boolean).join('\n\n');
+    const { l1, l2, backstage, raw } = buildCoreMemoryParts(options);
+    return [l1, l2, backstage, raw].filter(Boolean).join('\n\n');
 }
 
 export function renderPresetMemoryMacro() {
@@ -186,7 +189,7 @@ export function updateInjection({
         ...source,
         fallbackSummary: fallbackNarrativeSummary(source),
     }));
-    const { l1, l2, raw } = buildCoreMemoryParts({
+    const { l1, l2, backstage, raw } = buildCoreMemoryParts({
         data,
         settings,
         context,
@@ -195,7 +198,7 @@ export function updateInjection({
         pairs: getPairs({ excludeTrailingAssistant: resolvedExcludeTrailingAssistant }),
         narrativeSources,
     });
-    const core = [l1, l2, raw].filter(Boolean).join('\n\n');
+    const core = [l1, l2, backstage, raw].filter(Boolean).join('\n\n');
 
     if (estimateTokens(renderL2Block(data, { forBudget: true, narrativeSources })) > (settings.budgetL2 || 5000)) {
         enqueue('volume_compress', { reason: 'budget', narrative: true }, QUEUE_PRIORITY.volume_compress);
