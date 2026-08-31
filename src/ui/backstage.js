@@ -810,6 +810,13 @@ export function scheduleBackstageMarkerRefresh(messageIndex, attempt = 0) {
     markerRefreshTimers.set(messageIndex, timer);
 }
 
+export function scheduleBackstageMarkerRefreshes() {
+    const chat = getContext().chat || [];
+    chat.forEach((message, messageIndex) => {
+        if (isBackstageMarker(message)) scheduleBackstageMarkerRefresh(messageIndex);
+    });
+}
+
 export function refreshBackstageTriggerState() {
     updateTriggerState();
 }
@@ -818,6 +825,15 @@ function messageIndexFromTarget(target) {
     const message = target.closest?.('.mes[mesid]');
     const index = Number(message?.getAttribute('mesid'));
     return Number.isInteger(index) ? index : null;
+}
+
+function linkedMarkerFromTarget(target) {
+    const markerText = target.closest?.('.mes_text');
+    const message = markerText?.closest?.('.mes[mesid]');
+    const index = Number(message?.getAttribute('mesid'));
+    if (!Number.isInteger(index) || !isBackstageMarker(getContext().chat?.[index])) return null;
+    setMarkerAccessibility(message, true);
+    return markerText;
 }
 
 function activateLinkedMessage(target) {
@@ -831,14 +847,16 @@ function activateLinkedMessage(target) {
 export function injectBackstageUi() {
     if (uiInjected) {
         scheduleTriggerInjection();
+        scheduleBackstageMarkerRefreshes();
         updateTriggerState();
         return;
     }
     uiInjected = true;
     if (!document.getElementById(DIALOG_ID)) makeDialog();
     scheduleTriggerInjection();
+    scheduleBackstageMarkerRefreshes();
     document.body.addEventListener('click', event => {
-        const marker = event.target.closest?.('.lm-backstage-marker-message .mes_text');
+        const marker = linkedMarkerFromTarget(event.target);
         if (!marker) return;
         event.preventDefault();
         event.stopPropagation();
@@ -846,7 +864,7 @@ export function injectBackstageUi() {
     });
     document.body.addEventListener('keydown', event => {
         if (!['Enter', ' '].includes(event.key)) return;
-        const target = event.target.closest?.('.lm-backstage-marker-message .mes_text');
+        const target = linkedMarkerFromTarget(event.target);
         if (!target) return;
         event.preventDefault();
         activateLinkedMessage(target);

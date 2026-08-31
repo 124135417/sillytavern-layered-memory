@@ -40,6 +40,7 @@ import {
     refreshBackstageMarkers,
     refreshBackstageTriggerState,
     scheduleBackstageMarkerRefresh,
+    scheduleBackstageMarkerRefreshes,
 } from './src/ui/backstage.js';
 
 const MODULE = 'layered-memory';
@@ -101,6 +102,7 @@ function maybeEnqueueAutomaticStateReview({ onOpen = false, force = false } = {}
 
 async function onChatChanged() {
     handleBackstageChatChanged();
+    scheduleBackstageMarkerRefreshes();
     releaseInactiveQueueScopes();
     const originMetadata = ctx().chatMetadata;
     const recovery = await beginBranchRecovery();
@@ -339,7 +341,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.22.0`);
+    console.log(`[${MODULE}] 已加载 v0.22.1`);
 });
 
 export async function onActivate() {

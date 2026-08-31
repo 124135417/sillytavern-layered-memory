@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const [ui, css, manifest, index] = await Promise.all([
     readFile(new URL('../src/ui/backstage.js', import.meta.url), 'utf8'),
-    readFile(new URL('../style-v0.22.0.css', import.meta.url), 'utf8'),
+    readFile(new URL('../style-v0.22.1.css', import.meta.url), 'utf8'),
     readFile(new URL('../manifest.json', import.meta.url), 'utf8'),
     readFile(new URL('../index.js', import.meta.url), 'utf8'),
 ]);
@@ -51,6 +51,10 @@ assert.match(ui, /export function refreshBackstageMarkers[\s\S]*Number\.isIntege
     '控制楼标记只允许在聊天载入或明确消息事件后更新');
 assert.match(ui, /export function scheduleBackstageMarkerRefresh[\s\S]*attempt >= 12/u,
     '消息节点晚到时必须有限重试恢复控制楼点击，不能依赖全页观察器');
+assert.match(ui, /function linkedMarkerFromTarget[\s\S]*isBackstageMarker\(getContext\(\)\.chat\?\.\[index\]\)/u,
+    '点击时必须以聊天数据确认控制楼，不能依赖可能丢失的 DOM class');
+assert.match(ui, /injectBackstageUi[\s\S]*scheduleBackstageMarkerRefreshes\(\)/u,
+    '插件重载后必须主动恢复已有幕间控制楼');
 assert.match(ui, /linked\.editable[\s\S]*beginBackstageSession\(\{ messageIndex \}\)/u,
     '点击当前最后一段正文前的控制楼必须重新进入可编辑幕间');
 assert.match(ui, /scheduleTriggerInjection[\s\S]*attempt >= 30/u,
@@ -86,14 +90,16 @@ assert.match(css, /\.lm-backstage-compose\[hidden\] \{ display: none; \}/u,
 
 const parsed = JSON.parse(manifest);
 assert.equal(parsed.js, 'index.js');
-assert.equal(parsed.css, 'style-v0.22.0.css');
-assert.equal(parsed.version, '0.22.0');
+assert.equal(parsed.css, 'style-v0.22.1.css');
+assert.equal(parsed.version, '0.22.1');
 assert.match(index, /injectBackstageUi\(\)/u);
 assert.match(index, /MESSAGE_SENT[\s\S]*handleBackstageMessageSent/u);
 assert.match(index, /MESSAGE_RECEIVED[\s\S]*handleBackstageMessageReceived/u);
 assert.match(index, /MESSAGE_RECEIVED[\s\S]*scheduleBackstageMarkerRefresh\(normalizedId - 1\)/u);
 assert.match(index, /async function onChatChanged[\s\S]*refreshBackstageMarkers/u,
     '聊天切换后应通过显式事件恢复控制楼标记');
+assert.match(index, /async function onChatChanged\(\)[\s\S]*handleBackstageChatChanged\(\);[\s\S]*scheduleBackstageMarkerRefreshes\(\)/u,
+    '长聊天的后台恢复完成前就应开始恢复幕间入口');
 
 let formatterCall = null;
 const formatterContext = {
