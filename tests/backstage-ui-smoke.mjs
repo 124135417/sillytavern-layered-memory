@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const [ui, css, manifest, index] = await Promise.all([
     readFile(new URL('../src/ui/backstage.js', import.meta.url), 'utf8'),
-    readFile(new URL('../style-v0.22.1.css', import.meta.url), 'utf8'),
+    readFile(new URL('../style-v0.22.3.css', import.meta.url), 'utf8'),
     readFile(new URL('../manifest.json', import.meta.url), 'utf8'),
     readFile(new URL('../index.js', import.meta.url), 'utf8'),
 ]);
@@ -36,6 +36,10 @@ assert.ok(openSource.indexOf('showDialogShell()') < openSource.indexOf('hydrateD
     'showModal 外壳必须先于会话 hydration');
 assert.match(ui, /requestAnimationFrame\(\(\) => setTimeout\(resolve, 0\)\)/u,
     'hydration 前必须把控制权交还浏览器完成首帧绘制');
+assert.match(ui, /function syncBackstageViewport[\s\S]*visualViewport[\s\S]*--lm-backstage-viewport-height[\s\S]*frame\.scrollTop = 0/u,
+    '键盘弹出时幕间必须跟随可视视口，不能让外框滚走标题');
+assert.match(ui, /function resizeBackstageComposer[\s\S]*COMPOSER_MIN_HEIGHT[\s\S]*COMPOSER_MAX_HEIGHT/u,
+    '空输入框必须保持紧凑，只随实际内容有上限地增高');
 assert.match(ui, /aria-busy[\s\S]*正在接上这段剧情/u);
 assert.match(ui, /dialogReady = true;[\s\S]*renderTranscript\(getBackstageSnapshot\(\)\)/u,
     '输入就绪状态必须先于正文渲染后的 token 调度');
@@ -69,8 +73,14 @@ assert.match(css, /\.lm-backstage-frame[\s\S]*transform: translateY\(22px\) scal
 assert.match(css, /\.lm-backstage-dialog\.is-open \.lm-backstage-frame[^{]*\{[^}]*translateY\(0\) scale\(1\)/u);
 assert.match(css, /prefers-reduced-motion: reduce[\s\S]*\.lm-backstage-dialog/u,
     '动画必须尊重系统减少动态效果设置');
-assert.match(css, /@media \(max-width: 599px\)[\s\S]*\.lm-backstage-dialog\.is-expanded[\s\S]*width: 100vw;[\s\S]*height: 100dvh;/u,
-    '手机幕间应使用完整动态视口');
+assert.match(css, /@media \(max-width: 599px\)[\s\S]*--lm-backstage-viewport-width[\s\S]*--lm-backstage-viewport-height/u,
+    '移动幕间应使用键盘后的可视视口');
+assert.match(css, /\.lm-backstage-frame \{[\s\S]*overflow: clip;/u,
+    '外框不得成为焦点自动滚动容器');
+assert.match(css, /\.lm-backstage-header \{[\s\S]*grid-row: 1;[\s\S]*\.lm-backstage-carryover \{[\s\S]*grid-row: 2;[\s\S]*\.lm-backstage-transcript \{[\s\S]*grid-row: 3;[\s\S]*\.lm-backstage-footer \{[\s\S]*grid-row: 4;/u,
+    '后续约定隐藏时也不得改变标题、对话和底栏的网格行');
+assert.match(css, /\.lm-backstage-dialog\.is-compact-viewport[\s\S]*\.lm-backstage-close/u,
+    '软键盘开启时必须保留可达的关闭动作');
 assert.match(css, /env\(safe-area-inset-bottom\)/u);
 assert.match(css, /grid-template-columns: minmax\(52px, 1fr\) minmax\(0, 58ch\) minmax\(52px, 1fr\)/u,
     '桌面消息必须使用等宽左右平衡列和居中正文列');
@@ -90,8 +100,8 @@ assert.match(css, /\.lm-backstage-compose\[hidden\] \{ display: none; \}/u,
 
 const parsed = JSON.parse(manifest);
 assert.equal(parsed.js, 'index.js');
-assert.equal(parsed.css, 'style-v0.22.1.css');
-assert.equal(parsed.version, '0.22.1');
+assert.equal(parsed.css, 'style-v0.22.3.css');
+assert.equal(parsed.version, '0.22.3');
 assert.match(index, /injectBackstageUi\(\)/u);
 assert.match(index, /MESSAGE_SENT[\s\S]*handleBackstageMessageSent/u);
 assert.match(index, /MESSAGE_RECEIVED[\s\S]*handleBackstageMessageReceived/u);

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const [panel, css] = await Promise.all([
     readFile(new URL('../src/ui/panel.js', import.meta.url), 'utf8'),
-    readFile(new URL('../style-v0.22.1.css', import.meta.url), 'utf8'),
+    readFile(new URL('../style-v0.22.3.css', import.meta.url), 'utf8'),
 ]);
 
 assert.match(panel, /id="lm-tab-turns"[^>]*data-tab="turns"[^>]*>对话记录</u);

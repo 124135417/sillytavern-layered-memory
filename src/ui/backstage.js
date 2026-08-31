@@ -23,6 +23,8 @@ import { getContext } from '../settings.js';
 
 const TRIGGER_ID = 'lm-backstage-trigger';
 const DIALOG_ID = 'lm-backstage-dialog';
+const COMPOSER_MIN_HEIGHT = 44;
+const COMPOSER_MAX_HEIGHT = 112;
 let lastTrigger = null;
 let archivedView = null;
 let linkedView = null;
@@ -36,6 +38,7 @@ let dialogReady = false;
 let hydrationGeneration = 0;
 let tokenEstimateGeneration = 0;
 let lastOpenRequest = null;
+let viewportSyncFrame = null;
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -47,6 +50,36 @@ function escapeHtml(value) {
 
 function dialog() {
     return document.getElementById(DIALOG_ID);
+}
+
+function resizeBackstageComposer(textarea = dialog()?.querySelector('#lm-backstage-input')) {
+    if (!textarea || textarea.closest('.lm-backstage-compose')?.hidden) return;
+    textarea.style.height = '0px';
+    const contentHeight = textarea.scrollHeight;
+    const height = Math.max(COMPOSER_MIN_HEIGHT, Math.min(COMPOSER_MAX_HEIGHT, contentHeight));
+    textarea.style.height = `${height}px`;
+    textarea.style.overflowY = contentHeight > COMPOSER_MAX_HEIGHT ? 'auto' : 'hidden';
+}
+
+function syncBackstageViewport() {
+    viewportSyncFrame = null;
+    const root = dialog();
+    if (!root?.open) return;
+    const viewport = globalThis.visualViewport;
+    const width = viewport?.width || globalThis.innerWidth;
+    const height = viewport?.height || globalThis.innerHeight;
+    const offsetTop = viewport?.offsetTop || 0;
+    root.style.setProperty('--lm-backstage-viewport-width', `${width}px`);
+    root.style.setProperty('--lm-backstage-viewport-height', `${height}px`);
+    root.style.setProperty('--lm-backstage-viewport-top', `${offsetTop}px`);
+    root.classList.toggle('is-compact-viewport', height < globalThis.innerHeight - 80);
+    const frame = root.querySelector('.lm-backstage-frame');
+    if (frame?.scrollTop) frame.scrollTop = 0;
+}
+
+function scheduleBackstageViewportSync() {
+    if (viewportSyncFrame != null) cancelAnimationFrame(viewportSyncFrame);
+    viewportSyncFrame = requestAnimationFrame(syncBackstageViewport);
 }
 
 function activeMessages(snapshot) {
@@ -220,7 +253,10 @@ function renderTranscript(snapshot, { preserveScroll = false } = {}) {
     if (textarea && document.activeElement !== textarea && textarea.value !== (working?.composerDraft || '')) {
         textarea.value = working?.composerDraft || '';
     }
-    if (textarea) textarea.disabled = loading;
+    if (textarea) {
+        textarea.disabled = loading;
+        if (!readOnly) resizeBackstageComposer(textarea);
+    }
     const send = root.querySelector('.lm-backstage-send');
     if (send) send.disabled = loading;
     const stop = root.querySelector('.lm-backstage-stop');
@@ -302,6 +338,7 @@ async function sendBackstageMessage() {
         const reply = submitBackstageUserMessage(text);
         if (textarea) {
             textarea.value = '';
+            resizeBackstageComposer(textarea);
         }
         clearTimeout(draftSaveTimer);
         draftSaveTimer = null;
@@ -322,7 +359,10 @@ function clearCurrentBackstage() {
     setError('');
     const root = dialog();
     const textarea = root?.querySelector('#lm-backstage-input');
-    if (textarea) textarea.value = '';
+    if (textarea) {
+        textarea.value = '';
+        resizeBackstageComposer(textarea);
+    }
     clearBackstageSession();
     renderTranscript(getBackstageSnapshot());
     textarea?.focus();
@@ -361,7 +401,7 @@ function closeBackstageDialog({ restoreFocus = true } = {}) {
     root.classList.add('is-closing');
     return new Promise(resolve => {
         const finish = () => {
-            root.classList.remove('is-closing', 'is-open', 'is-hydrating');
+            root.classList.remove('is-closing', 'is-open', 'is-hydrating', 'is-compact-viewport');
             root.removeAttribute('aria-busy');
             root.close();
             if (restoreFocus) lastTrigger?.focus?.({ preventScroll: true });
@@ -454,6 +494,7 @@ function showDialogShell() {
     const root = dialog();
     if (!root) return;
     if (!root.open) root.showModal();
+    syncBackstageViewport();
     root.classList.remove('is-closing');
     root.classList.add('is-open', 'is-hydrating');
     root.setAttribute('aria-busy', 'true');
@@ -486,6 +527,7 @@ function showDialogShell() {
     if (textarea) {
         textarea.value = '';
         textarea.disabled = true;
+        resizeBackstageComposer(textarea);
     }
     const send = root.querySelector('.lm-backstage-send');
     if (send) send.disabled = true;
@@ -548,6 +590,7 @@ async function hydrateDialog({ messageIndex }, generation) {
                 ? root.querySelector('.lm-backstage-close')
                 : root.querySelector('#lm-backstage-input');
             focusTarget?.focus();
+            scheduleBackstageViewportSync();
         });
         return true;
     } catch (error) {
@@ -656,7 +699,7 @@ function makeDialog() {
             <footer class="lm-backstage-footer">
                 <div class="lm-backstage-compose">
                     <label class="sr-only" for="lm-backstage-input">对叙述者说</label>
-                    <textarea id="lm-backstage-input" rows="2" placeholder="直接和叙述者说……"></textarea>
+                    <textarea id="lm-backstage-input" rows="1" placeholder="直接和叙述者说……"></textarea>
                     <button type="button" class="lm-backstage-send fa-solid fa-arrow-up" aria-label="发送给叙述者" title="发送"></button>
                     <button type="button" class="lm-backstage-stop fa-solid fa-stop" aria-label="停止叙述者回应" title="停止回应" hidden></button>
                 </div>
@@ -677,6 +720,10 @@ function makeDialog() {
             </footer>
         </section>`;
     document.body.appendChild(root);
+
+    globalThis.visualViewport?.addEventListener('resize', scheduleBackstageViewportSync);
+    globalThis.visualViewport?.addEventListener('scroll', scheduleBackstageViewportSync);
+    globalThis.addEventListener('resize', scheduleBackstageViewportSync);
 
     root.addEventListener('cancel', event => {
         event.preventDefault();
@@ -706,7 +753,10 @@ function makeDialog() {
     const textarea = root.querySelector('#lm-backstage-input');
     textarea?.addEventListener('compositionstart', () => { isComposing = true; });
     textarea?.addEventListener('compositionend', () => { isComposing = false; });
-    textarea?.addEventListener('input', scheduleDraftSave);
+    textarea?.addEventListener('input', () => {
+        resizeBackstageComposer(textarea);
+        scheduleDraftSave();
+    });
     textarea?.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.shiftKey && !isComposing) {
             event.preventDefault();
