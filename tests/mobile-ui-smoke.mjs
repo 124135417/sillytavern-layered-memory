@@ -21,6 +21,12 @@ assert.match(panel, /const closedLabel = `查看 \$\{subject\}`;[\s\S]*const ope
     'record disclosures must update real visible text in both states');
 assert.match(panel, /document\.body\.appendChild\(panel\)/u,
     'the panel must be portaled outside responsive host menus');
+assert.match(panel, /anchor\.insertAdjacentElement\('afterend', drawer\);[\s\S]*drawer\.classList\.remove\('lm-floating-trigger'\)/u,
+    'the launcher must return to the SillyTavern top bar when its anchor exists');
+assert.doesNotMatch(panel, /matchMedia\?\.\('\(max-width: 599px\)'\)/u,
+    'phone width must not force the launcher into a floating position');
+assert.match(panel, /const launcherPlaced = placeLauncher\(\);/u,
+    'late top-bar rendering must recover a temporary floating launcher');
 assert.match(panel, /GEOMETRY_STYLE_ID = 'layered-memory-viewport-geometry'/u,
     'critical viewport geometry needs a cache-safe runtime fallback');
 assert.match(panel, /id="lm-proof-now"[^>]*>[\s\S]{0,160}检查记忆<\/span>/u,

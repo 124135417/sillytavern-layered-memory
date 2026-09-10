@@ -164,17 +164,23 @@ export function injectPanel() {
         </section>
     `;
 
-    const anchor = document.getElementById('extensions-settings-button');
-    if (anchor?.parentNode) {
+    // Keep the launcher in SillyTavern's top bar at every viewport size. Only
+    // the fixed panel and backdrop are portaled to <body> so host overflow
+    // cannot clip them. A floating launcher is a temporary startup fallback
+    // while the top bar is not in the DOM yet.
+    const placeLauncher = () => {
+        const anchor = document.getElementById('extensions-settings-button');
+        if (!anchor?.parentNode) {
+            document.body.appendChild(drawer);
+            drawer.classList.add('lm-floating-trigger');
+            return false;
+        }
         anchor.insertAdjacentElement('afterend', drawer);
-    } else {
-        document.body.appendChild(drawer);
-        drawer.classList.add('lm-floating-trigger');
-    }
+        drawer.classList.remove('lm-floating-trigger');
+        return true;
+    };
+    placeLauncher();
 
-    // SillyTavern hides and constrains the top settings host at several
-    // responsive breakpoints. Portal the fixed panel to <body>, and move the
-    // launcher there too while the host is hidden on phone-sized viewports.
     const backdrop = drawer.querySelector(`#${BACKDROP_ID}`);
     const panel = drawer.querySelector(`#${ROOT_ID}`);
     if (backdrop) {
@@ -183,26 +189,14 @@ export function injectPanel() {
     if (panel) {
         document.body.appendChild(panel);
     }
-    const phoneLauncherQuery = globalThis.matchMedia?.('(max-width: 599px)');
-    const placeLauncher = () => {
-        if (phoneLauncherQuery?.matches || !anchor?.parentNode) {
-            document.body.appendChild(drawer);
-            drawer.classList.add('lm-floating-trigger');
-            return;
-        }
-        anchor.insertAdjacentElement('afterend', drawer);
-        drawer.classList.remove('lm-floating-trigger');
-    };
-    placeLauncher();
-    phoneLauncherQuery?.addEventListener?.('change', placeLauncher);
-
     injectSettingsEntry();
     injectExtensionsMenuEntry();
-    if (!document.getElementById(SETTINGS_CARD_ID) || !document.getElementById(MENU_ENTRY_ID)) {
+    if (!placeLauncher() || !document.getElementById(SETTINGS_CARD_ID) || !document.getElementById(MENU_ENTRY_ID)) {
         const observer = new MutationObserver(() => {
+            const launcherPlaced = placeLauncher();
             injectSettingsEntry();
             injectExtensionsMenuEntry();
-            if (document.getElementById(SETTINGS_CARD_ID) && document.getElementById(MENU_ENTRY_ID)) {
+            if (launcherPlaced && document.getElementById(SETTINGS_CARD_ID) && document.getElementById(MENU_ENTRY_ID)) {
                 observer.disconnect();
             }
         });
