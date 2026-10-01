@@ -6,6 +6,7 @@ function promptForNotes(notes, retryNote = '', unit = 'turn') {
     const label = unit === 'floor' ? '楼' : '轮';
     return [
         retryNote ? `上次输出没有通过校验：${retryNote}\n请重新覆盖全部${label}号。\n\n` : '',
+        `本章绝对编号：${notes.map(item => item.pairIndex).join('、')}。每项 coverage.floor 必须落在它引用的 key_events[event_index].floor_range 内；event_index 从 0 开始。关键事件范围必须覆盖全部编号，包括最后的第 ${notes.at(-1)?.pairIndex} ${label}，不得只列出 coverage 却遗漏对应事件。`,
         ...notes.map(item => {
             const time = storyTimeRange([item]);
             return `【第 ${item.pairIndex} ${label}${time?.label ? `｜剧情时间：${time.label}` : ''}】${item.summary}`;
@@ -120,9 +121,14 @@ export function validateChapterArchive(raw, startPair, endPair) {
         }
     }
     if (!coverageValid) {
-        errors.push(`coverage 必须依次包含 ${expected.join('、')}`);
+        if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+            errors.push(`coverage 必须依次包含 ${expected.join('、')}`);
+        }
+        const uncovered = expected.filter(floor => !normalizedEvents.some(event =>
+            floor >= event.floor_range[0] && floor <= event.floor_range[1]));
+        if (uncovered.length) errors.push(`关键事件范围未覆盖第 ${uncovered.join('、')} 楼，须根据这些楼的剧情记录补全对应事件`);
     }
-    for (let index = 0; coverageValid && index < normalizedCoverage.length; index += 1) {
+    for (let index = 0; index < normalizedCoverage.length; index += 1) {
         const eventIndex = normalizedCoverage[index].event_index;
         if (!Number.isInteger(eventIndex) || eventIndex < 0 || eventIndex >= normalizedEvents.length) {
             errors.push(`第 ${actual[index]} 轮引用了不存在的关键事件`);
@@ -130,7 +136,7 @@ export function validateChapterArchive(raw, startPair, endPair) {
         }
         const [eventStart, eventEnd] = normalizedEvents[eventIndex].floor_range;
         if (actual[index] < eventStart || actual[index] > eventEnd) {
-            errors.push(`第 ${actual[index]} 轮没有落在对应关键事件的范围内`);
+            errors.push(`第 ${actual[index]} 楼的 coverage 引用事件 ${eventIndex}，但该事件范围为 ${eventStart}–${eventEnd}；须依据原记录修正事件范围或引用`);
         }
     }
     return {

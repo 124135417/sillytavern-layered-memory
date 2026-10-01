@@ -40,7 +40,7 @@ globalThis.fetch = async (url, init = {}) => {
     return {
         ok: true,
         json: async () => ({
-            choices: [{ message: { content: 'DIRECT' } }],
+            choices: [{ finish_reason: 'length', message: { content: 'DIRECT' } }],
             usage: {
                 prompt_tokens: 3_000,
                 completion_tokens: 500,
@@ -72,6 +72,7 @@ assert.equal(generateRawCalls, 1);
 settings.memoryModelSource = 'direct';
 const directResult = await callAuxModel(prompt);
 assert.equal(directResult.text, 'DIRECT');
+assert.equal(directResult.finishReason, 'length', 'output truncation metadata must reach the task handler');
 assert.equal(fetchRequest.url, 'https://models.example/v1/chat/completions');
 assert.equal(JSON.parse(fetchRequest.init.body).model, 'direct-model');
 assert.equal(Object.hasOwn(JSON.parse(fetchRequest.init.body), 'thinking'), false,

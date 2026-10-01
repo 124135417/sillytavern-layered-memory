@@ -105,7 +105,7 @@ export async function callAuxModel({ purpose, systemPrompt, userPrompt, jsonSche
                 model: settings.directModel,
                 usage: result.usage,
             });
-            return { text: result.text, via: 'direct_api', model: settings.directModel, usage };
+            return { text: result.text, via: 'direct_api', model: settings.directModel, usage, finishReason: result.finishReason };
         }
         if (source === 'profile') {
             const text = await callConnectionProfile({
@@ -210,6 +210,7 @@ async function directFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, t
     return {
         text: data.choices?.[0]?.message?.content ?? '',
         usage: data.usage ?? null,
+        finishReason: data.choices?.[0]?.finish_reason ?? null,
     };
 }
 

@@ -12,8 +12,8 @@ import { evidenceSpansInSource } from './tokens.js';
 import { isBackstageMarker } from './backstage.js';
 import { attachSceneContexts, sameSceneContext, sceneContextRange } from './scene-context.js';
 
-const MAX_BATCH_MESSAGES = 25;
-const MAX_BATCH_CHARS = 45_000;
+const MAX_BATCH_MESSAGES = 6;
+const MAX_BATCH_CHARS = 12_000;
 const NARRATIVE_VALIDATOR_VERSION = 2;
 
 function narrativeText(source) {
@@ -444,21 +444,29 @@ export async function handleNarrativeSummaryJob(payload) {
     const missing = missingSources(data, sources);
     if (!missing.length) return;
 
+    // Persisted jobs can still contain the old 25-floor batches. Rebatch at
+    // execution time as well as enqueue time, and checkpoint each valid floor.
+    for (const batch of makeBatches(missing)) {
+        await summarizeNarrativeBatch(data, batch);
+    }
+    enqueueMissingNarrativeChapters(data, currentNarrativeSources());
+}
+
+async function summarizeNarrativeBatch(data, sources) {
+    let pending = missingSources(data, sources);
+    if (!pending.length) return;
     let retryNote = '';
     for (let attempt = 0; attempt < 2; attempt += 1) {
-        const { text } = await callAuxModel({
+        const { text, finishReason } = await callAuxModel({
             purpose: 'narrative_summary',
             systemPrompt: NARRATIVE_FLOOR_SYSTEM,
-            userPrompt: buildNarrativeBatchPrompt(missing, retryNote),
+            userPrompt: buildNarrativeBatchPrompt(pending, retryNote),
             jsonSchema: NARRATIVE_FLOOR_JSON_SCHEMA,
             temperature: 0,
         });
         assertChatData(data);
-        const checked = validateNarrativeBatch(parseJsonFromModel(text), missing, { allowPartial: attempt === 1 });
-        if (!checked.ok) {
-            retryNote = checked.errors.join('；');
-            continue;
-        }
+        const parsed = parseJsonFromModel(text);
+        const checked = validateNarrativeBatch(parsed, pending, { allowPartial: attempt === 1 });
         data.narrative_summaries = data.narrative_summaries || [];
         for (const { source, summary, segments, storyTime } of checked.results) {
             const next = {
@@ -476,15 +484,27 @@ export async function handleNarrativeSummaryJob(payload) {
             if (index >= 0) data.narrative_summaries[index] = next;
             else data.narrative_summaries.push(next);
         }
-        data.narrative_summaries.sort((a, b) => a.messageIndex - b.messageIndex);
-        clearResolvedNarrativeFailures(data);
-        await saveChatData(data);
-        if (checked.warnings.length) {
-            appendLog('warn', `逐楼剧情记录已降级保存：${checked.warnings.join('；')}`);
+        if (checked.results.length) {
+            data.narrative_summaries.sort((a, b) => a.messageIndex - b.messageIndex);
+            clearResolvedNarrativeFailures(data);
+            await saveChatData(data);
+            if (checked.warnings.length) {
+                appendLog('warn', `逐楼剧情记录已降级保存：${checked.warnings.join('；')}`);
+            }
+            appendLog('info', `逐楼剧情记录完成：第 ${checked.results.map(item => item.source.messageIndex).join('、')} 楼`);
         }
-        appendLog('info', `逐楼剧情记录完成：第 ${missing[0].messageIndex}–${missing.at(-1).messageIndex} 楼`);
-        enqueueMissingNarrativeChapters(data, currentNarrativeSources());
-        return;
+        pending = missingSources(data, pending);
+        if (!pending.length) return;
+        // Repeating a truncated JSON response at the same size wastes tokens.
+        // Split the remaining sources without shortening their original text.
+        if (pending.length > 1 && (finishReason === 'length' || !parsed)) {
+            appendLog('warn', `逐楼剧情返回${finishReason === 'length' ? '被输出上限截断' : '无法解析'}，已拆小剩余 ${pending.length} 楼任务`);
+            const midpoint = Math.ceil(pending.length / 2);
+            await summarizeNarrativeBatch(data, pending.slice(0, midpoint));
+            await summarizeNarrativeBatch(data, pending.slice(midpoint));
+            return;
+        }
+        retryNote = checked.errors.join('；');
     }
     const error = new Error(`逐楼剧情记录连续两次未通过校验：${retryNote}`);
     error.status = 422;
