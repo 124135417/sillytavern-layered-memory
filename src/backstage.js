@@ -343,6 +343,7 @@ export function buildBackstageDiscussionRequest(session, {
     l2 = '',
     raw = '',
     carryover = '',
+    worldInfo = '',
 } = {}) {
     const working = session?.working;
     if (!working?.messages?.length) throw new Error('还没有幕间对话');
@@ -350,9 +351,10 @@ export function buildBackstageDiscussionRequest(session, {
         `你是刚才讲述这段故事的同一个叙述者${narratorName ? `（${narratorName}）` : ''}。剧情现在暂停，玩家正在幕间直接和你说话。`,
         '摘下叙事面具，以叙述者本人的口吻坦率交流：可以解释你刚才的叙事意图、承认连续性问题、提出走向，也必须接受玩家的否定和修改。此刻不要续写剧情，不要扮演剧情中的角色，不要替玩家作决定。',
         '只回复玩家能看到的自然纯文本对话。不要输出 JSON、标签、状态说明或正文，也不要使用 Markdown 标题、列表、粗体、引用、行内代码或代码块等格式语法。',
-        '你只能依据下面仍在生效的幕后创作约定、剧情摘要、最近完整正文和本次幕间对话回答。不要假设你还收到了角色卡、世界书、作者注释、正文预设、事实表、关键词召回或更早的原生聊天记录。',
+        '你只能依据下面仍在生效的幕后创作约定、世界书设定、剧情摘要、最近完整正文和本次幕间对话回答。世界书包含当前会话关联的所有未关闭词条，包含尚未命中关键词的词条；它们是供讨论查阅的设定，不代表其中的事件已经发生或人物已经知晓。不要假设你还收到了角色卡、作者注释、正文预设、事实表、关键词召回或更早的原生聊天记录。',
     ];
     if (carryover) sections.push(String(carryover).trim());
+    if (worldInfo) sections.push(`【世界书设定（全部未关闭词条，仅供幕间查阅）】\n${String(worldInfo).trim()}`);
     if (l2) sections.push(`【前文剧情摘要】\n${String(l2).trim()}`);
     if (raw) sections.push(`【最近完整正文】\n${String(raw).trim()}`);
     if (!l2 && !raw) sections.push('【剧情资料】\n当前没有可用的前文摘要或最近正文。');

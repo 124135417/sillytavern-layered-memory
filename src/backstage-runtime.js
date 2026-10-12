@@ -28,6 +28,7 @@ import { ensureMessageIds, getActiveMesText, messageStableKey } from './ids.js';
 import { buildCoreMemoryParts, updateInjection } from './inject.js';
 import { getChatData, getContext, saveChatData, saveChatMessages } from './settings.js';
 import { estimateTokens } from './tokens.js';
+import { loadBackstageWorldInfo } from './backstage-world-info.js';
 
 const subscribers = new Set();
 let activeDiscussion = null;
@@ -314,11 +315,16 @@ async function runBackstageNarratorReply(request) {
     try {
         const session = getBackstageSession(data, sessionId);
         const { l2, raw } = buildCoreMemoryParts({ data, context });
+        const worldInfo = typeof context.loadWorldInfo === 'function'
+            ? await loadBackstageWorldInfo()
+            : '';
+        if (!discussionIsCurrent(request)) return null;
         const generation = buildBackstageDiscussionRequest(session, {
             narratorName: context.name2 || '叙述者',
             l2,
             raw,
             carryover: renderBackstageCarryoverBlock(data),
+            worldInfo,
         });
         const text = cleanModelReply(await context.generateRaw(generation));
         if (!discussionIsCurrent(request)) return null;
