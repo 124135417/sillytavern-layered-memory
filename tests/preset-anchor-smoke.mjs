@@ -124,6 +124,15 @@ assert.equal(l1Call?.[1], '', 'active anchor must suppress the legacy L1 prompt'
 assert.equal(l2Call?.[1], '', 'active anchor must suppress the legacy L2 prompt');
 assert.deepEqual(l1Call?.slice(2), [0, 0, false, 0]);
 
+promptSettings.prompts[0].content = '<memory_context_filter separate_sources="true" />\n{{layered_memory_context}}';
+const separatedPayload = registeredMacro.value();
+assert.match(separatedPayload, /<历史记录>[\s\S]*<\/历史记录>[\s\S]*<近期正文>/u);
+assert.equal(separatedPayload, renderCoreMemoryPayload(), 'source labels must match macro and preview');
+extensionPromptCalls.length = 0;
+updateInjection();
+assert.equal(extensionPromptCalls.find(([key]) => key === 'layered_memory_l1')?.[1], '',
+    'source labels must not create a second injection');
+
 promptSettings.prompt_order[0].order[1].enabled = true;
 assert.equal(getPresetAnchorStatus(context).state, 'duplicate');
 assert.equal(getPresetAnchorStatus(context).activeCount, 2);
@@ -137,5 +146,6 @@ assert.match(l1Call?.[1], /仍持有旧宅钥匙/u, 'duplicate-anchor mode must 
 assert.match(l1Call?.[1], /最近完整剧情原文开始/u,
     'duplicate-anchor mode must send the complete ordered payload once through compatibility injection');
 assert.equal(l2Call?.[1], '');
+assert(!l1Call?.[1].includes('<历史记录>'), 'duplicate anchors must not enable preset presentation rules');
 
 console.log('preset anchor smoke: exact macro, fallback, de-duplication, and payload order passed');

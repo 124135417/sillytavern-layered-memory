@@ -10,7 +10,7 @@ import { currentNarrativeSources, fallbackNarrativeSummary } from './narrative.j
 import { selectRecentRawWindow } from './recent-raw.js';
 import { resolveStyleReset } from './style-reset.js';
 import { renderBackstageCarryoverBlock } from './backstage.js';
-import { filterInjectedMemory, readInjectionFilter } from './injection-filter.js';
+import { composeInjectedMemory, filterInjectedMemory, readInjectionFilter } from './injection-filter.js';
 
 let presetMacroRegistered = false;
 let activeGenerationType = null;
@@ -130,8 +130,7 @@ export function buildCoreMemoryParts({
 }
 
 export function renderCoreMemoryPayload(options = {}) {
-    const { l1, l2, backstage, raw } = buildCoreMemoryParts(options);
-    return [l1, l2, backstage, raw].filter(Boolean).join('\n\n');
+    return composeInjectedMemory(buildCoreMemoryParts(options));
 }
 
 export function renderPresetMemoryMacro() {
@@ -190,7 +189,7 @@ export function updateInjection({
         ...source,
         fallbackSummary: fallbackNarrativeSummary(source),
     }));
-    const { l1, l2, backstage, raw } = buildCoreMemoryParts({
+    const parts = buildCoreMemoryParts({
         data,
         settings,
         context,
@@ -199,7 +198,7 @@ export function updateInjection({
         pairs: getPairs({ excludeTrailingAssistant: resolvedExcludeTrailingAssistant }),
         narrativeSources,
     });
-    const core = [l1, l2, backstage, raw].filter(Boolean).join('\n\n');
+    const core = composeInjectedMemory(parts);
 
     if (estimateTokens(renderL2Block(data, { forBudget: true, narrativeSources })) > (settings.budgetL2 || 5000)) {
         enqueue('volume_compress', { reason: 'budget', narrative: true }, QUEUE_PRIORITY.volume_compress);
