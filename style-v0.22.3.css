@@ -1041,4 +1041,3 @@ body.lm-memory-center-open {
     .layered-memory-root { animation: none; }
     .layered-memory-root * { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
-
