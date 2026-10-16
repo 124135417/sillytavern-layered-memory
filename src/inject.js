@@ -10,6 +10,7 @@ import { currentNarrativeSources, fallbackNarrativeSummary } from './narrative.j
 import { selectRecentRawWindow } from './recent-raw.js';
 import { resolveStyleReset } from './style-reset.js';
 import { renderBackstageCarryoverBlock } from './backstage.js';
+import { filterInjectedMemory, readInjectionFilter } from './injection-filter.js';
 
 let presetMacroRegistered = false;
 let activeGenerationType = null;
@@ -117,7 +118,7 @@ export function buildCoreMemoryParts({
         maxFloor,
     });
     const backstage = renderBackstageCarryoverBlock(data);
-    return {
+    return filterInjectedMemory({
         l1,
         l2,
         backstage,
@@ -125,7 +126,7 @@ export function buildCoreMemoryParts({
         rawWindow,
         narrativeSources: resolvedNarrativeSources,
         styleReset,
-    };
+    }, readInjectionFilter(context));
 }
 
 export function renderCoreMemoryPayload(options = {}) {
