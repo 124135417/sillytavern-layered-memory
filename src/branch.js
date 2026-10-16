@@ -241,61 +241,14 @@ function reconcileNarrativeArchives(data, liveMessages, maxFloor) {
     }
 }
 
-function reconcileBackstageSessions(data, parentData, liveMessageByKey) {
-    const source = clone(parentData.backstage || EMPTY_CHAT_DATA().backstage);
-    source.pendingGeneration = null;
-    const branchLastMessageIndex = Math.max(-1, ...Array.from(liveMessageByKey.values())
-        .map(message => Number(message.messageIndex))
-        .filter(Number.isFinite));
-    let resumable = null;
-    source.sessions = (source.sessions || []).flatMap(session => {
-        if (!session.markerMessageKey || !liveMessageByKey.has(session.markerMessageKey)) return [];
-        const revisions = (session.revisions || []).flatMap(revision => {
-            const markerKey = revision.markerMessageKey || session.markerMessageKey;
-            const marker = liveMessageByKey.get(markerKey);
-            if (!marker) return [];
-            if (revision.targetMessageKey && liveMessageByKey.has(revision.targetMessageKey)) {
-                return [revision];
-            }
-            if (Number(marker.messageIndex) !== branchLastMessageIndex) {
-                return revision.targetMessageKey ? [] : [revision];
-            }
-            const pending = { ...revision, targetMessageKey: null, status: 'pending' };
-            resumable = { sessionId: session.id, revision: pending };
-            return [pending];
-        });
-        if (!revisions.length) return [];
-        const resumeHere = resumable?.sessionId === session.id;
-        return [{
-            ...session,
-            status: resumeHere ? 'draft' : session.status,
-            working: resumeHere ? {
-                baseRevisionId: resumable.revision.id,
-                messages: clone(resumable.revision.messages || []),
-                rejectedDraft: String(resumable.revision.rejectedDraft || ''),
-                composerDraft: '',
-                carryoverRequested: false,
-                updatedAt: Date.now(),
-            } : null,
-            revisions,
-        }];
-    });
-    const sessionIds = new Set(source.sessions.map(session => session.id));
-    source.activeSessionId = resumable && sessionIds.has(resumable.sessionId) ? resumable.sessionId : null;
-    if (source.activeCarryover?.anchorMessageKey
-        && !liveMessageByKey.has(source.activeCarryover.anchorMessageKey)) {
-        source.activeCarryover = null;
-    }
-    data.backstage = source;
-}
-
 function finishBranchData(data, parentData, livePairs, parentChat, method, trustedMaxPair) {
     const liveByKey = pairMap(livePairs);
     const maxPair = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
     const maxFloor = livePairs.filter(pair => pair.sealed && pair.pairIndex <= trustedMaxPair).at(-1)?.aiFloor ?? -1;
     const liveMessages = getMessageFloors({ includeTrailingUser: true });
     const liveMessageByKey = new Map(liveMessages.map(message => [message.messageKey, message]));
-    reconcileBackstageSessions(data, parentData, liveMessageByKey);
+    // Preserve opaque pre-split extension data until its owner migrates it.
+    if (parentData.backstage) data.backstage = clone(parentData.backstage);
     const withinTrustedPrefix = item => Number(item.floor ?? item.pairIndex ?? item.anchorPairIndex) <= trustedMaxPair;
     data.turn_summaries = (parentData.turn_summaries || [])
         .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
@@ -442,7 +395,11 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
             && checkpointMatchesPrefix(point, livePairs))
         .sort((a, b) => Number(a.anchorPairIndex) - Number(b.anchorPairIndex) || Number(a.createdAt) - Number(b.createdAt));
     const checkpoint = checkpoints.at(-1);
-    if (!checkpoint) return buildLegacyRebuildData(livePairs, parentChat);
+    if (!checkpoint) {
+        const rebuilt = buildLegacyRebuildData(livePairs, parentChat);
+        if (parentData.backstage) rebuilt.backstage = clone(parentData.backstage);
+        return rebuilt;
+    }
 
     const mismatchCandidates = [
         ...(parentData.floor_events || []).map(item => ({ ...item, index: item.pairIndex, keyField: 'floorKey', fpField: 'contentFingerprint' })),

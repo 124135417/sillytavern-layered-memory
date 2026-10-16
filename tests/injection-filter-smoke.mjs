@@ -15,7 +15,7 @@ const source = [
 const parts = {
     l1: '## 当前对话身份\n- <user>：当前显示名为用户\n- 当前角色卡：可能含剧透的文档标题\n\n既有事实。',
     l2: '原有历史摘要，不能在这里猜测哪些事实需要删除。',
-    backstage: '既有幕间约定，不在这里凭关键词删改。',
+    authorNotes: '既有幕间约定，不在这里凭关键词删改。',
     rawWindow: selectRecentRawWindow(source, 16000),
 };
 parts.raw = parts.rawWindow.text;
@@ -31,7 +31,7 @@ assert(after.raw.includes('真正的正文与心理、谜团、秘密线索全�
 assert(after.raw.includes('这是用户给的文本'), 'User input must remain untouched');
 assert(after.raw.includes('断开的标签不能把后续真实正文删掉'));
 assert.equal(after.l2, before.l2);
-assert.equal(after.backstage, before.backstage);
+assert.equal(after.authorNotes, before.authorNotes);
 assert.equal(after.rawWindow.startFloor, before.rawWindow.startFloor);
 assert.equal(after.rawWindow.endFloor, before.rawWindow.endFloor);
 assert.deepEqual(parts, before, 'Stored input objects must not be mutated');
@@ -48,13 +48,13 @@ const started = performance.now();
 for (let i = 0; i < 1000; i++) filterInjectedMemory(parts, filter);
 console.log(`Injection filter passed: scoped, source-preserving, no budget refill; ${(performance.now() - started).toFixed(1)} ms / 1000 local passes.`);
 
-assert.equal(composeInjectedMemory(before), [before.l1, before.l2, before.backstage, before.raw].join('\n\n'));
+assert.equal(composeInjectedMemory(before), [before.l1, before.l2, before.authorNotes, before.raw].join('\n\n'));
 context.chatCompletionSettings.prompts[0].content = '<memory_context_filter separate_sources="true" />{{layered_memory_context}}';
 const separated = filterInjectedMemory(parts, readInjectionFilter(context));
 const composed = composeInjectedMemory(separated);
 assert(composed.indexOf('<历史记录>') < composed.indexOf('<创作约定>'));
 assert(composed.indexOf('<创作约定>') < composed.indexOf('<近期正文>'));
-for (const content of [parts.l1, parts.l2, parts.backstage, parts.raw]) assert(composed.includes(content));
+for (const content of [parts.l1, parts.l2, parts.authorNotes, parts.raw]) assert(composed.includes(content));
 assert.equal((composed.match(/<创作约定>/gu) || []).length, 1);
 assert.equal(composeInjectedMemory({ separateSources: true }), '', 'Empty sources do not produce instructions');
 assert.deepEqual(parts, before);

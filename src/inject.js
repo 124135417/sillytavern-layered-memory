@@ -9,7 +9,7 @@ import { estimateTokens } from './tokens.js';
 import { currentNarrativeSources, fallbackNarrativeSummary } from './narrative.js';
 import { selectRecentRawWindow } from './recent-raw.js';
 import { resolveStyleReset } from './style-reset.js';
-import { renderBackstageCarryoverBlock } from './backstage.js';
+import { renderContextContributions } from './context-contributions.js';
 import { composeInjectedMemory, filterInjectedMemory, readInjectionFilter } from './injection-filter.js';
 
 let presetMacroRegistered = false;
@@ -117,11 +117,11 @@ export function buildCoreMemoryParts({
         narrativeSources: resolvedNarrativeSources,
         maxFloor,
     });
-    const backstage = renderBackstageCarryoverBlock(data);
+    const authorNotes = renderContextContributions();
     return filterInjectedMemory({
         l1,
         l2,
-        backstage,
+        authorNotes,
         raw: rawWindow.text,
         rawWindow,
         narrativeSources: resolvedNarrativeSources,

@@ -1,5 +1,5 @@
 import { estimateTokens } from './tokens.js';
-import { isBackstageMarker } from './backstage.js';
+import { isBackstageMarker } from './message-semantics.js';
 
 function renderRawFloor(source) {
     if (isBackstageMarker(source.message)) {

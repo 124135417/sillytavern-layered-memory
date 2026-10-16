@@ -143,14 +143,6 @@ export const EMPTY_CHAT_DATA = () => ({
         last_narrative_floor: -1,
         last_result: null,
     },
-    /** Non-canon player/narrator discussions and their swipe-safe revisions. */
-    backstage: {
-        version: 2,
-        activeSessionId: null,
-        pendingGeneration: null,
-        activeCarryover: null,
-        sessions: [],
-    },
     history_rebuild: null,
     rebuild_backup: null,
     pending_floors: [],

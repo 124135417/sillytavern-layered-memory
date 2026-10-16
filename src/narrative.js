@@ -9,7 +9,7 @@ import { appendLog, assertChatData, getChatData, getSettings, saveChatData } fro
 import { normalizeStoryTime, storyTimeEvidencePosition } from './story-time.js';
 import { resolveStyleReset, stripStyleResetCommands } from './style-reset.js';
 import { evidenceSpansInSource } from './tokens.js';
-import { isBackstageMarker } from './backstage.js';
+import { isBackstageMarker } from './message-semantics.js';
 import { attachSceneContexts, sameSceneContext, sceneContextRange } from './scene-context.js';
 
 const MAX_BATCH_MESSAGES = 6;

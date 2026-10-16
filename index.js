@@ -1,3 +1,4 @@
+import { registerMemoryIntegration } from './src/integration.js';
 import { handleChapterSummaryJob } from './src/chapter.js';
 import { handleExtractJob } from './src/extract.js';
 import {
@@ -28,20 +29,6 @@ import {
     handleNarrativeChapterJob,
     handleNarrativeSummaryJob,
 } from './src/narrative.js';
-import {
-    handleBackstageChatChanged,
-    handleBackstageGenerationStarted,
-    handleBackstageGenerationStopped,
-    handleBackstageMessageReceived,
-    handleBackstageMessageSent,
-} from './src/backstage-runtime.js';
-import {
-    injectBackstageUi,
-    refreshBackstageMarkers,
-    refreshBackstageTriggerState,
-    scheduleBackstageMarkerRefresh,
-    scheduleBackstageMarkerRefreshes,
-} from './src/ui/backstage.js';
 
 const MODULE = 'layered-memory';
 
@@ -101,8 +88,6 @@ function maybeEnqueueAutomaticStateReview({ onOpen = false, force = false } = {}
 }
 
 async function onChatChanged() {
-    handleBackstageChatChanged();
-    scheduleBackstageMarkerRefreshes();
     releaseInactiveQueueScopes();
     const originMetadata = ctx().chatMetadata;
     const recovery = await beginBranchRecovery();
@@ -115,8 +100,6 @@ async function onChatChanged() {
     maybeEnqueueAutomaticStateReview({ onOpen: true });
     updateInjection();
     renderActiveTab();
-    refreshBackstageMarkers();
-    refreshBackstageTriggerState();
 }
 
 async function onMessageEvents(mesId, { excludeTrailingAssistant = false } = {}, originMetadata = ctx().chatMetadata) {
@@ -245,12 +228,12 @@ globalThis.layeredMemoryIntercept = async function layeredMemoryIntercept(chat, 
 };
 
 jQuery(async () => {
+    registerMemoryIntegration();
     wireHandlers();
     getSettings();
     registerPresetMemoryMacro();
     injectPanel();
     registerMessageMenu();
-    injectBackstageUi();
     const { eventSource, event_types } = ctx();
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
@@ -261,9 +244,6 @@ jQuery(async () => {
     eventSource.on(event_types.MESSAGE_RECEIVED, (mesId, type) => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
-        handleBackstageMessageReceived(normalizedId, type);
-        scheduleBackstageMarkerRefresh(normalizedId - 1);
-        refreshBackstageTriggerState();
         if (type === 'swipe') {
             queueHistoryMutation(normalizedId);
             return;
@@ -272,19 +252,13 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.MESSAGE_SENT, (mesId) => {
-        const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
-        const createdBackstageMarker = handleBackstageMessageSent(normalizedId);
-        if (createdBackstageMarker) scheduleBackstageMarkerRefresh(normalizedId);
-        refreshBackstageTriggerState();
     });
 
     const historyMutationHandler = (mesId) => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         const chat = ctx().chat || [];
         const pendingNewSwipe = normalizedId === chat.length - 1 && isPendingSwipeMessage(chat[normalizedId]);
-        refreshBackstageMarkers(normalizedId);
-        refreshBackstageTriggerState();
         queueHistoryMutation(normalizedId, { excludeTrailingAssistant: pendingNewSwipe });
     };
 
@@ -296,33 +270,27 @@ jQuery(async () => {
     }
     if (event_types.MESSAGE_DELETED) {
         eventSource.on(event_types.MESSAGE_DELETED, (mesId) => {
-            refreshBackstageTriggerState();
             queueHistoryMutation(typeof mesId === 'number' ? mesId : Number(mesId));
         });
     }
     if (event_types.GENERATION_STARTED) {
         eventSource.on(event_types.GENERATION_STARTED, (type, _params, isDryRun) => {
-            handleBackstageGenerationStarted(type, isDryRun);
-            refreshBackstageTriggerState();
             setActiveGenerationType(type);
             if (isDryRun) scheduleInjectionRefresh();
         });
     }
     const clearGenerationState = () => {
         clearActiveGenerationType();
-        refreshBackstageTriggerState();
         scheduleInjectionRefresh();
     };
     if (event_types.GENERATION_ENDED) {
         eventSource.on(event_types.GENERATION_ENDED, () => {
             clearGenerationState();
-            handleBackstageGenerationStopped({ includeDiscussion: false });
         });
     }
     if (event_types.GENERATION_STOPPED) {
         eventSource.on(event_types.GENERATION_STOPPED, () => {
             clearGenerationState();
-            handleBackstageGenerationStopped();
         });
     }
     if (event_types.GENERATE_AFTER_DATA) {
@@ -341,7 +309,7 @@ jQuery(async () => {
 
     await onChatChanged();
 
-    console.log(`[${MODULE}] 已加载 v0.22.4`);
+    console.log(`[${MODULE}] 已加载 v0.23.0`);
 });
 
 export async function onActivate() {

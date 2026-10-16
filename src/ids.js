@@ -4,7 +4,7 @@ import {
     getContext,
     saveChatData,
 } from './settings.js';
-import { isBackstageMarker } from './backstage.js';
+import { isBackstageMarker } from './message-semantics.js';
 
 /**
  * Ensure every message has a stable layered_memory_id in extra.
@@ -17,7 +17,7 @@ export function ensureMessageIds() {
             mes.extra = {};
         }
         if (!mes.extra.layered_memory_id) {
-            mes.extra.layered_memory_id = crypto.randomUUID();
+            mes.extra.layered_memory_id = mes.extra.backstage_message_id || crypto.randomUUID();
             changed = true;
         }
     }
