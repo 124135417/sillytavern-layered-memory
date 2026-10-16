@@ -1,3 +1,5 @@
+import { filterModelSource } from './request-context.js';
+
 function cleanValue(value, limit = 160) {
     return [...String(value ?? '')
         .replace(/<br\s*\/?\s*>/giu, '')
@@ -24,6 +26,7 @@ function fieldFromRegion(region, keys) {
 
 /** Extract only compact time/location fields from a configured assistant status region. */
 export function extractSceneContext(text, pattern = '') {
+    text = filterModelSource(text);
     const configured = configuredPattern(pattern);
     if (!String(pattern ?? '').trim()) {
         return { status: 'unconfigured', time: '', location: '', raw: '', error: '' };

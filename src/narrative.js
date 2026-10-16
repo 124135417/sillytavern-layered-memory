@@ -1,3 +1,4 @@
+import { filterModelSource } from './request-context.js';
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { summarizeChapterNotes } from './archive.js';
 import { extractAiBody, stripHtmlComments } from './body.js';
@@ -23,7 +24,7 @@ function narrativeText(source) {
     if (source.role === 'assistant') {
         return extractAiBody(source.text, getSettings().bodyExtractionRegex).text;
     }
-    return stripStyleResetCommands(source.text).text;
+    return stripStyleResetCommands(filterModelSource(source.text)).text;
 }
 
 function boundedText(value, limit = 320) {

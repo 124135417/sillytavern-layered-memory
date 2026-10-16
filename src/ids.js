@@ -1,3 +1,4 @@
+import { filterModelSource } from './request-context.js';
 import {
     appendLog,
     getChatData,
@@ -172,8 +173,8 @@ export function getPairTexts(pair) {
     return {
         // The complete backstage transcript is a real provider input so native
         // generation and swipes keep working, but it is not story evidence.
-        userText: isBackstageMarker(pair.user) ? '' : getActiveMesText(pair.user),
-        aiText: getActiveMesText(pair.ai),
+        userText: isBackstageMarker(pair.user) ? '' : filterModelSource(getActiveMesText(pair.user)),
+        aiText: filterModelSource(getActiveMesText(pair.ai)),
     };
 }
 

@@ -1,3 +1,4 @@
+import { protectModelContext } from './request-context.js';
 import { getContext, getSettings, appendLog, saveSettings } from './settings.js';
 
 const CONNECTION_TEST_TIMEOUT_MS = 15_000;
@@ -86,6 +87,7 @@ export async function callAuxModel({ purpose, systemPrompt, userPrompt, jsonSche
     const settings = getSettings();
     const ctx = getContext();
     const source = normalizeModelSource(settings.memoryModelSource);
+    ({ systemPrompt, userPrompt, jsonSchema } = await protectModelContext({ systemPrompt, userPrompt, jsonSchema }, 'memory'));
     try {
         if (source === 'direct') {
             assertDirectSettings(settings);
@@ -198,7 +200,7 @@ async function directFetch({ baseUrl, apiKey, model, systemPrompt, userPrompt, t
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(await protectModelContext(body, 'memory')),
     });
     if (!res.ok) {
         const t = await res.text();
@@ -346,7 +348,7 @@ async function directTestFetch({ baseUrl, apiKey, model, timeoutMs }) {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${apiKey}`,
             },
-            body: JSON.stringify(body),
+            body: JSON.stringify(await protectModelContext(body, 'memory')),
             ...(controller ? { signal: controller.signal } : {}),
         });
         if (!res.ok) {

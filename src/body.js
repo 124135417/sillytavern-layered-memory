@@ -1,3 +1,5 @@
+import { filterModelSource } from './request-context.js';
+
 /**
  * Extract the narrative body from an AI reply. A user rule is an optimization,
  * never a hard dependency: invalid or unmatched rules fall back to full text.
@@ -7,7 +9,7 @@ export function stripHtmlComments(value) {
 }
 
 export function extractAiBody(aiText, pattern = '') {
-    const fullText = String(aiText ?? '');
+    const fullText = filterModelSource(String(aiText ?? ''));
     const rule = String(pattern ?? '').trim();
     if (!rule) {
         return { text: stripHtmlComments(fullText), mode: 'full', matched: true, error: '' };
