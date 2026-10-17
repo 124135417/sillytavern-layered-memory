@@ -73,7 +73,7 @@ assert.equal(parts.rawWindow.startFloor, 5);
 assert.match(parts.l2, /CHAPTER_0_4/u);
 assert.doesNotMatch(parts.l2, /SUMMARY_5/u);
 const payload = [parts.l1, parts.l2, parts.raw].filter(Boolean).join('\n\n');
-assert.ok(payload.indexOf('当前确立的事实') < payload.indexOf('CHAPTER_0_4'));
+assert.ok(payload.indexOf('已记录的事实与阶段状态') < payload.indexOf('CHAPTER_0_4'));
 assert.ok(payload.indexOf('CHAPTER_0_4') < payload.indexOf('RAW_FLOOR_5'));
 assert.match(parts.l2, /摘要截至第 4 楼；紧随其后的完整原文从第 5 楼开始/u);
 

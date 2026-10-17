@@ -111,8 +111,10 @@ promptSettings.prompt_order[0].order[0].enabled = true;
 assert.equal(getPresetAnchorStatus(context).mode, 'anchor');
 const anchoredPayload = registeredMacro.value();
 assert.match(anchoredPayload, /最近完整剧情原文开始/u);
-assert.match(anchoredPayload, /当前确立的事实/u);
-assert.ok(anchoredPayload.indexOf('当前确立的事实') < anchoredPayload.indexOf('最近完整剧情原文开始'),
+assert.match(anchoredPayload, /已记录的事实与阶段状态/u);
+assert.match(anchoredPayload, /不重新挂成当前待办/u);
+assert.doesNotMatch(anchoredPayload, /至今仍然为真的事实/u);
+assert.ok(anchoredPayload.indexOf('已记录的事实与阶段状态') < anchoredPayload.indexOf('最近完整剧情原文开始'),
     'anchored payload must put current facts before recent raw chronology');
 assert.equal(anchoredPayload, renderCoreMemoryPayload(), 'macro and preview must use the same core payload');
 
