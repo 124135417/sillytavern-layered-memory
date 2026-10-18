@@ -86,6 +86,23 @@ assert.equal((await mergeExtractResult(old,c)).applied,0,'Old extraction cannot 
 c.pairIndex=2;c.floorKey='new-floor';c.contentFingerprint='new-fp';assert.equal((await mergeExtractResult(old,c)).applied,1,'New later evidence may establish it again');
 const archived=data.retired_facts[0];const restored=restoreArchivedFact(data,'retired_facts',archived.id);assert(!restored.error);assert.equal(restored.entry.source,'manual');assert.equal(data.retired_facts.length,0);
 
+// Relevance-based cleanup does not need an explicit ending or replacement.
+for (const category of ['low_value', 'completed', 'superseded', 'expired', 'contradicted']) {
+    seed(); const reviewCtx = ctx(); reviewCtx.sourceText = '两人只聊了新音乐，没有提旧事。';
+    const broad = await mergeExtractResult(normalizeExtractOutput({ obsolete: [{ entry_id: 'e_water', category, reason: '旧场景的一次递水，后续没有常驻价值' }] }), reviewCtx);
+    assert.equal(broad.applied, 1, `${category} must not require this turn to repeat a fact's ending`);
+    assert.equal(data.retired_facts.length, 1);
+}
+seed(); data.state_table.entries.push(fact('e_settled', '款项已结清'));
+c = ctx(); c.sourceText = '现在只聊音乐。';
+assert.equal((await mergeExtractResult(normalizeExtractOutput({ obsolete: [command('e_paid', 'superseded', '款项已结清')] }), c)).applied, 1,
+    'an optional quote may come from another current fact rather than this turn');
+seed(); c = ctx(); c.sourceText = '现在只聊音乐。'; c.obsoleteHistory = '此前剧情：款项早已结清。';
+assert.equal((await mergeExtractResult(normalizeExtractOutput({obsolete:[command('e_paid','completed','款项早已结清')]}),c)).applied,1,'historical summary evidence is valid for obsolete, without requiring a repeat this turn');
+seed(); c = ctx(); c.sourceText = '现在只聊音乐。';
+assert.equal((await mergeExtractResult(normalizeExtractOutput({ obsolete: [{ entry_id:'e_water', reason:'旧桌角的一次递水不值得继续常驻' }] }), c)).applied, 1,
+    'an omitted category defaults to low value rather than blocking a usable decision');
+
 // Exercise the real extract handler: one existing model call, full current table,
 // direct archive, and persisted JSON, with no separate state-review job.
 seed();let calls=0, sent='', persisted=null;
@@ -95,4 +112,9 @@ await handleExtractJob({floorKey:pair.floorKey,pairIndex:pair.pairIndex,ignoreBa
 assert.equal(calls,1);assert(sent.includes('TEMP_WATER_CANARY')&&sent.includes('[e_manual]')&&sent.includes('[e_relationship]'),'The extraction must see every current fact');
 assert.equal(data.retired_facts.length,2);assert(persisted&&JSON.parse(persisted).retired_facts.length===2);
 assert(!getQueueSnapshot().queued.some(job=>job.type==='state_review'));
+seed(); calls=0;
+context.generateRaw=async()=>{calls++;return JSON.stringify({turn_summary:'<user>说事情办完，角色回应。'})};
+await handleExtractJob({floorKey:pair.floorKey,pairIndex:pair.pairIndex,ignoreBaseline:true});
+assert.equal(calls,1,'an omitted obsolete field must not trigger a separate paid cleanup call');
+assert.equal(data.retired_facts.length,0);assert(data.logs.some(log=>log.level==='warn'&&log.extra?.obsolete?.reported===false));
 console.log('per-floor obsolete: one-call full-table extraction, no-baseline retirement, excluded inputs, update/protection/race guards, old-replay suppression, restore, swipe/fork/rollback and persistence passed');

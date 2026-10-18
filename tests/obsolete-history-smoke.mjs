@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { renderObsoleteHistory } from '../src/obsolete-history.js';
+const sources=Array.from({length:12},(_,i)=>({messageKey:'m'+i,messageIndex:i,role:i%2?'assistant':'user',contentFingerprint:'fp'+i,fallbackSummary:'fallback'+i}));
+const data={narrative_summaries:sources.map(s=>({...s,summary:'SMALL_'+s.messageIndex})),narrative_chapters:[{id:'a',floor_range:[0,2],summary:'CHAPTER_A'},{id:'b',floor_range:[3,5],summary:'CHAPTER_B'},{id:'c',floor_range:[6,8],summary:'LARGE_C '+ '完整过去剧情。'.repeat(1500)},{id:'future',floor_range:[9,11],summary:'FUTURE_CHAPTER'}],narrative_volumes:[{id:'v',chapter_ids:['a','b'],summary:'VOLUME_AB'}]};
+let text=renderObsoleteHistory(data,{pairIndex:5,userFloor:10,aiFloor:11},[],sources);
+assert(text.includes('VOLUME_AB')&&text.includes('LARGE_C')&&text.includes('SMALL_9'));
+assert(!text.includes('CHAPTER_A')&&!text.includes('CHAPTER_B')&&!text.includes('SMALL_0'),'do not duplicate material already covered by a larger summary');
+assert(!text.includes('FUTURE_CHAPTER')&&!text.includes('SMALL_10')&&!text.includes('SMALL_11'),'the current turn and future prefix must be excluded');
+assert(text.includes('完整过去剧情。'.repeat(1500)),'do not apply the main-model 2000/5000-token caps');
+assert(text.includes('截至第 9 楼'));
+const legacy={chapters:[{id:'old',floor_range:[0,1],summary:'LEGACY_CHAPTER'},{id:'future',floor_range:[3,3],summary:'LEGACY_FUTURE'}],turn_summaries:[{pairIndex:0,summary:'DUPLICATE_OLD'},{pairIndex:2,summary:'LEGACY_TAIL'},{pairIndex:3,summary:'CURRENT_TURN'}],volumes:[]};
+text=renderObsoleteHistory(legacy,{pairIndex:3,userFloor:6,aiFloor:7},Array.from({length:4},(_,i)=>({pairIndex:i,userFloor:i*2,aiFloor:i*2+1})),[]);
+assert(text.includes('LEGACY_CHAPTER')&&text.includes('LEGACY_TAIL'));assert(!text.includes('DUPLICATE_OLD')&&!text.includes('LEGACY_FUTURE')&&!text.includes('CURRENT_TURN'));
+assert.equal(renderObsoleteHistory(data,{pairIndex:0,userFloor:0},[],sources),'');
+console.log('Obsolete history: full compressed chronology, no duplicated ranges, no budget truncation, no future/current-turn leakage and legacy compatibility passed');

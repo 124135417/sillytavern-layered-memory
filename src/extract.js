@@ -13,6 +13,7 @@ import { pairMessageSources } from './fact-source.js';
 import { snapshotObsoleteTargets } from './obsolete.js';
 import { currentNarrativeSources, buildNarrativeBatchPrompt, validateNarrativeBatch, storeNarrativeResults, enqueueMissingNarrativeChapters } from './narrative.js';
 import { TEMPORAL_EVENT_INSTRUCTION } from './timeline.js';
+import { renderObsoleteHistory } from './obsolete-history.js';
 
 const extractCommitStateByChat = new WeakMap();
 const EXTRACT_MUTATION_KEYS = [
@@ -61,6 +62,12 @@ function restoreExtractMutationState(data, snapshot) {
     for (const key of EXTRACT_MUTATION_KEYS) data[key] = snapshot[key];
 }
 
+function invalidMemoryOutput(message) {
+    const error = new Error(message);
+    error.status = 422; // A paid but malformed response must not trigger blind queue retries.
+    return error;
+}
+
 async function runExtractOnce(pair, { retryNote = '', unified = false } = {}) {
     const data = getChatData();
     const pairTexts = getPairTexts(pair);
@@ -69,9 +76,11 @@ async function runExtractOnce(pair, { retryNote = '', unified = false } = {}) {
     const body = extractAiBody(aiText, getSettings().bodyExtractionRegex);
     const sourceText = `${userText}\n${body.text}`;
     const obsoleteTargets = snapshotObsoleteTargets(data.state_table);
-    const tableRender = renderStateTableCompact(data.state_table);
-    const narrativeSources = unified ? currentNarrativeSources().filter(source => [pair.userKey, pair.aiKey].includes(source.messageKey)) : [];
-    const userPrompt = unified ? [retryNote, '## 当前状态表', tableRender, buildNarrativeBatchPrompt(narrativeSources, retryNote)].filter(Boolean).join('\n\n') : [
+    const tableRender = renderStateTableCompact(data.state_table, { pairs: unified ? getPairs() : null });
+    const allNarrativeSources = unified ? currentNarrativeSources().map(source => ({ ...source, fallbackSummary: source.narrativeText })) : [];
+    const narrativeSources = allNarrativeSources.filter(source => [pair.userKey, pair.aiKey].includes(source.messageKey));
+    const obsoleteHistory = unified ? renderObsoleteHistory(data, pair, getPairs(), allNarrativeSources) : '';
+    const userPrompt = unified ? [retryNote, '## 当前状态表', tableRender, obsoleteHistory, buildNarrativeBatchPrompt(narrativeSources, retryNote)].filter(Boolean).join('\n\n') : [
         retryNote ? `上次校验失败原因：${retryNote}\n请修正后重新输出。\n` : '',
         '## 当前状态表\n',
         tableRender,
@@ -81,7 +90,7 @@ async function runExtractOnce(pair, { retryNote = '', unified = false } = {}) {
         body.text,
     ].join('');
 
-    const { text } = await callAuxModel({
+    const { text, finishReason } = await callAuxModel({
         purpose: 'extract',
         systemPrompt: unified ? CONFIRMED_MEMORY_SYSTEM + TEMPORAL_EVENT_INSTRUCTION : EXTRACT_SYSTEM,
         userPrompt,
@@ -91,31 +100,36 @@ async function runExtractOnce(pair, { retryNote = '', unified = false } = {}) {
 
     const raw = parseJsonFromModel(text);
     if (!raw) {
-        throw new Error('提取结果不是合法 JSON');
+        throw invalidMemoryOutput(finishReason === 'length' ? '记忆返回被输出上限截断，未自动重复付费请求' : '记忆返回不是合法 JSON，未自动重复付费请求');
     }
-    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode, obsoleteTargets, narrativeSources };
+    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode, obsoleteTargets, narrativeSources, obsoleteHistory };
 }
 
 async function prepareExtract(pair, payload, retryNote = '') {
-    const { raw, sourceText, bodyMode, obsoleteTargets, narrativeSources } = await runExtractOnce(pair, { retryNote, unified: payload.unified });
+    const { raw, sourceText, bodyMode, obsoleteTargets, narrativeSources, obsoleteHistory } = await runExtractOnce(pair, { retryNote, unified: payload.unified });
     const normalized = normalizeExtractOutput(raw, 'per_floor');
     let narrativeResults = null;
     if (payload.unified) {
-        const checked = validateNarrativeBatch(raw, narrativeSources);
-        if (!checked.ok || narrativeSources.length !== 2) throw new Error(`合并记忆记录校验失败：${checked.errors.join('；')}`);
+        const checked = validateNarrativeBatch(raw, narrativeSources, { allowPartial: true });
+        if (!checked.ok || narrativeSources.length !== 2) throw invalidMemoryOutput(`合并记忆记录校验失败：${checked.errors.join('；')}`);
         narrativeResults = checked.results;
         // Compatibility data is derived locally, never another requested summary.
         normalized.turnSummary = checked.results.map(item => item.summary).join(' ');
         normalized.storyTimeRaw = [...checked.results].reverse().find(item => item.storyTime)?.storyTime || null;
     }
-    if (!normalized.turnSummary) throw new Error('逐轮剧情记录为空或过长');
+    if (!normalized.turnSummary) throw invalidMemoryOutput('逐轮剧情记录为空或过长');
     if (payload.summaryOnly) {
         normalized.adds = [];
         normalized.updates = [];
         normalized.conflicts = [];
         normalized.obsolete = [];
     }
-    return { normalized, sourceText, bodyMode, obsoleteTargets, narrativeResults };
+    return { normalized, sourceText, bodyMode, obsoleteTargets, narrativeResults, obsoleteHistory, obsoleteReported: Array.isArray(raw.obsolete),
+        audit: payload.unified ? {
+            total: Object.keys(obsoleteTargets).length,
+            reviewed: new Set([...(Array.isArray(raw.keep_ids) ? raw.keep_ids : []),
+                ...normalized.obsolete.map(item => item.entry_id)].filter(id => Object.hasOwn(obsoleteTargets, id))).size,
+        } : null };
 }
 
 function extractionAlreadyComplete(data, pair, payload) {
@@ -145,6 +159,7 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
             source: 'auto',
             bodyMode: prepared.bodyMode,
             obsoleteTargets: prepared.obsoleteTargets,
+            obsoleteHistory: prepared.obsoleteHistory,
             messageSources: pairMessageSources(pair, {
                 userText: stripStyleResetCommands(getPairTexts(pair).userText).text,
                 aiText: extractAiBody(getPairTexts(pair).aiText, getSettings().bodyExtractionRegex).text,
@@ -153,7 +168,7 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
         });
         assertChatData(originData);
         if (prepared.narrativeResults) storeNarrativeResults(originData, prepared.narrativeResults);
-        if (!payload.summaryOnly && prepared.normalized.adds.length > 0 && result.discarded > 0 && result.applied === 0 && attempt === 0) {
+        if (!payload.unified && !payload.summaryOnly && prepared.normalized.adds.length > 0 && result.discarded > 0 && result.applied === 0 && attempt === 0) {
             restoreExtractMutationState(originData, snapshot);
             return {
                 retry: true,
@@ -168,7 +183,12 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
             originData.progress.pairs_since_proofread = (originData.progress.pairs_since_proofread || 0) + 1;
         }
         await saveChatData(originData);
-        return { retry: false, result };
+        return { retry: false, result, obsolete: {
+            reported: prepared.obsoleteReported,
+            audit: prepared.audit,
+            proposed: prepared.normalized.obsolete.length,
+            applied: Math.max(0, originData.retired_facts.length - (snapshot.retired_facts || []).length),
+        } };
     } catch (error) {
         restoreExtractMutationState(originData, snapshot);
         throw error;
@@ -220,7 +240,8 @@ export async function handleExtractJob(payload) {
         assertChatData(originData);
         if (extractionAlreadyComplete(getChatData(), pair, payload)) return;
         let retryNote = preparationError?.message ?? '';
-        for (let attempt = 0; attempt < 2; attempt += 1) {
+        const attempts = payload.unified ? 1 : 2;
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
             try {
                 if (attempt === 0 && preparationError) throw preparationError;
                 const candidate = attempt === 0 ? prepared : await prepareExtract(pair, payload, retryNote);
@@ -241,7 +262,12 @@ export async function handleExtractJob(payload) {
                     appendLog('info', `逐轮剧情补记完成 楼#${pair.pairIndex}`);
                     return;
                 }
-                appendLog('info', `提取完成 楼#${pair.pairIndex}: +${committed.result.applied} 丢${committed.result.discarded} 冲突${committed.result.conflicts}`);
+                const review = committed.obsolete;
+                const complete = review.reported && (!review.audit || review.audit.reviewed === review.audit.total);
+                const auditNote = review.audit ? `；已覆盖 ${review.audit.reviewed}/${review.audit.total} 条旧事实` : '';
+                const warning = !review.reported ? '；模型漏返 obsolete，清理未完成，将在下一轮正常整理时重审'
+                    : !complete ? '；模型未覆盖完整旧表，下轮继续审查，不额外补调用' : '';
+                appendLog(complete ? 'info' : 'warn', `记忆整理完成：第 ${pair.userFloor}、${pair.aiFloor} 楼；事实变动 ${committed.result.applied}，停用 ${review.applied} 条（模型建议 ${review.proposed} 条）${auditNote}${warning}`, { pairIndex: pair.pairIndex, obsolete: review });
                 if (payload.unified) enqueueMissingNarrativeChapters(originData);
                 if (!payload.ignoreBaseline) {
                     if (!payload.unified) maybeEnqueueChapter(pair.pairIndex);
@@ -252,7 +278,7 @@ export async function handleExtractJob(payload) {
             } catch (err) {
                 if (err?.code === 'CHAT_SCOPE_CHANGED') throw err;
                 assertChatData(originData);
-                if (attempt === 0) {
+                if (attempt + 1 < attempts) {
                     retryNote = err?.message ?? String(err);
                     continue;
                 }

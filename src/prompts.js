@@ -35,15 +35,15 @@ AI 回复可能同时包含叙事正文，以及预设附加的回顾摘要、�
 - possession：关键持有物变更了吗？
 - world：产生新的世界事实了吗（仅扮演中新产生的）？
 - other：其它会持续为真的事实？必须含 why_persistent。
-- obsolete：每次检查给出的完整当前事实表，找出已不再适合作为当前事实的旧条目。输出 [{entry_id, category:"completed|superseded|scene_local|expired|contradicted", reason, evidence}]；没有则 []。这是自动退出指令，不需要玩家启动整理；条目会归档，不删除原剧情。
-  - completed：已经履行或解决；superseded：已被新状态取代；expired：明确期限已过；contradicted：被新剧情证伪。这四类必须给出本楼用户输入或正文中连续、准确的 evidence（≤50字），并说明旧条目为何不再成立。
-  - scene_local：递水、桌角物品、临时等待等仅适用于当时现场的信息，结合当前场景、时间或已发生结果判断它已没有持续作用后退出。reason 必须具体说明；有直接本楼依据时填写 evidence，没有可引用原句时可留空。不是把它判为从未发生或物品已销毁。
-  - 不因本轮没提到、年代久远或与你当前写作无关，就退出持续关系、身份、长期约定、重要物品和未解决伤势；小伤也不能仅凭时间猜测已经痊愈。
-  - 若同一事项可以在 facts 中更新原条目，优先更新，不同时 obsolete 该条；不能把暂时推测写成解除或完成。
-  - 只引用表中已有 entry_id。玩家保护的条目不可退出；不确定是否仍有效就保留，不输出该项。
+- obsolete：完整检查当前事实表，把不值得继续常驻的条目移出。判断的是“后续剧情是否还需要这条当前事实”，不是“它是否从未发生或已经被证伪”。优先输出紧凑的 [{entry_id,reason}]，reason 用不超过20字说明去留价值；category 可省略（默认 low_value），evidence 通常省略。没有则 []；停用后内容仍在历史与归档里，可手动恢复。
+  - 使用宽松、主动清理的标准。一次性行动或谈话、普通吃喝递送、桌角物品、当时的位置姿势、临时等候、过场安排、短期小事，只要你判断接下来不太可能再有作用，就停用。不要因为“理论上将来可能提到”而一直保留，也不需要百分之百确定它永远不会再出现。
+  - low_value：即使曾经真实发生、没有被替换、没有明确结束句，只要后续使用价值低，就可以停用；scene_local 表示只有当时现场有用。completed/superseded/expired/contradicted 也可结合整张事实表判断，不要求本轮重提。
+  - 每项用不超过20字的具体 reason 说明为什么不再值得常驻；不要复述整条事实。evidence 通常省略；如填写，可引用此前剧情回顾、当前事实表或本次正文的连续短句（≤50字）。不得要求原文证明物品销毁、承诺完成或伤口痊愈后才允许停用；停用本身不宣告这些剧情结果。
+  - 通常保留仍在约束后续写作的身份、当前关系、重要世界规则、关键持有物和真正有后续影响的未解决事项。不要把所有“承诺”“持有物”“小伤”都当成必须永久保留的类别。
+  - 这次没有新增事实，也必须独立检查完整旧表；不能把“本楼没变化”当成 obsolete=[] 的理由。只引用表中已有 entry_id，玩家保护项不可退出；同一回复明确更新的条目不同时停用。
 - conflicts：只有尚不能确定、需要人工核对的矛盾，才填写 [{entry_id, action:"review", note}]；明确可退出的旧状态使用 obsolete，不放到等待玩家处理的建议里。
 
-每条事实必须含 topic 与 evidence。topic 是这条事实具体在说什么，例如“右手图案”“组织内职位”“停止讨论某人”，用于区分同一人物的多条承诺、身份或物品；不同事项不得使用同一个 topic。evidence 是原文中的直接引文（≤50字）。引不出原句就不许填。
+每条新增或更新的事实必须含 subject、topic、value 与 evidence（这不适用于 obsolete）。topic 是这条事实具体在说什么，例如“右手图案”“组织内职位”“停止讨论某人”，用于区分同一人物的多条承诺、身份或物品；不同事项不得使用同一个 topic。evidence 是原文中的直接引文（≤50字）。引不出原句就不许填。
 单条 value ≤80 字。只输出 JSON，不要其它说明。
 
 ## few-shot
@@ -90,7 +90,7 @@ export const EXTRACT_JSON_SCHEMA = {
             world: {},
             other: {},
             conflicts: { type: 'array' },
-            obsolete: { type: 'array', items: { type: 'object', properties: { entry_id: { type: 'string' }, category: { type: 'string', enum: ['completed', 'superseded', 'scene_local', 'expired', 'contradicted'] }, reason: { type: 'string' }, evidence: { type: 'string' } }, required: ['entry_id', 'category', 'reason'] } },
+            obsolete: { type: 'array', items: { type: 'object', properties: { entry_id: { type: 'string' }, category: { type: 'string', enum: ['low_value', 'completed', 'superseded', 'scene_local', 'expired', 'contradicted'] }, reason: { type: 'string' }, evidence: { type: 'string' } }, required: ['entry_id', 'reason'] } },
         },
     },
 };
@@ -216,13 +216,17 @@ pinned 条目不得改动。
 只输出 JSON：{"keep_ids":["e_0001"],"drop_ids":["e_0002"],"merged":[{"from_ids":["e_0003","e_0004"],"entry":{"slot":"...","subject":"...","object":"","value":"..."}}]}`;
 
 /** One confirmed pair, one response: per-message continuity plus the fact diff. */
-export const CONFIRMED_MEMORY_SYSTEM = NARRATIVE_FLOOR_SYSTEM.slice(0, NARRATIVE_FLOOR_SYSTEM.lastIndexOf('只输出 JSON：'))
-    + '\n同时检查完整当前事实表。事实判断以本次两个楼的剧情正文为依据。\n'
+export const CONFIRMED_MEMORY_SYSTEM = '你在一次调用内完成三项独立任务，不能只完成本轮总结就跳过旧事实清理。\n任务一（先完成）：逐项审查完整当前事实表，按后续使用价值主动瘦身。结合此前完整剧情回顾、本轮原文及事实建立/更新时间，综合判断：早期建立的事项是否已在后文完成、场景是否已切换、最近剧情是否仍需要它。必须遍历所有 ID，不限于本轮提到的人物或事项。先用紧凑 {entry_id,reason} 输出 obsolete（reason不超过20字，不复述事实，不输出多余的空 evidence/category），再用 keep_ids 列出其余保留的旧 ID；二者应覆盖整张输入表，不得遗漏。不要因本轮没有新事实就把 obsolete 留空，也不要把全部旧物品、旧承诺自动判为长期有效。\n'
+    + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('- obsolete：'), EXTRACT_SYSTEM.indexOf('- conflicts：'))
+    + '\n任务二：总结这次两个楼。以下“只记录本楼”“证据来自正文”等限制只约束剧情记录和事实新增，不约束任务一的全表使用价值判断。\n'
+    + NARRATIVE_FLOOR_SYSTEM.slice(0, NARRATIVE_FLOOR_SYSTEM.lastIndexOf('只输出 JSON：'))
+    + '\n任务三：提取本次原文中新增加或更新的持续事实。\n'
     + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('再检查当前事实：'), EXTRACT_SYSTEM.indexOf('另写 story_time：'))
-    + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('槽位：'), EXTRACT_SYSTEM.indexOf('## few-shot'))
+    + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('槽位：'), EXTRACT_SYSTEM.indexOf('- obsolete：'))
+    + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('- conflicts：'), EXTRACT_SYSTEM.indexOf('## few-shot'))
     + '\n事实数组每项必须包含 {subject,object,topic,value,evidence}：subject 是明确主体，object 是关联对象（没有则空字符串），topic 是具体事项，value 是持续事实，evidence 是正文连续原句。关系项另用 old_value/new_value 表示变化；不能漏掉 subject，不能把主体只写在 value 里。'
     + '\nfloors 每项的完整结构为 {floor,summary,segments:[{time_change:null,events:[{text,evidence}]}]}；保留各楼原编号，events 只放在 segments 内，不要在 floors 下重复一份。'
-    + '\n只返回一个 JSON 对象，同时包含 floors、promise、body、relationship、identity、possession、world、other、obsolete、conflicts。floors 使用上面规定的逐楼结构；不要另外生成 turn_summary 或 story_time。没有事实变化的槽位写“无变化”，obsolete/conflicts 没有则 []。';
+    + '\n只返回一个 JSON 对象，按 obsolete、keep_ids、floors、promise、body、relationship、identity、possession、world、other、conflicts 的顺序填写。不要另外生成 turn_summary 或 story_time。没有新增或更新事实的槽位写“无变化”，这不代表旧表不需要清理。';
 
 export const CONFIRMED_MEMORY_JSON_SCHEMA = {
     ...EXTRACT_JSON_SCHEMA,
@@ -234,8 +238,9 @@ export const CONFIRMED_MEMORY_JSON_SCHEMA = {
             ...Object.fromEntries(Object.entries(EXTRACT_JSON_SCHEMA.value.properties)
                 .filter(([key]) => !['turn_summary', 'story_time'].includes(key))),
             floors: NARRATIVE_FLOOR_JSON_SCHEMA.value.properties.floors,
+            keep_ids: { type: 'array', items: { type: 'string' } },
         },
-        required: ['floors', 'obsolete'],
+        required: ['floors', 'obsolete', 'keep_ids'],
     },
 };
 

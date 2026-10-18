@@ -286,14 +286,18 @@ export async function rollbackFloor(floorKey, expectedData = null) {
     return Math.max(logs.length, removedSummary ? 1 : 0);
 }
 
-export function renderStateTableCompact(table) {
+export function renderStateTableCompact(table, { pairs = null } = {}) {
     const entries = table?.entries || [];
     if (!entries.length) {
         return '（当前状态表为空）';
     }
+    const pairByIndex = new Map((pairs || []).map(pair => [pair.pairIndex, pair]));
     return entries.map(e => {
+        const sourceFloor = kind => e[`${kind}_source`]?.messageIndex ?? pairByIndex.get(Number(e[`${kind}_floor`]))?.aiFloor;
+        const chronology = pairs ? [['建立', sourceFloor('established')], ['更新', sourceFloor('updated')]]
+            .filter(([, floor]) => Number.isInteger(floor)).map(([label, floor]) => `｜${label}第${floor}楼`).join('') : '';
         const obj = e.object ? `↔${e.object}` : '';
         const protectedLabel = e.pinned || e.source === 'manual' || e.manual_override ? '【玩家保护，不可自动退出】' : '';
-        return `- [${e.id}]${protectedLabel} (${e.slot}｜事项：${e.topic || e.value}) ${e.subject}${obj}: ${e.value}${e.cause ? `（因：${e.cause}）` : ''}`;
+        return `- [${e.id}]${protectedLabel} (${e.slot}｜事项：${e.topic || e.value}${chronology}) ${e.subject}${obj}: ${e.value}${e.cause ? `（因：${e.cause}）` : ''}`;
     }).join('\n');
 }

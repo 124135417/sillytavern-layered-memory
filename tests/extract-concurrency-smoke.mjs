@@ -132,8 +132,8 @@ await waitUntil(() => getQueueSnapshot().running.length === 0 && getQueueSnapsho
     'ordered extract queue should drain');
 assert.deepEqual(scenarios.order.data.turn_summaries.map(item => item.pairIndex), [0, 1, 2]);
 assert.deepEqual(scenarios.order.data.logs
-    .filter(item => item.message.startsWith('提取完成'))
-    .map(item => Number(item.message.match(/楼#(\d+)/u)?.[1])), [0, 1, 2]);
+    .filter(item => item.message.startsWith('记忆整理完成'))
+    .map(item => item.extra.pairIndex), [0, 1, 2]);
 
 active = 'revalidate';
 const revalidateStarted = [];

@@ -34,4 +34,10 @@ let branch=replayBranchData(parent,[],'fork');assert(!branch.state_table.entries
 // Already-confirmed old turns can be edited; a changed source version must not reuse their records.
 context.chat[1].mes='换一个没有身份披露的候选。';branch=replayBranchData(parent,getPairs(),'swipe');assert(!branch.state_table.entries.some(e=>e.value==='是图书管理员'));
 reconcileNarrativeSummaries(branch,currentNarrativeSources());assert(!branch.narrative_summaries.some(x=>x.messageKey===pair.aiKey));
+// A malformed paid reply fails visibly, without a second model call or queue retry.
+const invalidData=EMPTY_CHAT_DATA();invalidData.progress.baseline_pair=-1;context.chatMetadata.layered_memory=invalidData;
+let invalidCalls=0;context.generateRaw=async()=>{invalidCalls++;return '{"obsolete":['};
+await assert.rejects(handleConfirmedExtractJob({floorKey:getPairs()[0].floorKey,pairIndex:0}),error=>error.status===422);
+assert.equal(invalidCalls,1);
+assert.equal((await import('../src/queue.js')).isRetryableError({status:422}),false);
 console.log('Confirmed unified memory: 11 candidates cost zero, next user confirms one call for summaries/facts/obsolete, no duplicate queue, reopen exclusion, compatibility and fork/swipe passed');
