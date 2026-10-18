@@ -4,6 +4,7 @@ import { recordFloorEvent } from './branch.js';
 import { factIdentityKey, isFactCandidateDeleted, makeFactCandidate, upsertFactCandidate } from './facts.js';
 import { normalizeStoryTime } from './story-time.js';
 import { locateFactEvidence } from './fact-source.js';
+import { applyObsoleteFacts, isObsoleteDiscovery } from './obsolete.js';
 
 function nextEntryId(data) {
     const seq = data.progress.next_entry_seq || 1;
@@ -72,7 +73,7 @@ export function mergeExtractResult(normalized, ctx) {
             source: ctx.source || 'auto',
             index: itemIndex,
         });
-        if (isFactCandidateDeleted(data, discovery)) {
+        if (isFactCandidateDeleted(data, discovery) || isObsoleteDiscovery(data, discovery)) {
             data.fact_ledger = upsertFactCandidate(data.fact_ledger, discovery);
             discarded += 1;
             continue;
@@ -202,6 +203,14 @@ export function mergeExtractResult(normalized, ctx) {
         }));
     }
 
+    const obsolete = applyObsoleteFacts(data, normalized.obsolete, ctx, new Set(entryChanges.map(change => change.id)));
+    discarded += obsolete.discarded;
+    for (const record of obsolete.records) {
+        pushChangelog(data, { op: 'delete', id: record.entry_id, floorKey, floor: floorLabel, before: record.entry });
+        entryChanges.push({ op: 'delete', id: record.entry_id });
+        applied += 1;
+    }
+
     for (const c of normalized.conflicts || []) {
         if (!validateUpdateId(c.entry_id, table)) {
             discarded += 1;
@@ -265,6 +274,8 @@ export async function rollbackFloor(floorKey, expectedData = null) {
         }
     }
     table.changelog = (table.changelog || []).filter(c => c.floorKey !== floorKey);
+    data.retired_facts = (data.retired_facts || []).filter(item =>
+        item.source !== 'per_floor_obsolete' || item.anchorFloorKey !== floorKey);
     data.extracted_keys = (data.extracted_keys || []).filter(k => k !== floorKey);
     data.floor_events = (data.floor_events || []).filter(event => event.floorKey !== floorKey);
     const removedCandidateIds = new Set((data.fact_ledger || []).filter(item => item.floorKey === floorKey).map(item => item.id));
@@ -282,6 +293,7 @@ export function renderStateTableCompact(table) {
     }
     return entries.map(e => {
         const obj = e.object ? `↔${e.object}` : '';
-        return `- [${e.id}] (${e.slot}｜事项：${e.topic || e.value}) ${e.subject}${obj}: ${e.value}${e.cause ? `（因：${e.cause}）` : ''}`;
+        const protectedLabel = e.pinned || e.source === 'manual' || e.manual_override ? '【玩家保护，不可自动退出】' : '';
+        return `- [${e.id}]${protectedLabel} (${e.slot}｜事项：${e.topic || e.value}) ${e.subject}${obj}: ${e.value}${e.cause ? `（因：${e.cause}）` : ''}`;
     }).join('\n');
 }

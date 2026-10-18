@@ -86,6 +86,7 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
         adds: [],
         updates: [],
         conflicts: [],
+        obsolete: [],
         storyTimeRaw: raw?.story_time ?? null,
         pipeline,
     };
@@ -135,6 +136,12 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
                 });
             }
         }
+    }
+
+    if (pipeline === 'per_floor' && Array.isArray(raw.obsolete)) {
+        out.obsolete = raw.obsolete.filter(item => item && typeof item === 'object').map(item => ({
+            entry_id: item.entry_id, category: item.category, reason: item.reason, evidence: item.evidence,
+        }));
     }
 
     if (Array.isArray(raw.conflicts)) {

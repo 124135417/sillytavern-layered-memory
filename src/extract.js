@@ -10,10 +10,12 @@ import { extractAiBody } from './body.js';
 import { stripStyleResetCommands } from './style-reset.js';
 import { automaticStateReviewRequest } from './state-review.js';
 import { pairMessageSources } from './fact-source.js';
+import { snapshotObsoleteTargets } from './obsolete.js';
 
 const extractCommitStateByChat = new WeakMap();
 const EXTRACT_MUTATION_KEYS = [
     'state_table',
+    'retired_facts',
     'turn_summaries',
     'review_queue',
     'fact_ledger',
@@ -61,6 +63,7 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
     const { aiText } = pairTexts;
     const body = extractAiBody(aiText, getSettings().bodyExtractionRegex);
     const sourceText = `${userText}\n${body.text}`;
+    const obsoleteTargets = snapshotObsoleteTargets(data.state_table);
     const tableRender = renderStateTableCompact(data.state_table);
     const userPrompt = [
         retryNote ? `上次校验失败原因：${retryNote}\n请修正后重新输出。\n` : '',
@@ -84,19 +87,20 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
     if (!raw) {
         throw new Error('提取结果不是合法 JSON');
     }
-    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode };
+    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode, obsoleteTargets };
 }
 
 async function prepareExtract(pair, payload, retryNote = '') {
-    const { raw, sourceText, bodyMode } = await runExtractOnce(pair, { retryNote });
+    const { raw, sourceText, bodyMode, obsoleteTargets } = await runExtractOnce(pair, { retryNote });
     const normalized = normalizeExtractOutput(raw, 'per_floor');
     if (!normalized.turnSummary) throw new Error('逐轮剧情记录为空或过长');
     if (payload.summaryOnly) {
         normalized.adds = [];
         normalized.updates = [];
         normalized.conflicts = [];
+        normalized.obsolete = [];
     }
-    return { normalized, sourceText, bodyMode };
+    return { normalized, sourceText, bodyMode, obsoleteTargets };
 }
 
 function extractionAlreadyComplete(data, pair, payload) {
@@ -121,6 +125,7 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
             floorLabel: pair.pairIndex,
             source: 'auto',
             bodyMode: prepared.bodyMode,
+            obsoleteTargets: prepared.obsoleteTargets,
             messageSources: pairMessageSources(pair, {
                 userText: stripStyleResetCommands(getPairTexts(pair).userText).text,
                 aiText: extractAiBody(getPairTexts(pair).aiText, getSettings().bodyExtractionRegex).text,
@@ -128,7 +133,7 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
             persist: false,
         });
         assertChatData(originData);
-        if (!payload.summaryOnly && result.discarded > 0 && result.applied === 0 && attempt === 0) {
+        if (!payload.summaryOnly && prepared.normalized.adds.length > 0 && result.discarded > 0 && result.applied === 0 && attempt === 0) {
             restoreExtractMutationState(originData, snapshot);
             return {
                 retry: true,

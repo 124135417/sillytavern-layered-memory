@@ -11,7 +11,7 @@ export const EXTRACT_SYSTEM = `你是逐轮剧情记录员兼事实记录员，�
 - 只写这一轮新发生的内容，不滚动重写以前的剧情。
 
 再检查当前事实：L1 不是第二份剧情档案，只保存本楼结束后仍然成立、模型在下一轮需要知道的状态。已经结束的事件留在 turn_summary，不要再复制进 facts。
-- 承诺在本楼内已经履行、取消或过期，只属于历史，不得新增为当前事实；如果状态表里仍有对应旧条目，放进 conflicts。
+- 承诺在本楼内已经履行、取消或过期，只属于历史，不得新增为当前事实；如果状态表里仍有对应旧条目，放进 obsolete。
 - 临时情绪、姿势、所在房间、普通动作、当场说过的一句话、一次性谈话结果都不属于当前事实。
 - 身体条目记录本楼结束时仍存在的伤势、永久变化或能力状态；伤势已经痊愈、异物已经取出时，必须指出旧条目已失效。
 - 关系条目只描述当前关系状态，不能把已经结束的疏远、冷战、禁止接近等阶段继续保留为现在。
@@ -35,7 +35,13 @@ AI 回复可能同时包含叙事正文，以及预设附加的回顾摘要、�
 - possession：关键持有物变更了吗？
 - world：产生新的世界事实了吗（仅扮演中新产生的）？
 - other：其它会持续为真的事实？必须含 why_persistent。
-- conflicts：表中条目已被本楼替换、解决、取消、证伪或需要人工核对时填写 [{entry_id, action:"replace|retire|review", note}]。这里只提出待确认建议，不得省略 entry_id。
+- obsolete：每次检查给出的完整当前事实表，找出已不再适合作为当前事实的旧条目。输出 [{entry_id, category:"completed|superseded|scene_local|expired|contradicted", reason, evidence}]；没有则 []。这是自动退出指令，不需要玩家启动整理；条目会归档，不删除原剧情。
+  - completed：已经履行或解决；superseded：已被新状态取代；expired：明确期限已过；contradicted：被新剧情证伪。这四类必须给出本楼用户输入或正文中连续、准确的 evidence（≤50字），并说明旧条目为何不再成立。
+  - scene_local：递水、桌角物品、临时等待等仅适用于当时现场的信息，结合当前场景、时间或已发生结果判断它已没有持续作用后退出。reason 必须具体说明；有直接本楼依据时填写 evidence，没有可引用原句时可留空。不是把它判为从未发生或物品已销毁。
+  - 不因本轮没提到、年代久远或与你当前写作无关，就退出持续关系、身份、长期约定、重要物品和未解决伤势；小伤也不能仅凭时间猜测已经痊愈。
+  - 若同一事项可以在 facts 中更新原条目，优先更新，不同时 obsolete 该条；不能把暂时推测写成解除或完成。
+  - 只引用表中已有 entry_id。玩家保护的条目不可退出；不确定是否仍有效就保留，不输出该项。
+- conflicts：只有尚不能确定、需要人工核对的矛盾，才填写 [{entry_id, action:"review", note}]；明确可退出的旧状态使用 obsolete，不放到等待玩家处理的建议里。
 
 每条事实必须含 topic 与 evidence。topic 是这条事实具体在说什么，例如“右手图案”“组织内职位”“停止讨论某人”，用于区分同一人物的多条承诺、身份或物品；不同事项不得使用同一个 topic。evidence 是原文中的直接引文（≤50字）。引不出原句就不许填。
 单条 value ≤80 字。只输出 JSON，不要其它说明。
@@ -84,6 +90,7 @@ export const EXTRACT_JSON_SCHEMA = {
             world: {},
             other: {},
             conflicts: { type: 'array' },
+            obsolete: { type: 'array', items: { type: 'object', properties: { entry_id: { type: 'string' }, category: { type: 'string', enum: ['completed', 'superseded', 'scene_local', 'expired', 'contradicted'] }, reason: { type: 'string' }, evidence: { type: 'string' } }, required: ['entry_id', 'category', 'reason'] } },
         },
     },
 };
