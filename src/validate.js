@@ -87,6 +87,7 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
         updates: [],
         conflicts: [],
         obsolete: [],
+        npcDrives: [],
         storyTimeRaw: raw?.story_time ?? null,
         pipeline,
     };
@@ -143,6 +144,8 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
             entry_id: item.entry_id, category: item.category, reason: item.reason, evidence: item.evidence,
         }));
     }
+
+    if (pipeline === 'per_floor' && Array.isArray(raw.npc_drives)) out.npcDrives = raw.npc_drives.filter(item => item && typeof item === 'object');
 
     if (Array.isArray(raw.conflicts)) {
         for (const c of raw.conflicts) {

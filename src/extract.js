@@ -1,3 +1,4 @@
+import { renderNpcDriveReview, snapshotNpcDriveTargets } from './npc-drives.js';
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { getBaselinePair, getPairTexts, getPairs, getFrozenPairs } from './ids.js';
 import { mergeExtractResult, renderStateTableCompact } from './merge.js';
@@ -18,6 +19,7 @@ import { renderObsoleteHistory } from './obsolete-history.js';
 const extractCommitStateByChat = new WeakMap();
 const EXTRACT_MUTATION_KEYS = [
     'state_table',
+    'npc_drives',
     'retired_facts',
     'turn_summaries',
     'narrative_summaries',
@@ -76,14 +78,17 @@ async function runExtractOnce(pair, { retryNote = '', unified = false } = {}) {
     const body = extractAiBody(aiText, getSettings().bodyExtractionRegex);
     const sourceText = `${userText}\n${body.text}`;
     const obsoleteTargets = snapshotObsoleteTargets(data.state_table);
+    const npcDriveTargets = snapshotNpcDriveTargets(data);
+    const driveReview = renderNpcDriveReview(data, getSettings(), SillyTavern.getContext());
     const tableRender = renderStateTableCompact(data.state_table, { pairs: unified ? getPairs() : null });
     const allNarrativeSources = unified ? currentNarrativeSources().map(source => ({ ...source, fallbackSummary: source.narrativeText })) : [];
     const narrativeSources = allNarrativeSources.filter(source => [pair.userKey, pair.aiKey].includes(source.messageKey));
     const obsoleteHistory = unified ? renderObsoleteHistory(data, pair, getPairs(), allNarrativeSources) : '';
-    const userPrompt = unified ? [retryNote, obsoleteHistory, '## 当前状态表', tableRender, buildNarrativeBatchPrompt(narrativeSources, retryNote)].filter(Boolean).join('\n\n') : [
+    const userPrompt = unified ? [retryNote, obsoleteHistory, '## 当前状态表', tableRender, driveReview, buildNarrativeBatchPrompt(narrativeSources, retryNote)].filter(Boolean).join('\n\n') : [
         retryNote ? `上次校验失败原因：${retryNote}\n请修正后重新输出。\n` : '',
         '## 当前状态表\n',
         tableRender,
+        '\n\n', driveReview,
         '\n\n## 本楼用户输入\n',
         userText,
         '\n\n## 本楼 AI 回复\n',
@@ -102,11 +107,11 @@ async function runExtractOnce(pair, { retryNote = '', unified = false } = {}) {
     if (!raw) {
         throw invalidMemoryOutput(finishReason === 'length' ? '记忆返回被输出上限截断，未自动重复付费请求' : '记忆返回不是合法 JSON，未自动重复付费请求');
     }
-    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode, obsoleteTargets, narrativeSources, obsoleteHistory };
+    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode, obsoleteTargets, narrativeSources, obsoleteHistory, npcDriveTargets };
 }
 
 async function prepareExtract(pair, payload, retryNote = '') {
-    const { raw, sourceText, bodyMode, obsoleteTargets, narrativeSources, obsoleteHistory } = await runExtractOnce(pair, { retryNote, unified: payload.unified });
+    const { raw, sourceText, bodyMode, obsoleteTargets, narrativeSources, obsoleteHistory, npcDriveTargets } = await runExtractOnce(pair, { retryNote, unified: payload.unified });
     const normalized = normalizeExtractOutput(raw, 'per_floor');
     let narrativeResults = null;
     if (payload.unified) {
@@ -123,8 +128,9 @@ async function prepareExtract(pair, payload, retryNote = '') {
         normalized.updates = [];
         normalized.conflicts = [];
         normalized.obsolete = [];
+        normalized.npcDrives = [];
     }
-    return { normalized, sourceText, bodyMode, obsoleteTargets, narrativeResults, obsoleteHistory, obsoleteReported: Array.isArray(raw.obsolete),
+    return { normalized, sourceText, bodyMode, obsoleteTargets, narrativeResults, obsoleteHistory, npcDriveTargets, obsoleteReported: Array.isArray(raw.obsolete),
         audit: payload.unified ? {
             total: Object.keys(obsoleteTargets).length,
             reviewed: new Set([...(Array.isArray(raw.keep_ids) ? raw.keep_ids : []),
@@ -160,6 +166,7 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
             source: 'auto',
             bodyMode: prepared.bodyMode,
             obsoleteTargets: prepared.obsoleteTargets,
+            npcDriveTargets: prepared.npcDriveTargets,
             obsoleteHistory: prepared.obsoleteHistory,
             messageSources: pairMessageSources(pair, {
                 userText: stripStyleResetCommands(getPairTexts(pair).userText).text,

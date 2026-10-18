@@ -52,6 +52,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     fallbackBaseUrl: '',
     fallbackApiKey: '',
     fallbackModel: '',
+    npcAuthorDrives: {},
     budgetL1: 2000,
     budgetL2: 5000,
     budgetL4: 1500,
@@ -94,6 +95,8 @@ export const EMPTY_CHAT_DATA = () => ({
     narrative_volumes: [],
     /** Replayable per-floor materialized changes used to restore Fork branches. */
     floor_events: [],
+    /** Branch-local NPC motivation and progress; author directions live in card-scoped settings. */
+    npc_drives: [],
     /** Compact user edits, anchored to the visible branch at the time of editing. */
     manual_events: [],
     /** State-table snapshots anchored to a stable floor key. */

@@ -1,4 +1,5 @@
-import { appendLog, getChatData, saveChatData } from './settings.js';
+import { applyNpcDriveUpdates, authorNpcDrives, applyNpcDriveChanges } from './npc-drives.js';
+import { appendLog, getChatData, getSettings, getContext, saveChatData } from './settings.js';
 import { validateEntry, validateUpdateId } from './validate.js';
 import { recordFloorEvent } from './branch.js';
 import { factIdentityKey, isFactCandidateDeleted, makeFactCandidate, upsertFactCandidate } from './facts.js';
@@ -228,6 +229,8 @@ export function mergeExtractResult(normalized, ctx) {
         conflicts += 1;
     }
 
+    const npcDriveChanges = applyNpcDriveUpdates(data, normalized.npcDrives, { ...ctx,
+        authorDrives: authorNpcDrives(getSettings(), getContext()) });
     if (ctx.pipeline === 'per_floor' && floorKey) {
         recordFloorEvent(data, {
             floorKey,
@@ -235,6 +238,7 @@ export function mergeExtractResult(normalized, ctx) {
             turnSummary: normalized.turnSummary,
             storyTime: normalizeStoryTime(normalized.storyTimeRaw, ctx.sourceText),
             entryChanges,
+            npcDriveChanges,
             requiresConfirmation: Boolean(ctx.requiresConfirmation || obsolete.records.length),
             contentFingerprint: ctx.contentFingerprint || '',
         });
@@ -258,7 +262,12 @@ export async function rollbackFloor(floorKey, expectedData = null) {
     const beforeSummaryCount = (data.turn_summaries || []).length;
     data.turn_summaries = (data.turn_summaries || []).filter(item => item.floorKey !== floorKey);
     const removedSummary = beforeSummaryCount !== data.turn_summaries.length;
-    if (!logs.length && !removedSummary) {
+    const driveChanges = (data.floor_events || []).filter(event => event.floorKey === floorKey).flatMap(event => event.npcDriveChanges || []);
+    for (const change of [...driveChanges].reverse()) {
+        const current = data.npc_drives?.find(row => row.id === change.id) || null;
+        if (JSON.stringify(current) === JSON.stringify(change.after)) applyNpcDriveChanges(data, [{ id: change.id, after: change.before }]);
+    }
+    if (!logs.length && !removedSummary && !driveChanges.length) {
         return 0;
     }
     // Apply reverse in reverse order
@@ -284,7 +293,7 @@ export async function rollbackFloor(floorKey, expectedData = null) {
     data.fact_decisions = (data.fact_decisions || []).filter(item => !removedCandidateIds.has(item.candidateId));
     if (logs.length) table.version += 1;
     await saveChatData(data);
-    return Math.max(logs.length, removedSummary ? 1 : 0);
+    return Math.max(logs.length, driveChanges.length, removedSummary ? 1 : 0);
 }
 
 export function renderStateTableCompact(table, { pairs = null } = {}) {

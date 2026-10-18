@@ -1,3 +1,4 @@
+import { applyNpcDriveChanges } from './npc-drives.js';
 import { EMPTY_CHAT_DATA, MODULE_NAME } from './constants.js';
 import { getMessageFloors, getPairs } from './ids.js';
 import { appendLog, getChatData, getContext, saveChatData } from './settings.js';
@@ -93,12 +94,14 @@ export function recordFloorEvent(data, event) {
         turnSummary: String(event.turnSummary || ''),
         storyTime: event.storyTime ? clone(event.storyTime) : null,
         entryChanges: clone(event.entryChanges || []),
+        npcDriveChanges: clone(event.npcDriveChanges || []),
         requiresConfirmation: Boolean(event.requiresConfirmation),
         recordedAt: Date.now(),
     };
     const index = data.floor_events.findIndex(item => item.floorKey === normalized.floorKey);
     if (index >= 0) {
         normalized.requiresConfirmation ||= Boolean(data.floor_events[index].requiresConfirmation);
+        if (!normalized.npcDriveChanges.length) normalized.npcDriveChanges = clone(data.floor_events[index].npcDriveChanges || []);
         if (!normalized.entryChanges.length && data.floor_events[index].entryChanges?.length) {
             normalized.entryChanges = clone(data.floor_events[index].entryChanges);
         }
@@ -114,8 +117,9 @@ export function recordManualEvent(data, {
     sourceCandidate = null,
     archiveKey = null,
     archiveId = null,
+    driveChange = null,
 }) {
-    if (op !== 'upsert' && op !== 'delete') return null;
+    if (op !== 'upsert' && op !== 'delete' && !(op === 'drive' && driveChange?.id)) return null;
     const anchor = currentAnchor();
     const event = {
         id: crypto.randomUUID(),
@@ -123,6 +127,7 @@ export function recordManualEvent(data, {
         anchorPairIndex: anchor.pairIndex,
         anchorFingerprint: anchor.contentFingerprint,
         op,
+        driveChange: driveChange ? clone(driveChange) : null,
         before: before ? clone(before) : null,
         after: after ? clone(after) : null,
         reason,
@@ -150,6 +155,7 @@ export function captureBranchCheckpoint(data = getChatData(), reason = 'automati
         anchorFingerprint: anchor.contentFingerprint,
         prefixFingerprints: prefixFingerprints(getPairs(), anchor.pairIndex),
         stateTable: lightweightStateTable(data.state_table),
+        npcDrives: clone(data.npc_drives || []),
         confirmationThroughPair: confirmationThroughPair(data),
         createdAt: Date.now(),
         reason,
@@ -396,6 +402,7 @@ export function buildLegacyRebuildData(livePairs, parentChat = '') {
         anchorFingerprint: null,
         prefixFingerprints: [],
         stateTable: lightweightStateTable(data.state_table),
+        npcDrives: clone(data.npc_drives || []),
         createdAt: Date.now(),
         reason: 'safe_rebuild_seed',
     });
@@ -428,6 +435,7 @@ export function buildFreshBranchData(livePairs, parentChat = '') {
         anchorFingerprint: head?.contentFingerprint || null,
         prefixFingerprints: prefixFingerprints(livePairs, head?.pairIndex ?? -1),
         stateTable: lightweightStateTable(data.state_table),
+        npcDrives: clone(data.npc_drives || []),
         createdAt: Date.now(),
         reason: 'fresh_branch_seed',
     });
@@ -467,6 +475,7 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
     const automaticMaxPair = Math.min(trustedMaxPair, ...pending.map(item => item.pairIndex - 1));
     const data = EMPTY_CHAT_DATA();
     data.state_table = lightweightStateTable(checkpoint.stateTable);
+    data.npc_drives = clone(checkpoint.npcDrives || []);
     data.progress = clone(parentData.progress || data.progress);
     data.chapters = clone(parentData.chapters || []);
     data.volumes = clone(parentData.volumes || []);
@@ -484,7 +493,10 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
             .map(event => ({ kind: 'manual', at: Number(event.recordedAt), event })),
     ].sort((a, b) => a.at - b.at);
     for (const item of replayItems) {
-        if (item.kind === 'floor') applyEntryChanges(data.state_table, item.event.entryChanges, item.event);
+        if (item.kind === 'floor') {
+            applyEntryChanges(data.state_table, item.event.entryChanges, item.event);
+            applyNpcDriveChanges(data, item.event.npcDriveChanges);
+        } else if (item.event.driveChange) applyNpcDriveChanges(data, [item.event.driveChange]);
         else applyManualEvent(data.state_table, item.event);
     }
 
@@ -498,6 +510,7 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
         anchorFingerprint: livePairs.filter(pair => pair.sealed).at(-1)?.contentFingerprint || null,
         prefixFingerprints: prefixFingerprints(livePairs, branchHead),
         stateTable: lightweightStateTable(data.state_table),
+        npcDrives: clone(data.npc_drives || []),
         confirmationThroughPair: confirmationThroughPair(data),
         createdAt: Date.now(),
         reason: 'fork_recovery',

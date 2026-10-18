@@ -1,3 +1,4 @@
+import { effectiveNpcDrives, setAuthorNpcDrive, removeAuthorNpcDrive, applyNpcDriveChanges } from '../npc-drives.js';
 import { renderTimelineTab, bindTimelineTab } from './timeline-panel.js';
 import { SLOT_LABELS, SLOTS } from '../constants.js';
 import { listConnectionProfiles, listDirectModels, testAuxModelConnection } from '../aux-model.js';
@@ -782,6 +783,87 @@ function renderShellStatus() {
     }
 }
 
+function renderNpcDriveSection() {
+    const rows = effectiveNpcDrives(getChatData(), getSettings(), SillyTavern.getContext(), { includeHidden: true });
+    const selected = new Set((selectL1Entries(getChatData(), getSettings().budgetL1, SillyTavern.getContext()).drives || []).map(row => row.id));
+    return `<section class="lm-memory-group lm-drive-section" aria-label="角色驱动力">
+        <header><h3>角色驱动力</h3><button type="button" class="lm-text-button" data-drive-add>＋ 添加作者设定</button></header>
+        <p class="lm-fact-explainer">作者设定在这张卡的所有分支保留；当前进展随剧情回退。与事实共用输入预算，不额外调用模型。</p>
+        <div class="lm-memory-list">${rows.map(row => `<article class="lm-memory-card" data-drive-id="${escapeHtml(row.id)}">
+            <strong>${escapeHtml(row.character)}</strong><small> · ${row.source === 'author' ? '作者设定 · 跨分支保留' : '剧情形成 · 当前分支'} · ${selected.has(row.id) ? '已选入记忆输入' : row.visible ? '当前预算未选入' : '秘密未解锁'}</small>
+            <p>${escapeHtml(row.visible ? row.drive : '相关秘密未解锁，内容暂不发送给模型。')}</p>
+            ${row.visible && row.progress ? `<p><small>当前进展：</small>${escapeHtml(row.progress)}</p>` : ''}
+            <div class="lm-row-actions"><button type="button" class="lm-text-button" data-drive-edit>编辑${row.visible ? '' : '（查看内容）'}</button><button type="button" class="lm-text-button" data-drive-remove>移除</button></div>
+        </article>`).join('') || '<p class="lm-fact-explainer">尚无持续驱动力。模型会在整理已确认剧情时按需建立，也可以手动添加。</p>'}</div>
+    </section>`;
+}
+
+async function editNpcDrive(id = null) {
+    const data = getChatData(), settings = getSettings(), context = SillyTavern.getContext();
+    const row = effectiveNpcDrives(data, settings, context, { includeHidden: true }).find(item => item.id === id);
+    const result = await openFormDialog({
+        title: row ? '编辑角色驱动力' : '添加角色驱动力',
+        description: '保存为这张卡的作者设定，旧分支也保留。进展只属于当前分支；别在驱动力中填写已经发生的未来经历。',
+        submitLabel: '保存', cancelLabel: '取消',
+        buildFields(fields) {
+            for (const [name, label, value, limit] of [
+                ['character', '角色名', row?.character, 60],
+                ['drive', '持续驱动力：想要什么、为什么', row?.drive, 200],
+                ['progress', '当前进展（可选，随分支回退）', row?.progress, 160],
+                ['secrets', '需要已解锁的秘密 ID（可选，逗号分隔）', (row?.requires_secrets || []).join(', '), 300],
+            ]) {
+                const field = document.createElement('label'); field.className = 'lm-dialog-field';
+                const title = document.createElement('span'); title.textContent = label;
+                const input = document.createElement(name === 'drive' || name === 'progress' ? 'textarea' : 'input');
+                input.name = name; input.value = value || ''; input.maxLength = limit;
+                if (input.tagName === 'TEXTAREA') input.rows = 3;
+                if (name === 'character' && row) input.readOnly = true;
+                field.append(title, input); fields.append(field);
+            }
+        },
+        readValue(form) { return Object.fromEntries(new FormData(form)); },
+        validate(value) { return !value.character.trim() || !value.drive.trim() ? '请填写角色名和持续驱动力。' : ''; },
+    });
+    if (!result) return;
+    if (getChatData() !== data) { toastr?.warning?.('聊天已切换，请在当前聊天重新编辑。'); return; }
+    const oldSettings = structuredClone(settings.npcAuthorDrives), oldRows = structuredClone(data.npc_drives || []), oldEvents = structuredClone(data.manual_events || []);
+    try {
+        const author = setAuthorNpcDrive(settings, context, { character: result.character, drive: result.drive,
+            requires_secrets: result.secrets.split(/[,，\s]+/u).filter(Boolean) });
+        if (String(result.progress || '').trim() !== String(row?.progress || '').trim()) {
+            const before = data.npc_drives?.find(item => item.id === author.id) || null;
+            const after = { id: author.id, character: author.character, drive: '', progress: result.progress.trim(), source: 'manual' };
+            const change = { id: author.id, before, after };
+            applyNpcDriveChanges(data, [change]); recordManualEvent(data, { op: 'drive', driveChange: change, reason: 'manual_npc_progress' });
+            await saveChatData(data);
+        }
+        saveSettings(); updateInjection(); renderActiveTab();
+    } catch (error) {
+        settings.npcAuthorDrives = oldSettings; data.npc_drives = oldRows; data.manual_events = oldEvents;
+        toastr?.error?.(`保存驱动力失败：${error.message}`); renderActiveTab();
+    }
+}
+
+function bindNpcDrives(body) {
+    body.querySelector('[data-drive-add]')?.addEventListener('click', () => editNpcDrive());
+    body.querySelectorAll('[data-drive-id]').forEach(card => {
+        const id = card.dataset.driveId;
+        card.querySelector('[data-drive-edit]')?.addEventListener('click', () => editNpcDrive(id));
+        card.querySelector('[data-drive-remove]')?.addEventListener('click', async () => {
+            const data = getChatData(), settings = getSettings(), context = SillyTavern.getContext();
+            const row = effectiveNpcDrives(data, settings, context, { includeHidden: true }).find(item => item.id === id);
+            if (!row || !await openConfirmDialog({ title: '移除驱动力？', description: row.source === 'author' ? '作者方向将从这张卡的所有分支移除；剧情记录仍保留。' : '移除当前分支的这条驱动力，剧情记录仍保留。', confirmLabel: '移除', cancelLabel: '取消' })) return;
+            if (getChatData() !== data) return;
+            const oldRows = structuredClone(data.npc_drives || []), oldEvents = structuredClone(data.manual_events || []);
+            try {
+                const before = data.npc_drives?.find(item => item.id === id) || null;
+                if (before) { const change = { id, before, after: null }; applyNpcDriveChanges(data, [change]); recordManualEvent(data, { op: 'drive', driveChange: change }); await saveChatData(data); }
+                removeAuthorNpcDrive(settings, context, id); saveSettings(); updateInjection(); renderActiveTab();
+            } catch (error) { data.npc_drives = oldRows; data.manual_events = oldEvents; toastr?.error?.('移除失败，内容已恢复。'); renderActiveTab(); }
+        });
+    });
+}
+
 function renderStateTab() {
     const data = getChatData();
     if (refreshStagedOrganizationPolicy(data)) {
@@ -871,6 +953,7 @@ function renderStateTab() {
         <div class="lm-dashboard">
             <main class="lm-memory-main" id="lm-memory-main">
                 ${statusBanners}
+                ${renderNpcDriveSection()}
                 <section class="lm-fact-shell">
                     <div class="lm-fact-overview" aria-label="事实记录概览">
                         <button type="button" data-fact-view="active" class="${currentFactView === 'active' ? 'active' : ''}"><strong>${entries.length}</strong><span>启用</span></button>
@@ -1174,6 +1257,7 @@ function renderInjectionFooter() {
 }
 
 function bindStateTab(body) {
+    bindNpcDrives(body);
     body.querySelectorAll('[data-fact-view]').forEach(button => button.addEventListener('click', () => {
         currentFactView = button.dataset.factView;
         if (currentFactView !== 'active') {

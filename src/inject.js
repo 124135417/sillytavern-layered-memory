@@ -91,7 +91,7 @@ export function buildCoreMemoryParts({
             fallbackSummary: fallbackNarrativeSummary(source),
         }));
     const trailingMessage = resolvedExcludeTrailingAssistant && !context?.chat?.at?.(-1)?.is_user ? context?.chat?.at?.(-2) : context?.chat?.at?.(-1);
-    const l1 = renderL1Block(data, Number(settings.budgetL1 || 2000), context);
+    const l1 = renderL1Block(data, Number(settings.budgetL1 || 2000), context, settings, { generationType });
     const styleReset = resolveStyleReset({ context, excludeTrailingAssistant: resolvedExcludeTrailingAssistant });
     const rawWindow = selectRecentRawWindow(resolvedNarrativeSources, settings.recentRawTokens, {
         minimumFloor: styleReset?.messageIndex ?? null,

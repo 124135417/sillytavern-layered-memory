@@ -1,3 +1,4 @@
+import { selectNpcDriveRows } from './npc-drives.js';
 import { SLOT_LABELS, SLOTS } from './constants.js';
 import { estimateTokens, truncateToBudget } from './tokens.js';
 import { usableMemoryEntries } from './quality.js';
@@ -97,38 +98,41 @@ function l1CandidateOrder(entries) {
     return ordered;
 }
 
-function selectWithinBudget(entries, budget, context, compact) {
+function selectWithinBudget(entries, budget, context, compact, driveText = '') {
     const selected = [];
     for (const entry of l1CandidateOrder(entries)) {
         const candidate = [...selected, entry];
-        const text = renderSelectedL1Entries(candidate, context, { compact });
+        const text = [driveText, renderSelectedL1Entries(candidate, context, { compact })].filter(Boolean).join('\n\n');
         if (estimateTokens(text) <= budget) selected.push(entry);
     }
     return {
         entries: selected,
-        text: selected.length ? renderSelectedL1Entries(selected, context, { compact }) : '',
+        text: [driveText, selected.length ? renderSelectedL1Entries(selected, context, { compact }) : ''].filter(Boolean).join('\n\n'),
     };
 }
 
 /** Select complete current facts before rendering so no entry is cut mid-sentence. */
-export function selectL1Entries(data, budget = 2000, context = null) {
+export function selectL1Entries(data, budget = 2000, context = null, settings = context?.extensionSettings?.layered_memory || {}, options = {}) {
     const entries = usableMemoryEntries(data);
-    if (!entries.length || Number(budget) <= 0) {
+    if (Number(budget) <= 0) {
         return { entries: [], text: '', total: entries.length, omitted: entries.length, tokens: 0 };
     }
     const allowance = Math.max(1, Number(budget) || 0);
-    let selection = selectWithinBudget(entries, allowance, context, false);
-    if (!selection.entries.length) selection = selectWithinBudget(entries, allowance, context, true);
+    const drives = selectNpcDriveRows(data, settings, context || {}, allowance, options);
+    const remaining = entries.filter(entry => !drives.covered.has(entry.id));
+    let selection = selectWithinBudget(remaining, allowance, context, false, drives.text);
+    if (!selection.entries.length) selection = selectWithinBudget(remaining, allowance, context, true, drives.text);
     return {
         ...selection,
+        drives: drives.rows, driveTotal: drives.total, covered: drives.covered.size,
         total: entries.length,
         omitted: Math.max(0, entries.length - selection.entries.length),
         tokens: estimateTokens(selection.text),
     };
 }
 
-export function renderL1Block(data, budget = 2000, context = null) {
-    return selectL1Entries(data, budget, context).text;
+export function renderL1Block(data, budget = 2000, context = null, settings = context?.extensionSettings?.layered_memory || {}, options = {}) {
+    return selectL1Entries(data, budget, context, settings, options).text;
 }
 
 /** Legacy API: inactive facts are never automatically recalled. */

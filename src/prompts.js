@@ -1,4 +1,9 @@
-export const EXTRACT_SYSTEM = `你是逐轮剧情记录员兼事实记录员，不是作者。你将看到同一轮的用户输入、AI 正文和当前事实。
+export const NPC_DRIVE_RULES = `
+同时维护 npc_drives（角色持续驱动力）：这不是每个人都要填的状态栏。仅在本次正文明确形成持续目的、执念、长期渴望或确实改变已有进展时返回更新，没有变化返回 []。临时饥饿、一个动作、随口请求不建立驱动力。复用已有表里的角色名，不从角色设定猜测隐藏动机。
+格式：[{"character":"角色名","op":"upsert","drive":"持续想要什么以及为何，会如何影响选择（≤200字）","progress":"截至本楼实际发生的进展（≤160字）","evidence":"本次原文连续引文（≤120字）"}]。作者指定的 drive 不可修改或删除，只更新 progress；自动生成项只有本次原文明示放弃或改变核心目的才能更新/移除（op:"remove"）。人物离场、近期没提、某次愿望实现，都不等于长期渴望结束；一次实现记录为进展，可继续喜爱和争取。不得把用户尚未做的事写成已发生，不把这些方向扩写成每轮出场或每轮索求。不要把同一驱动力又复制成普通 facts。
+`;
+
+export const EXTRACT_SYSTEM = NPC_DRIVE_RULES + `你是逐轮剧情记录员兼事实记录员，不是作者。你将看到同一轮的用户输入、AI 正文和当前事实。
 
 先写 turn_summary：把这一轮新增剧情压缩成可独立阅读的 80–200 字记录。
 - 必须把用户输入作为事件起点，记录用户说了什么、做了什么或作出了什么选择，禁止只总结 AI 正文。
@@ -83,6 +88,7 @@ export const EXTRACT_JSON_SCHEMA = {
     value: {
         type: 'object',
         properties: {
+            npc_drives: { type: 'array' },
             turn_summary: { type: 'string' },
             story_time: {},
             promise: {},
@@ -219,7 +225,7 @@ pinned 条目不得改动。
 只输出 JSON：{"keep_ids":["e_0001"],"drop_ids":["e_0002"],"merged":[{"from_ids":["e_0003","e_0004"],"entry":{"slot":"...","subject":"...","object":"","value":"..."}}]}`;
 
 /** One confirmed pair, one response: per-message continuity plus the fact diff. */
-export const CONFIRMED_MEMORY_SYSTEM = '你在一次调用内完成三项独立任务。\n任务一：逐项审查完整当前事实表。结合此前完整剧情回顾、本轮原文及事实建立/更新时间，区分已经没有常驻价值的临时细节与仍然有效的持续状态；后者没有实际变化依据就保留，不能仅凭离场、时间久或未提及而停用。必须检查所有 ID，不限于本轮人物，但不以减少条目数为目标，允许没有任何淘汰。先输出 obsolete：主动退出普通递送、过时现场安排等临时琐事；持续事实仅在能指出实际变化或完整替代项时退出。reason 不超过20字，替代须指明具体保留ID，结束须指明实际变化。再用 keep_ids 列出其余旧ID；二者覆盖整张输入表。没有被证伪不等于仍需常驻，不能把临时琐事全留；长期状态则不能因近期未提而退出。\n'
+export const CONFIRMED_MEMORY_SYSTEM = NPC_DRIVE_RULES + '你在一次调用内完成三项独立任务。\n任务一：逐项审查完整当前事实表。结合此前完整剧情回顾、本轮原文及事实建立/更新时间，区分已经没有常驻价值的临时细节与仍然有效的持续状态；后者没有实际变化依据就保留，不能仅凭离场、时间久或未提及而停用。必须检查所有 ID，不限于本轮人物，但不以减少条目数为目标，允许没有任何淘汰。先输出 obsolete：主动退出普通递送、过时现场安排等临时琐事；持续事实仅在能指出实际变化或完整替代项时退出。reason 不超过20字，替代须指明具体保留ID，结束须指明实际变化。再用 keep_ids 列出其余旧ID；二者覆盖整张输入表。没有被证伪不等于仍需常驻，不能把临时琐事全留；长期状态则不能因近期未提而退出。\n'
     + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('- obsolete：'), EXTRACT_SYSTEM.indexOf('- conflicts：'))
     + '\n任务二：总结这次两个楼。以下“只记录本楼”“证据来自正文”等限制只约束剧情记录和事实新增，不约束任务一的全表使用价值判断。\n'
     + NARRATIVE_FLOOR_SYSTEM.slice(0, NARRATIVE_FLOOR_SYSTEM.lastIndexOf('只输出 JSON：'))
@@ -229,7 +235,7 @@ export const CONFIRMED_MEMORY_SYSTEM = '你在一次调用内完成三项独立�
     + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('- conflicts：'), EXTRACT_SYSTEM.indexOf('## few-shot'))
     + '\n事实数组每项必须包含 {subject,object,topic,value,evidence}：subject 是明确主体，object 是关联对象（没有则空字符串），topic 是具体事项，value 是持续事实，evidence 是正文连续原句。关系项另用 old_value/new_value 表示变化；不能漏掉 subject，不能把主体只写在 value 里。'
     + '\nfloors 每项的完整结构为 {floor,summary,segments:[{time_change:null,events:[{text,evidence}]}]}；保留各楼原编号，events 只放在 segments 内，不要在 floors 下重复一份。'
-    + '\n只返回一个 JSON 对象，按 obsolete、keep_ids、floors、promise、body、relationship、identity、possession、world、other、conflicts 的顺序填写。不要另外生成 turn_summary 或 story_time。没有新增或更新事实的槽位写“无变化”，这不代表旧表不需要清理。';
+    + '\n只返回一个 JSON 对象，按 obsolete、keep_ids、floors、promise、body、relationship、identity、possession、world、other、conflicts、npc_drives 的顺序填写。不要另外生成 turn_summary 或 story_time。没有新增或更新事实的槽位写“无变化”，这不代表旧表不需要清理。';
 
 export const CONFIRMED_MEMORY_JSON_SCHEMA = {
     ...EXTRACT_JSON_SCHEMA,
