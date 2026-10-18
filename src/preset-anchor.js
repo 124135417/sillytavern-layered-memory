@@ -1,4 +1,6 @@
 export const MEMORY_ANCHOR_MACRO = 'layered_memory_context';
+export const NPC_DRIVES_MACRO = 'layered_memory_drives';
+export const NPC_DRIVES_TOKEN = `{{${NPC_DRIVES_MACRO}}}`;
 export const MEMORY_ANCHOR_TOKEN = `{{${MEMORY_ANCHOR_MACRO}}}`;
 
 function countExactToken(content, token) {
@@ -39,7 +41,7 @@ function activePromptOrder(settings, context) {
     return lists.find(list => candidateIds.includes(String(list.character_id)))?.order ?? null;
 }
 
-export function inspectPresetAnchor(context = null) {
+export function inspectPresetAnchor(context = null, token = MEMORY_ANCHOR_TOKEN) {
     const settings = context?.chatCompletionSettings;
     const prompts = Array.isArray(settings?.prompts) ? settings.prompts : [];
     const order = activePromptOrder(settings, context);
@@ -48,7 +50,7 @@ export function inspectPresetAnchor(context = null) {
         : null;
     const hosts = [];
     for (const prompt of prompts) {
-        const count = countExactToken(prompt?.content, MEMORY_ANCHOR_TOKEN);
+        const count = countExactToken(prompt?.content, token);
         if (!count) {
             continue;
         }
@@ -69,6 +71,6 @@ export function inspectPresetAnchor(context = null) {
         state: activeCount === 1 ? 'active' : activeCount > 1 ? 'duplicate' : 'missing',
         activeCount,
         hosts,
-        token: MEMORY_ANCHOR_TOKEN,
+        token,
     };
 }

@@ -4,6 +4,7 @@ export const PROMPT_KEYS = {
     L1: 'layered_memory_l1',
     L2: 'layered_memory_l2',
     L4: 'layered_memory_l4',
+    DRIVES: 'layered_memory_drives',
 };
 
 export const SLOT_LABELS = {

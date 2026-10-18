@@ -1221,7 +1221,7 @@ function renderInjectionFooter() {
     const coreParts = buildCoreMemoryParts({ data, settings, context, pairs });
     const l1 = coreParts.l1;
     const l2 = coreParts.l2;
-    const coreMemory = [coreParts.temporal, coreParts.l1, coreParts.l2, coreParts.raw].filter(Boolean).join('\n\n');
+    const coreMemory = [coreParts.temporal, coreParts.l1, coreParts.l2, coreParts.raw, coreParts.drives].filter(Boolean).join('\n\n');
     const hits = settings.l4Enabled ? retrieveHits(data, settings.budgetL4) : [];
     const l4 = settings.l4Enabled ? renderL4Block(hits, settings.budgetL4) : '';
     const presentation = injectionPresentation(false);
@@ -1238,7 +1238,7 @@ function renderInjectionFooter() {
                 <strong>${presentation.title}</strong>
             </div>
             <div class="lm-budget-chips">
-                <span>当前事实 ${l1Selection.entries.length} / ${l1Selection.total} 条 · ${estimateTokens(l1)} / ${settings.budgetL1}</span>
+                <span>当前事实 ${l1Selection.entries.length} / ${l1Selection.total} 条 · ${l1Selection.tokens} / ${settings.budgetL1}（含驱动力）</span>
                 <span>剧情摘要 ${estimateTokens(l2)}</span>
                 <span>近期完整原文 ${coreParts.rawWindow.tokens} / ${settings.recentRawTokens}</span>
                 <span>相关旧记忆 ${settings.l4Enabled ? `${hits.length} 条` : '未开启'}</span>

@@ -107,6 +107,7 @@ function selectWithinBudget(entries, budget, context, compact, driveText = '') {
     }
     return {
         entries: selected,
+        factsText: selected.length ? renderSelectedL1Entries(selected, context, { compact }) : '',
         text: [driveText, selected.length ? renderSelectedL1Entries(selected, context, { compact }) : ''].filter(Boolean).join('\n\n'),
     };
 }
@@ -115,7 +116,7 @@ function selectWithinBudget(entries, budget, context, compact, driveText = '') {
 export function selectL1Entries(data, budget = 2000, context = null, settings = context?.extensionSettings?.layered_memory || {}, options = {}) {
     const entries = usableMemoryEntries(data);
     if (Number(budget) <= 0) {
-        return { entries: [], text: '', total: entries.length, omitted: entries.length, tokens: 0 };
+        return { entries: [], text: '', factsText: '', driveText: '', drives: [], total: entries.length, omitted: entries.length, tokens: 0 };
     }
     const allowance = Math.max(1, Number(budget) || 0);
     const drives = selectNpcDriveRows(data, settings, context || {}, allowance, options);
@@ -124,7 +125,7 @@ export function selectL1Entries(data, budget = 2000, context = null, settings = 
     if (!selection.entries.length) selection = selectWithinBudget(remaining, allowance, context, true, drives.text);
     return {
         ...selection,
-        drives: drives.rows, driveTotal: drives.total, covered: drives.covered.size,
+        driveText: drives.text, drives: drives.rows, driveTotal: drives.total, covered: drives.covered.size,
         total: entries.length,
         omitted: Math.max(0, entries.length - selection.entries.length),
         tokens: estimateTokens(selection.text),

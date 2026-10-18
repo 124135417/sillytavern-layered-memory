@@ -1,6 +1,5 @@
 import { buildCoreMemoryParts, updateInjection } from './inject.js';
-import { selectNpcDriveRows } from './npc-drives.js';
-import { getChatData, getContext, getSettings } from './settings.js';
+import { getSettings } from './settings.js';
 import { registerContextProvider } from './context-contributions.js';
 import { ensureCurrentBranchRecovery, waitForBranchRecovery } from './branch.js';
 
@@ -13,10 +12,10 @@ export function registerMemoryIntegration() {
             await ensureCurrentBranchRecovery();
             await waitForBranchRecovery();
         },
-        getStoryContext() {
+        getStoryContext({ separateDirectives = false } = {}) {
             if (!getSettings().enabled) return null;
-            const { l2, raw, temporal } = buildCoreMemoryParts({ generationType: null, excludeTrailingAssistant: false });
-            const drives = selectNpcDriveRows(getChatData(), getSettings(), getContext(), Number(getSettings().budgetL1 || 2000)).text;
+            const { l2, raw, temporal, drives } = buildCoreMemoryParts({ generationType: null, excludeTrailingAssistant: false });
+            if (separateDirectives) return { l2: [temporal, l2].filter(Boolean).join('\n\n'), raw, directives: drives };
             return { l2: [drives, temporal, l2].filter(Boolean).join('\n\n'), raw };
         },
         registerContextProvider,

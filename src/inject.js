@@ -1,9 +1,9 @@
 import { buildTimeline, renderTimelinePrompt, annotateTimelineHistory } from './timeline.js';
 import { PROMPT_KEYS, QUEUE_PRIORITY } from './constants.js';
 import { getActiveMesText, getPairs, messageStableKey, messageContentFingerprint } from './ids.js';
-import { inspectPresetAnchor, MEMORY_ANCHOR_MACRO } from './preset-anchor.js';
+import { inspectPresetAnchor, MEMORY_ANCHOR_MACRO, NPC_DRIVES_MACRO, NPC_DRIVES_TOKEN } from './preset-anchor.js';
 import { retrieveHits } from './retrieve.js';
-import { renderL1Block, renderL2Block, renderL4Block } from './render.js';
+import { selectL1Entries, renderL2Block, renderL4Block } from './render.js';
 import { enqueue } from './queue.js';
 import { getChatData, getSettings } from './settings.js';
 import { estimateTokens } from './tokens.js';
@@ -55,8 +55,8 @@ export function clearInjection() {
     }
 }
 
-export function getPresetAnchorStatus(context = SillyTavern.getContext()) {
-    const anchor = inspectPresetAnchor(context);
+function anchorStatus(context, token) {
+    const anchor = inspectPresetAnchor(context, token);
     const supported = typeof context?.registerMacro === 'function';
     const registered = supported && presetMacroRegistered;
     return {
@@ -66,6 +66,9 @@ export function getPresetAnchorStatus(context = SillyTavern.getContext()) {
         mode: registered && anchor.state === 'active' ? 'anchor' : 'fallback',
     };
 }
+
+export function getPresetAnchorStatus(context = SillyTavern.getContext()) { return anchorStatus(context); }
+export function getNpcDriveAnchorStatus(context = SillyTavern.getContext()) { return anchorStatus(context, NPC_DRIVES_TOKEN); }
 
 export function buildCoreMemoryParts({
     data = getChatData(),
@@ -91,7 +94,9 @@ export function buildCoreMemoryParts({
             fallbackSummary: fallbackNarrativeSummary(source),
         }));
     const trailingMessage = resolvedExcludeTrailingAssistant && !context?.chat?.at?.(-1)?.is_user ? context?.chat?.at?.(-2) : context?.chat?.at?.(-1);
-    const l1 = renderL1Block(data, Number(settings.budgetL1 || 2000), context, settings, { generationType });
+    const selection = selectL1Entries(data, Number(settings.budgetL1 || 2000), context, settings, { generationType });
+    const l1 = selection.factsText;
+    const drives = selection.driveText;
     const styleReset = resolveStyleReset({ context, excludeTrailingAssistant: resolvedExcludeTrailingAssistant });
     const rawWindow = selectRecentRawWindow(resolvedNarrativeSources, settings.recentRawTokens, {
         minimumFloor: styleReset?.messageIndex ?? null,
@@ -114,6 +119,7 @@ export function buildCoreMemoryParts({
     const authorNotes = renderContextContributions();
     return filterInjectedMemory({
         l1,
+        drives,
         l2,
         authorNotes,
         raw: rawWindow.text,
@@ -126,7 +132,8 @@ export function buildCoreMemoryParts({
 }
 
 export function renderCoreMemoryPayload(options = {}) {
-    return composeInjectedMemory(buildCoreMemoryParts(options));
+    const { includeDrives = true, ...buildOptions } = options;
+    return composeInjectedMemory(buildCoreMemoryParts(buildOptions), { includeDrives });
 }
 
 export function renderPresetMemoryMacro() {
@@ -138,7 +145,13 @@ export function renderPresetMemoryMacro() {
     if (status.mode !== 'anchor') {
         return '';
     }
-    return renderCoreMemoryPayload({ settings, generationType: activeGenerationType });
+    return renderCoreMemoryPayload({ settings, generationType: activeGenerationType, includeDrives: false });
+}
+
+/** A separate author direction, outside compressed history. */
+export function renderNpcDriveMacro() {
+    if (!getSettings().enabled || getNpcDriveAnchorStatus().mode !== 'anchor') return '';
+    return buildCoreMemoryParts({ generationType: activeGenerationType }).drives;
 }
 
 /** Optional short clock anchor for a preset's final instructions. No history duplication. */
@@ -167,6 +180,7 @@ export function registerPresetMemoryMacro() {
         return false;
     }
     context.registerMacro('layered_memory_clock', () => renderCurrentStoryClockMacro(), '只插入当前分支的简短剧情时钟，适合预设末尾核对时间');
+    context.registerMacro(NPC_DRIVES_MACRO, () => renderNpcDriveMacro(), '在末尾创作任务附近插入当前角色驱动力，独立于历史记忆且不重复发送');
     context.registerMacro(
         MEMORY_ANCHOR_MACRO,
         () => renderPresetMemoryMacro(),
@@ -213,7 +227,7 @@ export function updateInjection({
         pairs: getPairs({ excludeTrailingAssistant: resolvedExcludeTrailingAssistant }),
         narrativeSources,
     });
-    const core = composeInjectedMemory(parts);
+    const core = composeInjectedMemory(parts, { includeDrives: false });
 
     if (estimateTokens(renderL2Block(data, { forBudget: true, narrativeSources })) > (settings.budgetL2 || 5000)) {
         enqueue('volume_compress', { reason: 'budget', narrative: true }, QUEUE_PRIORITY.volume_compress);
@@ -240,6 +254,8 @@ export function updateInjection({
     setExtensionPrompt(PROMPT_KEYS.L1, usePresetAnchor ? '' : core, IN_PROMPT, 0, false, SYSTEM);
     setExtensionPrompt(PROMPT_KEYS.L2, '', IN_PROMPT, 0, false, SYSTEM);
     setExtensionPrompt(PROMPT_KEYS.L4, l4, IN_CHAT, settings.depthL4 ?? 4, false, SYSTEM);
+    // Explicit preset placement wins; otherwise use the nearest native history depth.
+    setExtensionPrompt(PROMPT_KEYS.DRIVES, getNpcDriveAnchorStatus(context).mode === 'anchor' ? '' : parts.drives, IN_CHAT, 0, false, SYSTEM);
     return anchor;
 }
 
