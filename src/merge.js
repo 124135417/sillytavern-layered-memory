@@ -235,6 +235,7 @@ export function mergeExtractResult(normalized, ctx) {
             turnSummary: normalized.turnSummary,
             storyTime: normalizeStoryTime(normalized.storyTimeRaw, ctx.sourceText),
             entryChanges,
+            requiresConfirmation: Boolean(ctx.requiresConfirmation || obsolete.records.length),
             contentFingerprint: ctx.contentFingerprint || '',
         });
     }

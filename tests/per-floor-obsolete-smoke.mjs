@@ -7,6 +7,7 @@ const context = {
         { is_user: false, mes: '角色递来温水。', extra: { layered_memory_id: 'a0' } },
         { is_user: true, mes: '事情办完了。', extra: { layered_memory_id: 'u1' } },
         { is_user: false, mes: '款项已经结清，伤口也已经痊愈。两人结束恋爱关系。', extra: { layered_memory_id: 'a1' } },
+        { is_user: true, mes: '知道了。', extra: { layered_memory_id: 'u2' } },
     ],
     get chatMetadata() { return { layered_memory: data }; },
     extensionSettings: { layered_memory: { enabled: true, memoryModelSource: 'current', bodyExtractionRegex: '', chapterSize: 25 } },
@@ -58,6 +59,11 @@ const parent=structuredClone(data);
 let replay=replayBranchData(parent,getPairs(),'test');
 assert(!replay.state_table.entries.some(e=>e.id==='e_water'));
 assert.equal(replay.retired_facts.length,3);
+// Keep the exact same reply but remove its later confirming user input.
+replay=replayBranchData(parent,getPairs().slice(0,2),'test');
+assert(replay.state_table.entries.some(e=>e.id==='e_water'),'Fork at the processed reply must restore its retired facts immediately');
+assert.equal(replay.retired_facts.length,0);
+assert(!replay.extracted_keys.includes(pair.floorKey),'The reply must become eligible for one fresh review on the next user input');
 replay=replayBranchData(parent,getPairs().slice(0,1),'test');
 assert(replay.state_table.entries.some(e=>e.id==='e_water'));
 assert.equal(replay.retired_facts.length,0,'Fork before obsolete must not inherit its archive');

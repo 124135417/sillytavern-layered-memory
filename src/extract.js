@@ -150,6 +150,7 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
     try {
         const result = mergeExtractResult(prepared.normalized, {
             pipeline: 'per_floor',
+            requiresConfirmation: Boolean(payload.unified),
             sourceText: prepared.sourceText,
             stateTable: getChatData().state_table,
             floorKey: pair.floorKey,

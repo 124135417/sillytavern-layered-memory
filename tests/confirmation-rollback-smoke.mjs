@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+import { EMPTY_CHAT_DATA } from '../src/constants.js';
+const message=(id,is_user,mes)=>({is_user,mes,extra:{layered_memory_id:id}});
+const fact={id:'e_0001',slot:'possession',topic:'桌边温水',subject:'玩家',value:'桌边放着温水',evidence:'桌边放着温水',source:'auto',updated_floor:0};
+const context={chat:[],chatMetadata:{},extensionSettings:{layered_memory:{enabled:true,memoryModelSource:'current',chapterSize:1000,proofreadEvery:1000}},saveMetadata:async()=>{},saveChat:async()=>{},saveSettingsDebounced(){},name1:'玩家'};
+globalThis.SillyTavern={getContext:()=>context,libs:{}};
+const { getPairs }=await import('../src/ids.js');
+const { captureBranchCheckpoint,replayBranchData,beginBranchRecovery }=await import('../src/branch.js');
+const { mergeExtractResult }=await import('../src/merge.js');
+const { snapshotObsoleteTargets }=await import('../src/obsolete.js');
+const { normalizeExtractOutput }=await import('../src/validate.js');
+const { handleConfirmedExtractJob }=await import('../src/extract.js');
+let data=EMPTY_CHAT_DATA();data.state_table.entries=[structuredClone(fact)];data.progress.baseline_pair=-1;data.progress.next_entry_seq=2;data.job_queue.paused=true;context.chatMetadata.layered_memory=data;
+captureBranchCheckpoint(data,'seed');data.branch_checkpoints[0].createdAt=1;
+context.chat=[message('u0',true,'先坐下。'),message('a0',false,'角色收走桌边温水，说：“我是图书管理员。”'),message('u1',true,'知道了。')];
+const pair=getPairs()[0];
+await mergeExtractResult(normalizeExtractOutput({turn_summary:'<user>坐下，角色收走温水并说明职业。',identity:[{subject:'角色',topic:'职业',value:'是图书管理员',evidence:'我是图书管理员'}],obsolete:[{entry_id:fact.id,reason:'原现场的温水已收走'}]}),{pipeline:'per_floor',requiresConfirmation:true,pairIndex:0,floorKey:pair.floorKey,contentFingerprint:pair.contentFingerprint,sourceText:context.chat[1].mes,stateTable:data.state_table,obsoleteTargets:snapshotObsoleteTargets(data.state_table),persist:false});
+data.extracted_keys=[pair.floorKey];data.branch_origin={status:'ready',parentChat:'Parent'};
+const confirmedParent=structuredClone(data),originalJSON=JSON.stringify(confirmedParent);
+const confirmed=replayBranchData(confirmedParent,getPairs(),'Parent');assert.equal(confirmed.retired_facts.length,1,'later user input retains the confirmed retirement');
+// Old forks can already contain a snapshot taken after the erroneous retirement.
+context.chat=context.chat.slice(0,2);
+assert.equal(replayBranchData(confirmed,getPairs(),'Parent').state_table.entries.some(x=>x.id===fact.id),true,'a checkpoint made while confirmed must also roll back after its confirmer is removed');
+const legacy=structuredClone(confirmedParent);delete legacy.floor_events[0].requiresConfirmation;
+legacy.branch_checkpoints.push({id:'old-bad-fork',anchorPairIndex:0,anchorFloorKey:pair.floorKey,anchorFingerprint:pair.contentFingerprint,prefixFingerprints:[{pairIndex:0,floorKey:pair.floorKey,contentFingerprint:pair.contentFingerprint}],stateTable:structuredClone(legacy.state_table),createdAt:Date.now()+1});
+let restored=replayBranchData(legacy,getPairs(),'Parent');
+assert.deepEqual(restored.state_table.entries.map(x=>x.id),[fact.id],'fork at the exact unchanged reply restores the original facts');
+assert.equal(restored.retired_facts.length,0);assert.equal(restored.floor_events.length,0);assert.equal(restored.turn_summaries.length,0);assert(!restored.extracted_keys.includes(pair.floorKey));
+assert.equal(JSON.stringify(confirmedParent),originalJSON,'parent state must not be changed');
+assert.equal(replayBranchData(restored,getPairs(),'Parent').state_table.entries.length,1,'reopen/replay must not duplicate restored facts');
+const manual=structuredClone(legacy);manual.manual_events.push({id:'manual-at-reply',anchorFloorKey:pair.floorKey,anchorPairIndex:0,anchorFingerprint:pair.contentFingerprint,op:'upsert',after:{id:'manual_fact',slot:'other',subject:'玩家',value:'手动保留',source:'manual'},recordedAt:Date.now()+2});
+assert(replayBranchData(manual,getPairs(),'Parent').state_table.entries.some(x=>x.id==='manual_fact'),'explicit manual edits at the same reply remain intact');
+// Repair an already-opened pre-upgrade fork immediately, without sending input.
+context.chatMetadata={main_chat:'Parent',layered_memory:legacy};let saved=0;context.saveMetadata=async()=>{saved++};
+await beginBranchRecovery();restored=context.chatMetadata.layered_memory;
+assert.equal(restored.retired_facts.length,0);assert.equal(restored.state_table.entries.length,1);assert(saved>0);
+// Sending the next input makes the exact reply eligible for ONE new unified call.
+let calls=0;context.generateRaw=async({prompt})=>{calls++;assert(prompt.includes(fact.id),'restored facts must be available for fresh review');return JSON.stringify({keep_ids:[],obsolete:[{entry_id:fact.id,reason:'温水被收走，现场物品已退出'}],floors:[{floor:0,summary:'<user>希望先坐下。',segments:[{time_change:null,events:[{text:'<user>希望先坐下。',evidence:'先坐下。'}]}]},{floor:1,summary:'角色收走温水并说明职业。',segments:[{time_change:null,events:[{text:'角色说明自己是图书管理员。',evidence:'我是图书管理员'}]}]}],identity:[{subject:'角色',topic:'职业',value:'是图书管理员',evidence:'我是图书管理员'}]})};
+await handleConfirmedExtractJob({floorKey:pair.floorKey,pairIndex:0});assert.equal(calls,0,'forked final reply remains unconfirmed until a new user input');
+context.chat.push(message('new-user',true,'那就出门。'));
+await handleConfirmedExtractJob({floorKey:pair.floorKey,pairIndex:0});await handleConfirmedExtractJob({floorKey:pair.floorKey,pairIndex:0});
+assert.equal(calls,1);assert.equal(restored.retired_facts.length,1);assert(restored.state_table.entries.some(x=>x.value==='是图书管理员'));
+console.log('Confirmation rollback: exact-reply fork restores immediately, old archive/checkpoint compatibility, parent/manual isolation, reopen idempotence and next-input single-call re-review passed');

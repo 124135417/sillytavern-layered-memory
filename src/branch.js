@@ -38,6 +38,45 @@ function checkpointMatchesPrefix(checkpoint, livePairs) {
         && item.contentFingerprint === live[index]?.contentFingerprint);
 }
 
+/** A completed reply is not confirmed until a later user message exists. */
+function unconfirmedAutomaticFloors(data, livePairs) {
+    const live = pairMap(livePairs);
+    const requiringConfirmation = new Map();
+    const remember = (key, fingerprint, index, at) => {
+        const pair = live.get(key);
+        if (!pair || pair.contentFingerprint !== fingerprint
+            || livePairs.some(next => Number(next.pairIndex) > Number(pair.pairIndex))) return;
+        const previous = requiringConfirmation.get(key);
+        requiringConfirmation.set(key, {
+            floorKey: key, pairIndex: Number(index),
+            recordedAt: Math.min(previous?.recordedAt ?? Infinity, Number(at) || 0),
+        });
+    };
+    for (const event of data.floor_events || []) {
+        if (event.requiresConfirmation) remember(event.floorKey, event.contentFingerprint, event.pairIndex, event.recordedAt);
+    }
+    // Older releases have no event flag; their automatic archive is the proof.
+    for (const record of data.retired_facts || []) {
+        if (record.source === 'per_floor_obsolete') {
+            remember(record.anchorFloorKey, record.anchorFingerprint, record.anchorPairIndex, record.archivedAt || record.retiredAt);
+        }
+    }
+    return [...requiringConfirmation.values()];
+}
+
+function confirmationThroughPair(data) {
+    return Math.max(-1,
+        ...(data.floor_events || []).filter(item => item.requiresConfirmation).map(item => Number(item.pairIndex)),
+        ...(data.retired_facts || []).filter(item => item.source === 'per_floor_obsolete').map(item => Number(item.anchorPairIndex)));
+}
+
+function checkpointIncludesUnconfirmed(point, pending) {
+    return pending.some(event => Number(point.anchorPairIndex) >= event.pairIndex
+        && (Number.isInteger(point.confirmationThroughPair)
+            ? point.confirmationThroughPair >= event.pairIndex
+            : Number(point.createdAt) >= event.recordedAt));
+}
+
 function lightweightStateTable(table) {
     const snapshot = clone(table || EMPTY_CHAT_DATA().state_table);
     snapshot.changelog = [];
@@ -54,10 +93,12 @@ export function recordFloorEvent(data, event) {
         turnSummary: String(event.turnSummary || ''),
         storyTime: event.storyTime ? clone(event.storyTime) : null,
         entryChanges: clone(event.entryChanges || []),
+        requiresConfirmation: Boolean(event.requiresConfirmation),
         recordedAt: Date.now(),
     };
     const index = data.floor_events.findIndex(item => item.floorKey === normalized.floorKey);
     if (index >= 0) {
+        normalized.requiresConfirmation ||= Boolean(data.floor_events[index].requiresConfirmation);
         if (!normalized.entryChanges.length && data.floor_events[index].entryChanges?.length) {
             normalized.entryChanges = clone(data.floor_events[index].entryChanges);
         }
@@ -109,6 +150,7 @@ export function captureBranchCheckpoint(data = getChatData(), reason = 'automati
         anchorFingerprint: anchor.contentFingerprint,
         prefixFingerprints: prefixFingerprints(getPairs(), anchor.pairIndex),
         stateTable: lightweightStateTable(data.state_table),
+        confirmationThroughPair: confirmationThroughPair(data),
         createdAt: Date.now(),
         reason,
     };
@@ -241,17 +283,18 @@ function reconcileNarrativeArchives(data, liveMessages, maxFloor) {
     }
 }
 
-function finishBranchData(data, parentData, livePairs, parentChat, method, trustedMaxPair) {
+function finishBranchData(data, parentData, livePairs, parentChat, method, trustedMaxPair, automaticMaxPair = trustedMaxPair) {
     const liveByKey = pairMap(livePairs);
     const maxPair = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
-    const maxFloor = livePairs.filter(pair => pair.sealed && pair.pairIndex <= trustedMaxPair).at(-1)?.aiFloor ?? -1;
+    const maxFloor = livePairs.filter(pair => pair.sealed && pair.pairIndex <= automaticMaxPair).at(-1)?.aiFloor ?? -1;
     const liveMessages = getMessageFloors({ includeTrailingUser: true });
     const liveMessageByKey = new Map(liveMessages.map(message => [message.messageKey, message]));
     // Preserve opaque pre-split extension data until its owner migrates it.
     if (parentData.backstage) data.backstage = clone(parentData.backstage);
     const withinTrustedPrefix = item => Number(item.floor ?? item.pairIndex ?? item.anchorPairIndex) <= trustedMaxPair;
+    const withinAutomaticPrefix = item => Number(item.floor ?? item.pairIndex ?? item.anchorPairIndex) <= automaticMaxPair;
     data.turn_summaries = (parentData.turn_summaries || [])
-        .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
+        .filter(item => withinAutomaticPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
     data.narrative_summaries = (parentData.narrative_summaries || []).filter(item => {
         const message = liveMessageByKey.get(item.messageKey);
         return message && message.messageIndex <= maxFloor
@@ -264,7 +307,7 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
     data.timeline_corrections = clone(parentData.timeline_corrections || []);
     data.timeline_incomplete = clone(parentData.timeline_incomplete || []);
     data.floor_events = (parentData.floor_events || [])
-        .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
+        .filter(item => withinAutomaticPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
     data.manual_events = (parentData.manual_events || [])
         .filter(item => withinTrustedPrefix(item)
             && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')
@@ -272,6 +315,7 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
     for (const key of ['retired_facts', 'dormant_facts', 'historical_facts']) {
         data[key] = (parentData[key] || [])
             .filter(item => withinTrustedPrefix(item)
+                && (item.source !== 'per_floor_obsolete' || withinAutomaticPrefix(item))
                 && matchesFloor(item, liveByKey, 'anchorFloorKey', 'anchorFingerprint')).map(clone);
     }
     for (const event of data.manual_events.filter(item => item.reason === 'manual_restore_archived')) {
@@ -283,7 +327,7 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
     data.state_lifecycle = clone(EMPTY_CHAT_DATA().state_lifecycle);
     data.memory_organization = clone(EMPTY_CHAT_DATA().memory_organization);
     data.fact_ledger = (parentData.fact_ledger || [])
-        .filter(item => withinTrustedPrefix(item)
+        .filter(item => withinAutomaticPrefix(item)
             && item.floorKey && item.contentFingerprint && matchesFloor(item, liveByKey)).map(clone);
     const trustedCandidateIds = new Set(data.fact_ledger.map(item => item.id));
     data.fact_decisions = (parentData.fact_decisions || [])
@@ -306,9 +350,9 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
     data.progress = { ...EMPTY_CHAT_DATA().progress, ...(data.progress || {}) };
     const parentBaseline = parentData.progress?.baseline_pair == null ? -1 : Number(parentData.progress.baseline_pair);
     const parentChapterEnd = parentData.progress?.last_chapter_end_pair == null ? -1 : Number(parentData.progress.last_chapter_end_pair);
-    data.progress.baseline_pair = Math.min(Number.isFinite(parentBaseline) ? parentBaseline : -1, trustedMaxPair, maxPair);
-    data.progress.last_chapter_end_pair = Math.min(Number.isFinite(parentChapterEnd) ? parentChapterEnd : -1, trustedMaxPair, maxPair);
-    reconcileArchives(data, trustedMaxPair);
+    data.progress.baseline_pair = Math.min(Number.isFinite(parentBaseline) ? parentBaseline : -1, automaticMaxPair, maxPair);
+    data.progress.last_chapter_end_pair = Math.min(Number.isFinite(parentChapterEnd) ? parentChapterEnd : -1, automaticMaxPair, maxPair);
+    reconcileArchives(data, automaticMaxPair);
     data.narrative_chapters = clone(parentData.narrative_chapters || []);
     data.narrative_volumes = clone(parentData.narrative_volumes || []);
     reconcileNarrativeArchives(data, liveMessages, maxFloor);
@@ -392,10 +436,12 @@ export function buildFreshBranchData(livePairs, parentChat = '') {
 
 export function replayBranchData(parentData, livePairs, parentChat = '') {
     const liveByKey = pairMap(livePairs);
+    const pending = unconfirmedAutomaticFloors(parentData, livePairs);
     const checkpoints = (parentData.branch_checkpoints || [])
         .filter(point => point?.stateTable
             && matchesFloor(point, liveByKey, 'anchorFloorKey', 'anchorFingerprint')
-            && checkpointMatchesPrefix(point, livePairs))
+            && checkpointMatchesPrefix(point, livePairs)
+            && !checkpointIncludesUnconfirmed(point, pending))
         .sort((a, b) => Number(a.anchorPairIndex) - Number(b.anchorPairIndex) || Number(a.createdAt) - Number(b.createdAt));
     const checkpoint = checkpoints.at(-1);
     if (!checkpoint) {
@@ -418,6 +464,7 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
     const branchHead = livePairs.filter(pair => pair.sealed).at(-1)?.pairIndex ?? -1;
     const trustedMaxPair = Math.min(branchHead, Number.isFinite(firstMismatch) ? firstMismatch - 1 : branchHead);
 
+    const automaticMaxPair = Math.min(trustedMaxPair, ...pending.map(item => item.pairIndex - 1));
     const data = EMPTY_CHAT_DATA();
     data.state_table = lightweightStateTable(checkpoint.stateTable);
     data.progress = clone(parentData.progress || data.progress);
@@ -427,7 +474,7 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
     const replayItems = [
         ...(parentData.floor_events || [])
             .filter(event => Number(event.recordedAt) > Number(checkpoint.createdAt)
-                && Number(event.pairIndex) <= trustedMaxPair && matchesFloor(event, liveByKey))
+                && Number(event.pairIndex) <= automaticMaxPair && matchesFloor(event, liveByKey))
             .map(event => ({ kind: 'floor', at: Number(event.recordedAt), event })),
         ...(parentData.manual_events || [])
             .filter(event => Number(event.recordedAt) > Number(checkpoint.createdAt)
@@ -441,7 +488,7 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
         else applyManualEvent(data.state_table, item.event);
     }
 
-    finishBranchData(data, parentData, livePairs, parentChat, 'checkpoint_replay', trustedMaxPair);
+    finishBranchData(data, parentData, livePairs, parentChat, 'checkpoint_replay', trustedMaxPair, automaticMaxPair);
     const earliest = checkpoints[0];
     data.branch_checkpoints = earliest ? [{ ...clone(earliest), stateTable: lightweightStateTable(earliest.stateTable) }] : [];
     const recoveredCheckpoint = {
@@ -451,6 +498,7 @@ export function replayBranchData(parentData, livePairs, parentChat = '') {
         anchorFingerprint: livePairs.filter(pair => pair.sealed).at(-1)?.contentFingerprint || null,
         prefixFingerprints: prefixFingerprints(livePairs, branchHead),
         stateTable: lightweightStateTable(data.state_table),
+        confirmationThroughPair: confirmationThroughPair(data),
         createdAt: Date.now(),
         reason: 'fork_recovery',
     };
@@ -506,8 +554,18 @@ async function recoverCurrentBranch() {
     const existing = metadata?.[MODULE_NAME];
     const verified = existing?.branch_origin?.status === 'ready'
         && existing.branch_origin.parentChat === parentChat;
-    if (!parentChat || verified) return { status: 'not_needed' };
+    if (!parentChat) return { status: 'not_needed' };
     const livePairs = getPairs();
+    if (verified) {
+        if (!unconfirmedAutomaticFloors(existing, livePairs).length) return { status: 'not_needed' };
+        // Repair already-opened forks made by releases that copied the final
+        // reply's results even though its confirming user input was removed.
+        const restored = replayBranchData(existing, livePairs, parentChat);
+        metadata[MODULE_NAME] = restored;
+        await saveChatData(restored);
+        appendLog('info', '已撤销末轮尚未确认的记忆整理，恢复整理前状态');
+        return { status: 'ready', method: restored.branch_origin.method };
+    }
     try {
         const parentData = await fetchParentChat(parentChat);
         if (getContext().chatMetadata !== metadata) return { status: 'superseded' };
