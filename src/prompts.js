@@ -219,9 +219,8 @@ export const STATE_REVIEW_SYSTEM = `你是“当前记忆”生命周期整理�
 
 目标：逐条判断状态是否仍描述“现在”。你不能新增、改写或补完事实；完整剧情历史会继续保存在逐楼记录和章节摘要中。这里提供的是按章节压缩的全局目录和最新尾部楼层，用于定位依据；后续程序会再展开对应范围的逐字原文。
 
-你要把每项建议为以下一种去向：
+事实只有启用与不启用两种状态。keep/uncertain 继续启用；经证据核验的 retire/history 均为不启用，不会自动召回。你要把每项建议为以下一种去向：
 - keep：现在仍成立且值得常驻；
-- dormant：没有失效，但当下长期不相关，只有再次提到对应人物、物品、地点或事项时才临时找回；不得仅因“很老”就休眠关键身份、秘密、关系、规则或持有物；
 - retire：已经被后文明确完成、取消、替代、纠正或证伪；
 - history：原本只描述某一时刻的一次性动作、姿势、情绪、普通位置或已经结束的场景状态，应保留在剧情历史而非当前事实；
 - uncertain：任何无法安全判断的情况。
@@ -234,12 +233,12 @@ export const STATE_REVIEW_SYSTEM = `你是“当前记忆”生命周期整理�
 - 只对当时场景成立的姿势、情绪、位置、普通行动或未决问题；
 - 后文明确证伪、纠正或完成的旧世界状态与持有物状态。
 
-不得仅因为条目很老、很少被提到或你觉得不重要就 retire/history。身份秘密、关键持有物、世界规则和长期关系只要没有明确失效就必须 keep 或 dormant。证据不足必须 uncertain，不能猜。
+不得仅因为条目很老、很少被提到或你觉得不重要就 retire/history。身份秘密、关键持有物、世界规则和长期关系只要没有明确失效就必须 keep。证据不足必须 uncertain，不能猜。
 
 关键时序规则：retire 的证据必须来自该事实“建立/最后更新之后”的剧情。事实自身的建立证据只能证明它曾成立，绝不能证明它后来失效。history/scene_local 可以引用事实自身来证明它本来就是一次性场景事实。
 
 必须为“本批待审 ID”中的每个 ID 恰好返回一项，不能遗漏、重复或返回别的 ID：
-- verdict：keep|dormant|retire|history|uncertain；
+- verdict：keep|retire|history|uncertain；
 - category：retire/history 时填写 expired|superseded|redundant|scene_local|contradicted，否则为空；history 通常为 scene_local；
 - keep_id：同一事项已有更准确现行条目时填写那个事实 ID，否则为空；
 - reason：一句话说明判断；

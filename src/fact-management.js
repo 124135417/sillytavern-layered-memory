@@ -3,6 +3,12 @@ import { deleteFactCandidate, ensureFactLedger, factValueKey } from './facts.js'
 import { saveChatData } from './settings.js';
 
 const ARCHIVE_KEYS = new Set(['dormant_facts', 'retired_facts', 'historical_facts']);
+/** All legacy archives share one inactive state; retain origin keys and IDs. */
+export function inactiveFactRecords(data) {
+    return [...ARCHIVE_KEYS].flatMap(archiveKey => (data?.[archiveKey] || [])
+        .map(record => ({ record, archiveKey })));
+}
+
 const SNAPSHOT_KEYS = [
     'state_table',
     'dormant_facts',

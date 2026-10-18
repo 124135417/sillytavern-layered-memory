@@ -20,7 +20,7 @@ const {
     stagedOrganizationCompatibility,
     rollbackLastOrganization,
 } = await import('../src/state-review.js');
-const { applyDormancyPolicy, dormancyAssessment } = await import('../src/lifecycle-policy.js');
+const { applyDormancyPolicy } = await import('../src/lifecycle-policy.js');
 
 const entry = (id, extra = {}) => ({
     id,
@@ -248,32 +248,20 @@ const dormantPolicyData = {
     narrative_summaries: [{ messageIndex: 600, summary: '他们一直在主堡讨论晚饭。', segments: [] }],
     dormant_facts: [], retired_facts: [], historical_facts: [], review_queue: [], manual_events: [],
 };
-assert.equal(dormancyAssessment(dormantPolicyData, dormantPolicyData.state_table.entries[0]).eligible, true);
 const policyDecisions = applyDormancyPolicy(dormantPolicyData, [
     { entry_id: 'cold_route', verdict: 'keep', confidence: 'high', evidence: [] },
     { entry_id: 'core_identity', verdict: 'dormant', confidence: 'high', evidence: [] },
 ]);
-assert.equal(policyDecisions[0].verdict, 'dormant');
-assert.equal(policyDecisions[1].verdict, 'keep', 'identity facts must stay awake even if the model asks to sleep them');
-const recentlyRelevantRouteData = structuredClone(dormantPolicyData);
-recentlyRelevantRouteData.narrative_summaries = [
-    { messageIndex: 590, summary: '他们正在重新核对北段黑市位置。', segments: [] },
-    { messageIndex: 600, summary: '他们回到主堡。', segments: [] },
-];
-const recentRoute = dormancyAssessment(recentlyRelevantRouteData, recentlyRelevantRouteData.state_table.entries[0]);
-assert.equal(recentRoute.eligible, false, 'a specific recent item mention must postpone dormancy');
-assert.equal(recentRoute.recentlyRelevant, true);
-assert.equal(applyDormancyPolicy(recentlyRelevantRouteData, [
-    { entry_id: 'cold_route', verdict: 'dormant', confidence: 'high', evidence: [] },
-])[0].verdict, 'keep', 'a model suggestion cannot bypass the recent-relevance guard');
+assert.equal(policyDecisions[0].verdict, 'keep', 'age alone must never disable a current fact');
+assert.equal(policyDecisions[1].verdict, 'keep', 'legacy dormant suggestions stay enabled without proven obsolescence');
 const dormantApplied = applyLifecycleAudit(dormantPolicyData, {
     run_id: 'dormant-run', base_version: 1, decisions: policyDecisions,
 }, {
     recordEvent: () => ({ anchorFloorKey: 'head', anchorPairIndex: 150, anchorFingerprint: 'fp' }),
 });
-assert.equal(dormantApplied.removed, 1);
-assert.equal(dormantPolicyData.dormant_facts[0].entry_id, 'cold_route');
-assert.deepEqual(dormantPolicyData.state_table.entries.map(item => item.id), ['core_identity']);
+assert.equal(dormantApplied.removed, 0);
+assert.equal(dormantPolicyData.dormant_facts.length, 0);
+assert.deepEqual(dormantPolicyData.state_table.entries.map(item => item.id), ['cold_route', 'core_identity']);
 
 lifecycleData.state_lifecycle.last_completed_at = 999;
 lifecycleData.state_lifecycle.last_state_signature = stateReviewSignature(lifecycleData);
@@ -321,6 +309,11 @@ const staged = stageOrganizationBatch(organizationData, {
     ],
 });
 assert.equal(staged.error, null);
+organizationData.memory_organization.staged.policy_version = 2;
+organizationData.memory_organization.staged.decisions.find(d => d.entry_id === 'sleep').verdict = 'dormant';
+assert.equal(refreshStagedOrganizationPolicy(organizationData), true, 'old version-2 previews must drop unverified dormancy suggestions');
+assert.equal(organizationData.memory_organization.staged.decisions.find(d => d.entry_id === 'sleep').verdict, 'keep');
+
 assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'sleep', 'past_action', 'protected'],
     'staging a preview must not mutate formal memory');
 organizationData.state_table.entries.push(entry('fresh'));
@@ -329,15 +322,15 @@ assert.deepEqual(stagedOrganizationCompatibility(organizationData), { compatible
     'a preview remains safe when its reviewed entries are unchanged and only new facts were appended');
 assert.equal(refreshStagedOrganizationPolicy(organizationData), true,
     'preview totals must refresh when a new fact is preserved outside its decisions');
-assert.equal(organizationData.memory_organization.staged.counts.current, 3);
+assert.equal(organizationData.memory_organization.staged.counts.current, 4);
 assert.equal(refreshStagedOrganizationPolicy(organizationData), false, 'unchanged preview totals must not cause save loops');
 const adopted = applyStagedOrganization(organizationData, {
     recordEvent: () => ({ anchorFloorKey: 'head', anchorPairIndex: 10, anchorFingerprint: 'fp' }),
 });
 assert.equal(adopted.error, null);
 assert.equal(adopted.additionsPreserved, 1);
-assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'protected', 'fresh']);
-assert.equal(organizationData.dormant_facts[0].entry_id, 'sleep');
+assert.deepEqual(organizationData.state_table.entries.map(item => item.id), ['stay', 'sleep', 'protected', 'fresh']);
+assert.equal(organizationData.dormant_facts.length, 0);
 assert.equal(organizationData.historical_facts[0].entry_id, 'past_action');
 assert.ok(organizationData.memory_organization.last_snapshot, 'adoption must retain one rollback snapshot');
 assert.equal(rollbackLastOrganization(organizationData).error, null);

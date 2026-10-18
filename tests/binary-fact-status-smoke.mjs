@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import { EMPTY_CHAT_DATA, DEFAULT_SETTINGS } from '../src/constants.js';
+const context = { chat: [{is_user:true,mes:'阿澈重新拿出了钥匙。',extra:{layered_memory_id:'u'}}], chatMetadata: {}, extensionSettings: {}, name1:'玩家', name2:'测试', chatCompletionSettings:{prompts:[],prompt_order:[]}, saveMetadata:async()=>{},saveSettingsDebounced(){} };
+globalThis.SillyTavern = { getContext:()=>context };
+const { buildCoreMemoryParts } = await import('../src/inject.js');
+const { renderDormantRetrievalBlock, renderL1Block } = await import('../src/render.js');
+const { inactiveFactRecords, restoreArchivedFact, retireCurrentFacts } = await import('../src/fact-management.js');
+const { renderStateTableCompact } = await import('../src/merge.js');
+const { applyDormancyPolicy } = await import('../src/lifecycle-policy.js');
+const data = EMPTY_CHAT_DATA(), settings = {...DEFAULT_SETTINGS,budgetL1:500};
+context.chatMetadata.layered_memory=data;context.extensionSettings.layered_memory=settings;
+const fact=(id,value)=>({id,slot:'possession',topic:'钥匙',subject:'阿澈',value,evidence:'他拿着钥匙',source:'auto',established_floor:0,updated_floor:0});
+data.state_table.entries=[fact('enabled','ENABLED_CANARY 保管钥匙')];
+for(const key of ['dormant_facts','retired_facts','historical_facts'])data[key]=[{id:'shared-archive-id',entry:fact(key,`${key}_CANARY 保管钥匙`),reason:'旧归档',anchorPairIndex:0,anchorFingerprint:'fp'}];
+const before=structuredClone(data), archived=inactiveFactRecords(data);
+assert.equal(archived.length,3);assert.equal(new Set(archived.map(x=>x.archiveKey)).size,3);
+assert.deepEqual(data,before,'view mapping must preserve every old ID, payload and branch anchor');
+let parts=buildCoreMemoryParts({data,settings,context,pairs:[],narrativeSources:[]});
+assert.equal(parts.l1,renderL1Block(data,500,context),'inactive facts must not reserve current-fact budget');
+assert(parts.l1.includes('ENABLED_CANARY'));
+assert.equal(renderDormantRetrievalBlock(data,'阿澈保管钥匙',500),'');
+for(const key of ['dormant_facts','retired_facts','historical_facts']){
+ assert(!parts.l1.includes(`${key}_CANARY`));assert(!renderStateTableCompact(data.state_table).includes(`${key}_CANARY`));
+ const copy=structuredClone(data),original=structuredClone(copy[key][0]);
+ const result=restoreArchivedFact(copy,key,original.id,{recordEvent:(d,e)=>{d.manual_events.push(e);return e;}});
+ assert.equal(result.error,null);assert.equal(copy[key].length,0);
+ assert(renderL1Block(copy,2000,context).includes(`${key}_CANARY`),'manual enable must restore sending');
+ assert.equal(copy.manual_events.at(-1).archiveKey,key,'replay must retain legacy archive origin even on duplicate IDs');
+ for(const other of ['dormant_facts','retired_facts','historical_facts'].filter(x=>x!==key))assert.deepEqual(copy[other],data[other]);
+ retireCurrentFacts(copy,[result.entry.id],{recordEvent:()=>({anchorPairIndex:0,anchorFingerprint:'fp'})});
+ assert(!renderL1Block(copy,2000,context).includes(`${key}_CANARY`));
+ assert.equal(inactiveFactRecords(copy).length,3);
+}
+assert.equal(applyDormancyPolicy(data,[{entry_id:'enabled',verdict:'dormant'}])[0].verdict,'keep');
+console.log('Binary fact status: legacy data preserved, no automatic recall, unchanged L1 budget, manual enable/disable and replay origin passed');

@@ -1,7 +1,6 @@
 import { SLOT_LABELS, SLOTS } from './constants.js';
 import { estimateTokens, truncateToBudget } from './tokens.js';
 import { usableMemoryEntries } from './quality.js';
-import { dormantRelevance } from './lifecycle-policy.js';
 
 function numericFloor(entry) {
     const value = Number(entry?.updated_floor ?? entry?.established_floor);
@@ -132,34 +131,9 @@ export function renderL1Block(data, budget = 2000, context = null) {
     return selectL1Entries(data, budget, context).text;
 }
 
-function dormantFactEntry(record) {
-    return record?.entry && typeof record.entry === 'object' ? record.entry : record;
-}
-
-/** Retrieve dormant facts for this request only; never promote them to current. */
-export function renderDormantRetrievalBlock(data, recentNarrativeText, budget = 500) {
-    if (!String(recentNarrativeText || '').trim() || Number(budget) <= 0) return '';
-    const matches = (data?.dormant_facts || [])
-        .map(record => ({ record, entry: dormantFactEntry(record) }))
-        .filter(({ entry }) => entry?.subject && entry?.value)
-        .map(item => ({ ...item, relevance: dormantRelevance(item.entry, recentNarrativeText) }))
-        .filter(item => item.relevance.matched)
-        .map(item => ({ ...item, score: item.relevance.score }))
-        .sort((a, b) => b.score - a.score || numericFloor(b.entry) - numericFloor(a.entry));
-    if (!matches.length) return '';
-    const lines = [
-        '## 本轮重新相关的休眠事实',
-        '以下事实没有被重新设为当前状态；只是因为最近正文再次提到对应实体而临时提供。若与最近完整原文冲突，以原文为准。',
-        '',
-    ];
-    let accepted = 0;
-    for (const { entry } of matches) {
-        const line = l1EntryLine(entry);
-        if (estimateTokens([...lines, line].join('\n')) > Number(budget)) continue;
-        lines.push(line);
-        accepted += 1;
-    }
-    return accepted ? lines.join('\n').trim() : '';
+/** Legacy API: inactive facts are never automatically recalled. */
+export function renderDormantRetrievalBlock() {
+    return '';
 }
 
 function validFloorRange(value) {

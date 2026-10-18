@@ -43,6 +43,7 @@ import { displayEntityName, displayNarrativeText, usableMemoryEntries } from '..
 import { activateEditedFactCandidate, activateFactCandidate, dismissFactCandidate, factCandidateView } from '../facts.js';
 import {
     commitFactMutation,
+    inactiveFactRecords,
     invalidateStagedOrganization,
     permanentlyDeleteCurrentFacts,
     restoreArchivedFact,
@@ -803,26 +804,22 @@ function renderStateTab() {
     const rebuilding = rebuild && !['complete', 'idle'].includes(rebuild.status);
     const lifecycle = data.state_lifecycle || {};
     const organization = data.memory_organization || {};
-    const dormantFacts = data.dormant_facts || [];
-    const retiredFacts = data.retired_facts || [];
-    const historicalFacts = data.historical_facts || [];
+    const inactiveFacts = inactiveFactRecords(data);
+    if (['dormant', 'retired', 'historical', 'inactive'].includes(currentFactView)) currentFactView = 'disabled';
     const stagedOrganization = organization.staged;
     const stagedById = new Map(entries.map(entry => [entry.id, entry]));
     const stagedRows = (stagedOrganization?.decisions || []).map(decision => {
         const entry = stagedById.get(decision.entry_id);
-        const destination = decision.verdict === 'dormant' ? '休眠'
-            : decision.verdict === 'retire' && decision.verification?.verdict === 'confirm' ? '退役'
-                : decision.verdict === 'history' && decision.verification?.verdict === 'confirm' ? '历史'
-                    : decision.verdict === 'uncertain' ? '不确定，继续保留'
-                        : '继续保留';
+        const destination = ['retire', 'history'].includes(decision.verdict)
+            && decision.verification?.verdict === 'confirm' ? '不启用' : '继续启用';
         return `<li><strong>${escapeHtml(entry?.subject || decision.entry_id)}</strong><span>${escapeHtml(entry?.value || '当前条目已变化')}</span><em>${destination}</em><small>${escapeHtml(decision.reason || '')}</small></li>`;
     }).join('');
     const stagedFactCount = Array.isArray(rebuild?.entries) ? rebuild.entries.length : 0;
     const ignoredFactCount = Array.isArray(rebuild?.warnings) ? rebuild.warnings.length : 0;
     const statusBannerItems = [
         lifecycle.status === 'running' ? `<aside class="lm-quality-alert"><div><strong>正在生成记忆整理预览</strong><p>已检查 ${Number(lifecycle.active_run?.cursor || 0)} / ${Number(lifecycle.active_run?.candidate_ids?.length || entries.length)} 条；完成前和完成后都不会自动改动正式记忆。</p></div></aside>` : '',
-        stagedOrganization ? `<aside class="lm-quality-alert lm-organization-preview"><div><strong>整理预览已生成，正式记忆尚未改变</strong><p>建议：保留 ${stagedOrganization.counts?.current || 0} 条、休眠 ${stagedOrganization.counts?.dormant || 0} 条、退役 ${stagedOrganization.counts?.retired || 0} 条、转入历史 ${stagedOrganization.counts?.historical || 0} 条、不确定 ${stagedOrganization.counts?.uncertain || 0} 条。</p><details><summary>逐条查看整理依据</summary><ol>${stagedRows || '<li>没有待分类条目</li>'}</ol></details><div class="lm-row-actions"><button type="button" class="lm-button lm-button-primary" id="lm-adopt-organization">采用整理结果</button><button type="button" class="lm-text-button" id="lm-discard-organization">放弃这次预览</button></div></div></aside>` : '',
-        organization.last_snapshot ? `<aside class="lm-quality-alert"><div><strong>上一次整理可以回滚</strong><p>回滚会恢复采用整理结果之前的当前、休眠、退役和历史事实。</p><button type="button" class="lm-text-button" id="lm-rollback-organization">回到整理前</button></div></aside>` : '',
+        stagedOrganization ? `<aside class="lm-quality-alert lm-organization-preview"><div><strong>整理预览已生成，正式记忆尚未改变</strong><p>建议：不启用 ${(stagedOrganization.counts?.retired || 0) + (stagedOrganization.counts?.historical || 0)} 条，其余继续启用（其中 ${stagedOrganization.counts?.uncertain || 0} 条暂不能确定）。</p><details><summary>逐条查看整理依据</summary><ol>${stagedRows || '<li>没有待分类条目</li>'}</ol></details><div class="lm-row-actions"><button type="button" class="lm-button lm-button-primary" id="lm-adopt-organization">采用整理结果</button><button type="button" class="lm-text-button" id="lm-discard-organization">放弃这次预览</button></div></div></aside>` : '',
+        organization.last_snapshot ? `<aside class="lm-quality-alert"><div><strong>上一次整理可以回滚</strong><p>回滚会恢复采用整理结果之前的启用和不启用记录。</p><button type="button" class="lm-text-button" id="lm-rollback-organization">回到整理前</button></div></aside>` : '',
         rebuilding ? `<aside class="lm-quality-alert"><div><strong>当前显示旧正式事实 ${entries.length} 条；新暂存事实 ${stagedFactCount} 条</strong><p>暂存结果尚未加入当前记忆；完成章节后才会一次性采用。${ignoredFactCount ? `另有 ${ignoredFactCount} 条因原文证据不可靠而被忽略。` : ''}</p></div></aside>` : '',
         quarantined.length ? `<aside class="lm-quality-alert"><div><strong>已隔离 ${quarantined.length} 条异常结果</strong><p>它们缺少主体、事实或原文证据，不会加入当前记忆。完成安全重建后会由新结果替换。</p></div></aside>` : '',
         notices.length ? `<section class="lm-notice-strip" aria-label="状态通知">${notices.slice(-3).map(item => `<article data-notice-id="${escapeHtml(item.id)}"><span>${escapeHtml(item.note || '')}</span><button type="button" class="lm-text-button" data-dismiss-notice>知道了</button></article>`).join('')}</section>` : '',
@@ -859,46 +856,28 @@ function renderStateTab() {
         all: candidates.length,
         inactive: inactiveCandidates.length,
     });
-    const lifecycleViewMeta = {
-        dormant: { description: '仍可能成立，但只在正文重新相关时临时找回', count: dormantFacts.length },
-        retired: { description: '已经失效或被后文替代，只保留作证据追溯', count: retiredFacts.length },
-        historical: { description: '一次性场景事实，属于过去剧情而非当前状态', count: historicalFacts.length },
-    };
-    const viewMeta = lifecycleViewMeta[currentFactView] || baseViewMeta;
+    const viewMeta = currentFactView === 'disabled'
+        ? { description: '已停用，保留内容与依据；不会自动召回，可手动启用', count: inactiveFacts.length }
+        : baseViewMeta;
     const candidateList = candidateItems.length
         ? `<div class="lm-discovery-list">${candidateItems.map(renderFactCandidateCard).join('')}</div>`
         : `<div class="lm-empty-state lm-compact-empty"><h3>${currentFactView === 'inactive' ? '没有等待采用的事实' : '还没有发现事实'}</h3><p>${currentFactView === 'inactive' ? '当前没有被覆盖、未验证或尚未选择的内容。' : '完成逐轮整理后，模型发现的内容会完整保留在这里。'}</p></div>`;
-    const archiveViews = {
-        dormant: dormantFacts,
-        retired: retiredFacts,
-        historical: historicalFacts,
-    };
-    const archiveKeys = {
-        dormant: 'dormant_facts',
-        retired: 'retired_facts',
-        historical: 'historical_facts',
-    };
-    const archiveLabels = { dormant: '休眠记忆', retired: '已退役', historical: '剧情历史' };
-    const archived = archiveViews[currentFactView] || [];
-    const archiveList = archived.length
-        ? `<div class="lm-discovery-list">${archived.map(item => renderArchivedFactCard(item, archiveLabels[currentFactView], archiveKeys[currentFactView])).join('')}</div>`
-        : `<div class="lm-empty-state lm-compact-empty"><h3>还没有${archiveLabels[currentFactView] || '归档记忆'}</h3><p>大整理采用后，对应条目会保留在这里，不会丢失原文依据。</p></div>`;
+    const archiveList = inactiveFacts.length
+        ? `<div class="lm-discovery-list">${inactiveFacts.map(({ record, archiveKey }) => renderArchivedFactCard(record, '不启用', archiveKey)).join('')}</div>`
+        : '<div class="lm-empty-state lm-compact-empty"><h3>没有不启用的记忆</h3><p>停用后的内容与依据会保留在这里，可随时手动启用。</p></div>';
     const displayedGroups = currentFactView === 'active' ? groups
-        : Object.hasOwn(archiveViews, currentFactView) ? archiveList
-            : candidateList;
+        : currentFactView === 'disabled' ? archiveList : candidateList;
     return `
         <div class="lm-dashboard">
             <main class="lm-memory-main" id="lm-memory-main">
                 ${statusBanners}
                 <section class="lm-fact-shell">
                     <div class="lm-fact-overview" aria-label="事实记录概览">
-                        <button type="button" data-fact-view="active" class="${currentFactView === 'active' ? 'active' : ''}"><strong>${entries.length}</strong><span>当前</span></button>
-                        <button type="button" data-fact-view="dormant" class="${currentFactView === 'dormant' ? 'active' : ''}"><strong>${dormantFacts.length}</strong><span>休眠</span></button>
-                        <button type="button" data-fact-view="retired" class="${currentFactView === 'retired' ? 'active' : ''}"><strong>${retiredFacts.length}</strong><span>退役</span></button>
-                        <button type="button" data-fact-view="historical" class="${currentFactView === 'historical' ? 'active' : ''}"><strong>${historicalFacts.length}</strong><span>历史</span></button>
+                        <button type="button" data-fact-view="active" class="${currentFactView === 'active' ? 'active' : ''}"><strong>${entries.length}</strong><span>启用</span></button>
+                        <button type="button" data-fact-view="disabled" class="${currentFactView === 'disabled' ? 'active' : ''}"><strong>${inactiveFacts.length}</strong><span>不启用</span></button>
                         <button type="button" data-fact-view="all" class="${currentFactView === 'all' ? 'active' : ''}"><strong>${candidates.length}</strong><span>发现记录</span></button>
                     </div>
-                    <p class="lm-fact-explainer">当前记忆每轮发送；休眠记忆只在最近正文重新提到对应实体或事项时临时找回；退役与历史只用于追溯。</p>
+                    <p class="lm-fact-explainer">启用项参与预算内的事实选择；不启用项不会作为当前事实发送或自动召回。对话记录与章节摘要仍保留过去发生的事。</p>
                 </section>
                 <div class="lm-memory-toolbar">
                     <label class="lm-search">
@@ -980,7 +959,7 @@ function renderArchivedFactCard(record, label, archiveKey) {
         ${record?.reason ? `<p class="lm-discovery-reason">整理依据：${escapeHtml(record.reason)}</p>` : ''}
         ${fact.evidence ? `<details class="lm-evidence"><summary>查看原文依据</summary><blockquote>${escapeHtml(fact.evidence)}</blockquote></details>` : ''}
         <div class="lm-discovery-actions">
-            <button type="button" class="lm-button lm-button-secondary" data-restore-archive data-archive-key="${escapeHtml(archiveKey)}" data-archive-id="${escapeHtml(record.id)}" ${factMutationSaving ? 'disabled' : ''}>恢复到当前记忆</button>
+            <button type="button" class="lm-button lm-button-secondary" data-restore-archive data-archive-key="${escapeHtml(archiveKey)}" data-archive-id="${escapeHtml(record.id)}" ${factMutationSaving ? 'disabled' : ''}>启用</button>
         </div>
     </article>`;
 }
@@ -1230,9 +1209,7 @@ function bindStateTab(body) {
             title: '把这次分类应用到正式记忆？',
             description: '当前记忆会按预览分类；插件会同时保存一份完整快照，效果不对可以一键回到采用前。',
             details: [
-                `休眠 ${counts.dormant || 0} 条`,
-                `退役 ${counts.retired || 0} 条`,
-                `转入剧情历史 ${counts.historical || 0} 条`,
+                `不启用 ${(counts.retired || 0) + (counts.historical || 0)} 条`,
                 `不确定 ${counts.uncertain || 0} 条继续留在当前记忆`,
                 ...(additionDetail ? [additionDetail] : []),
             ],
@@ -1265,7 +1242,7 @@ function bindStateTab(body) {
         const confirmed = await openConfirmDialog({
             kicker: '恢复整理快照',
             title: '回到采用整理结果之前？',
-            description: '会恢复当时的当前、休眠、退役和历史事实；聊天正文不会改变。',
+            description: '会恢复当时的启用和不启用记录；聊天正文不会改变。',
             confirmLabel: '回到整理前',
             cancelLabel: '保留当前结果',
         });
@@ -1386,7 +1363,7 @@ function bindStateTab(body) {
             title: deleting ? `永久删除这 ${selected.length} 条记忆？` : `把这 ${selected.length} 条移出当前记忆？`,
             description: deleting
                 ? '这些旧发现会留下删除标记，除非后续剧情出现新的证据，否则不会被自动加回来。'
-                : '它们会进入“退役”，不再随每轮聊天发送；之后仍可逐条恢复。',
+                : '它们会设为“不启用”，不再作为当前事实发送或自动召回；之后仍可逐条启用。',
             details: [`本次共处理 ${selected.length} 条`, ...selected.slice(0, 4).map(entry => `${entry.subject || '未命名'}：${entry.value || '未填写事实'}`)],
             confirmLabel: deleting ? `永久删除 ${selected.length} 条` : `移出 ${selected.length} 条`,
             cancelLabel: '取消',
@@ -1420,7 +1397,7 @@ function bindStateTab(body) {
         renderActiveTab();
         toastr?.success?.(deleting
             ? `已永久删除 ${result.affected.length} 条记忆。`
-            : `已将 ${result.affected.length} 条记忆移入退役，可随时恢复。`);
+            : `已将 ${result.affected.length} 条记忆设为不启用，可随时启用。`);
     };
     body.querySelector('#lm-bulk-retire')?.addEventListener('click', () => runBulkFactMutation('retire'));
     body.querySelector('#lm-bulk-delete')?.addEventListener('click', () => runBulkFactMutation('delete'));
@@ -1450,7 +1427,7 @@ function bindStateTab(body) {
         factMutationStatus = '';
         updateInjection();
         renderActiveTab();
-        toastr?.success?.('已恢复到当前记忆。');
+        toastr?.success?.('已启用这条记忆。');
     }));
 
     body.querySelectorAll('.lm-discovery-card[data-candidate-id]').forEach(card => {
@@ -1526,7 +1503,7 @@ function bindStateTab(body) {
         const confirmed = await openConfirmDialog({
             kicker: '当前记忆大整理',
             title: '生成一份完整整理预览？',
-            description: '插件会逐条核对完整剧情，把事实建议分为当前、休眠、退役、历史或不确定。生成完只显示预览，不会自动移动任何正式记忆。',
+            description: '插件会逐条核对完整剧情，建议哪些事实继续启用、哪些不启用；不能确定的继续启用。生成完只显示预览，不会自动移动任何正式记忆。',
             details: [
                 `本次检查 ${usableMemoryEntries(data).length} 条当前记忆`,
                 '事实自身的建立证据不能被当作后文失效证据',

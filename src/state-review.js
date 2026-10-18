@@ -633,8 +633,7 @@ function archiveLifecycleFact(data, destination, entry, decision, event, runId, 
     });
 }
 
-function verifiedDestination(decision, { allowDormant = false } = {}) {
-    if (allowDormant && decision?.verdict === 'dormant') return 'dormant';
+function verifiedDestination(decision) {
     if (!['retire', 'history'].includes(decision?.verdict)) return 'current';
     if (!decision.evidence_valid || !decision.evidence_exact) return 'current';
     if (decision.verification?.verdict !== 'confirm') return 'current';
@@ -653,8 +652,8 @@ export function applyLifecycleAudit(data, audit, { recordEvent = recordManualEve
     for (const decision of decisions) {
         const entry = byId.get(decision.entry_id);
         if (!entry || isProtected(entry)) continue;
-        const destination = verifiedDestination(decision, { allowDormant: true });
-        if (destination === 'dormant' || (destination !== 'current' && decision.confidence === 'high')) {
+        const destination = verifiedDestination(decision);
+        if (destination !== 'current' && decision.confidence === 'high') {
             automatic.push({ entry, decision, destination });
         }
         else if (['retire', 'history'].includes(decision.verdict)
@@ -720,7 +719,7 @@ function organizationCounts(decisions = [], data = null) {
             counts.current += 1;
             continue;
         }
-        const destination = verifiedDestination(decision, { allowDormant: true });
+        const destination = verifiedDestination(decision);
         if (destination !== 'current') counts[destination] += 1;
         else if (decision.verdict === 'uncertain'
             || (['retire', 'history'].includes(decision.verdict) && decision.verification?.verdict !== 'confirm')) {
@@ -746,7 +745,7 @@ export function stageOrganizationBatch(data, audit) {
         state_signature: stateReviewSignature(data),
         decisions: structuredClone(decisions),
         counts: organizationCounts(decisions, data),
-        policy_version: 2,
+        policy_version: 3,
         floorKey: audit.floorKey || null,
         anchor_pair: audit.anchor_pair ?? null,
         anchor_fingerprint: audit.anchor_fingerprint || null,
@@ -762,7 +761,7 @@ export function refreshStagedOrganizationPolicy(data) {
     const organization = organizationState(data);
     const staged = organization.staged;
     if (!staged) return false;
-    const policyChanged = Number(staged.policy_version || 0) < 2;
+    const policyChanged = Number(staged.policy_version || 0) < 3;
     const decisions = policyChanged
         ? applyDormancyPolicy(data, staged.decisions || [])
         : staged.decisions || [];
@@ -771,7 +770,7 @@ export function refreshStagedOrganizationPolicy(data) {
     if (!policyChanged && !countsChanged) return false;
     staged.decisions = structuredClone(decisions);
     staged.counts = counts;
-    staged.policy_version = 2;
+    staged.policy_version = 3;
     staged.policy_updated_at = Date.now();
     return true;
 }
@@ -847,7 +846,7 @@ export function applyStagedOrganization(data, { recordEvent = recordManualEvent 
     for (const decision of staged.decisions || []) {
         const entry = byId.get(decision.entry_id);
         if (!entry || isProtected(entry)) continue;
-        const destination = verifiedDestination(decision, { allowDormant: true });
+        const destination = verifiedDestination(decision);
         if (destination === 'current') continue;
         const event = recordEvent(data, {
             op: 'delete',
