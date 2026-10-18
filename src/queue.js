@@ -309,6 +309,16 @@ function removeNarrativeSourceFromJob(job, index) {
  */
 export function prioritizeNarrativeSummary(messageKey, fingerprint, priority = QUEUE_PRIORITY.style_reset_narrative) {
     const { chatData, state, scopeId } = hydrateCurrentScope();
+    // Style-reset coverage must promote the combined job, never create a
+    // second summary request for a floor owned by that same confirmed turn.
+    const combined = [...inFlightJobs.values(), ...memoryQueue].find(job => job.scopeId === scopeId
+        && job.type === 'extract' && [job.payload?.userKey, job.payload?.aiKey].includes(messageKey));
+    if (combined) {
+        combined.priority = Math.max(Number(combined.priority) || 0, Number(priority) || 0);
+        sortQueue();
+        void persistScope(scopeId, chatData).then(() => pump());
+        return { jobId: combined.id, scopeId, status: combined.status };
+    }
     const running = [...inFlightJobs.values()].find(job =>
         job.scopeId === scopeId && narrativeSourceIndex(job, messageKey, fingerprint) >= 0);
     if (running) {
@@ -801,17 +811,14 @@ export async function rebuildAndEnqueuePending({
     assertChatData(originData);
     const data = originData;
     const extracted = new Set(data.extracted_keys || []);
-    let candidates = getFrozenPairs({ excludeTrailingAssistant }).filter(p => p.pairIndex > baseline);
+    const candidates = getFrozenPairs({ excludeTrailingAssistant }).filter(p => p.pairIndex > baseline);
 
-    if (forceLastSealed) {
-        const last = [...pairs].reverse().find(p => p.sealed && p.pairIndex > baseline);
-        if (last && !candidates.some(c => c.floorKey === last.floorKey)) candidates = [...candidates, last];
-    }
+    // forceLastSealed is a legacy argument. Reopening never confirms a reply.
 
     const pending = [];
     for (const p of candidates) {
         if (!extracted.has(p.floorKey)) {
-            pending.push({ floorKey: p.floorKey, pairIndex: p.pairIndex, userKey: p.userKey, aiKey: p.aiKey });
+            pending.push({ floorKey: p.floorKey, pairIndex: p.pairIndex, userKey: p.userKey, aiKey: p.aiKey, unified: true });
         }
     }
     const pendingChanged = !samePendingFloors(data.pending_floors, pending);
@@ -820,8 +827,7 @@ export async function rebuildAndEnqueuePending({
     assertChatData(originData);
     for (const item of pending) enqueue('extract', item, QUEUE_PRIORITY.extract);
 
-    const missingCh = enqueueMissingChapters(currentPairs, baseline);
-    if (missingCh) appendLog('info', `补偿入队缺失章节摘要 ×${missingCh}`);
+    // New chapters are scheduled from the unified per-message records below.
     const { scheduleNarrativeMaintenance } = await import('./narrative.js');
     await scheduleNarrativeMaintenance({ excludeTrailingAssistant });
     void pump();

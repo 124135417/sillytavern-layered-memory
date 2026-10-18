@@ -4,7 +4,7 @@ import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { summarizeChapterNotes } from './archive.js';
 import { extractAiBody, stripHtmlComments } from './body.js';
 import { QUEUE_PRIORITY } from './constants.js';
-import { getMessageFloors } from './ids.js';
+import { getMessageFloors, getBaselinePair, getPairs } from './ids.js';
 import { NARRATIVE_FLOOR_JSON_SCHEMA, NARRATIVE_FLOOR_SYSTEM } from './prompts.js';
 import { enqueue, getQueueSnapshot, prioritizeNarrativeSummary } from './queue.js';
 import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
@@ -175,13 +175,48 @@ export function clearResolvedNarrativeFailures(data) {
     return removed;
 }
 
+/** A model reply is eligible only after a later user message was sent. */
+export function confirmedNarrativeSources(options = {}) {
+    const sources = currentNarrativeSources(options);
+    const chat = SillyTavern.getContext().chat || [];
+    return sources.filter(source => chat.slice(source.messageIndex + 1).some(message => message.is_user));
+}
+
+/** Live pairs belong to the unified job; standalone jobs only repair older records. */
+function standaloneNarrativeSources(data, sources) {
+    const baseline = getBaselinePair();
+    const extracted = new Set(data.extracted_keys || []);
+    const reserved = new Set(getPairs().filter(pair => pair.pairIndex > baseline
+        && !extracted.has(pair.floorKey) && !extracted.has(`migrated:${pair.floorKey}`))
+        .flatMap(pair => [pair.userKey, pair.aiKey]));
+    return sources.filter(source => !reserved.has(source.messageKey));
+}
+
+export function storeNarrativeResults(data, results) {
+    data.narrative_summaries = data.narrative_summaries || [];
+    for (const { source, summary, segments, storyTime } of results) {
+        const next = {
+            messageKey: source.messageKey, messageIndex: source.messageIndex, role: source.role,
+            contentFingerprint: source.contentFingerprint, summary, segments,
+            story_time: storyTime, scene_context: structuredClone(source.sceneContext), updatedAt: Date.now(),
+        };
+        const index = data.narrative_summaries.findIndex(item => item.messageKey === source.messageKey);
+        // A manually edited record survives automatic background maintenance.
+        if (index >= 0 && data.narrative_summaries[index].manual_override) continue;
+        if (index >= 0) data.narrative_summaries[index] = next;
+        else data.narrative_summaries.push(next);
+    }
+    data.narrative_summaries.sort((a, b) => a.messageIndex - b.messageIndex);
+    clearResolvedNarrativeFailures(data);
+}
+
 export async function scheduleNarrativeMaintenance({ excludeTrailingAssistant = false } = {}) {
     const data = getChatData();
     const sources = currentNarrativeSources({ excludeTrailingAssistant });
     const changed = reconcileNarrativeSummaries(data, sources);
     if (changed) await saveChatData(data);
 
-    const missing = missingSources(data, sources);
+    const missing = missingSources(data, standaloneNarrativeSources(data, confirmedNarrativeSources({ excludeTrailingAssistant })));
     for (const batch of makeBatches(missing)) {
         enqueue('narrative_summary', {
             messageKeys: batch.map(item => item.messageKey),
@@ -196,6 +231,7 @@ export async function scheduleNarrativeMaintenance({ excludeTrailingAssistant = 
 function failedCoverageJob(snapshot, sources) {
     const wanted = new Map(sources.map(source => [source.messageKey, source.contentFingerprint]));
     return (snapshot.failed || []).find(job => {
+        if (job?.type === 'extract') return [job.payload?.userKey, job.payload?.aiKey].some(key => wanted.has(key));
         if (job?.type !== 'narrative_summary') return false;
         const keys = Array.isArray(job.payload?.messageKeys) ? job.payload.messageKeys : [];
         const fingerprints = Array.isArray(job.payload?.fingerprints) ? job.payload.fingerprints : [];
@@ -442,7 +478,8 @@ export function validateNarrativeBatch(raw, sources, { allowPartial = false } = 
 export async function handleNarrativeSummaryJob(payload) {
     const data = getChatData();
     const wanted = new Map((payload.messageKeys || []).map((key, index) => [key, payload.fingerprints?.[index]]));
-    const sources = currentNarrativeSources().filter(source => wanted.get(source.messageKey) === source.contentFingerprint);
+    const sources = standaloneNarrativeSources(data, confirmedNarrativeSources())
+        .filter(source => wanted.get(source.messageKey) === source.contentFingerprint);
     if (!sources.length) return;
     const missing = missingSources(data, sources);
     if (!missing.length) return;
@@ -470,26 +507,8 @@ async function summarizeNarrativeBatch(data, sources) {
         assertChatData(data);
         const parsed = parseJsonFromModel(text);
         const checked = validateNarrativeBatch(parsed, pending, { allowPartial: attempt === 1 });
-        data.narrative_summaries = data.narrative_summaries || [];
-        for (const { source, summary, segments, storyTime } of checked.results) {
-            const next = {
-                messageKey: source.messageKey,
-                messageIndex: source.messageIndex,
-                role: source.role,
-                contentFingerprint: source.contentFingerprint,
-                summary,
-                segments,
-                story_time: storyTime,
-                scene_context: structuredClone(source.sceneContext),
-                updatedAt: Date.now(),
-            };
-            const index = data.narrative_summaries.findIndex(item => item.messageKey === source.messageKey);
-            if (index >= 0) data.narrative_summaries[index] = next;
-            else data.narrative_summaries.push(next);
-        }
+        storeNarrativeResults(data, checked.results);
         if (checked.results.length) {
-            data.narrative_summaries.sort((a, b) => a.messageIndex - b.messageIndex);
-            clearResolvedNarrativeFailures(data);
             await saveChatData(data);
             if (checked.warnings.length) {
                 appendLog('warn', `逐楼剧情记录已降级保存：${checked.warnings.join('；')}`);

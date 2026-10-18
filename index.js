@@ -1,7 +1,7 @@
 import { recordTimelineReceipt } from './src/timeline-receipt.js';
 import { registerMemoryIntegration } from './src/integration.js';
 import { handleChapterSummaryJob } from './src/chapter.js';
-import { handleExtractJob } from './src/extract.js';
+import { handleExtractJob, handleConfirmedExtractJob } from './src/extract.js';
 import {
     handleMigrateChapterJob,
     handleMigrateCompleteJob,
@@ -58,7 +58,7 @@ function scheduleInjectionRefresh() {
 }
 
 function wireHandlers() {
-    registerHandler('extract', handleExtractJob);
+    registerHandler('extract', handleConfirmedExtractJob);
     registerHandler('narrative_summary', handleNarrativeSummaryJob);
     registerHandler('narrative_chapter', handleNarrativeChapterJob);
     registerHandler('chapter_summary', handleChapterSummaryJob);
@@ -94,7 +94,7 @@ async function onChatChanged() {
     const recovery = await beginBranchRecovery();
     if (ctx().chatMetadata !== originMetadata) return;
     ensureMessageIds();
-    await rebuildAndEnqueuePending({ forceLastSealed: true });
+    await rebuildAndEnqueuePending();
     if (ctx().chatMetadata !== originMetadata) return;
     if (recovery.status !== 'failed') await ensureBranchCheckpoint();
     if (ctx().chatMetadata !== originMetadata) return;
@@ -255,6 +255,7 @@ jQuery(async () => {
 
     eventSource.on(event_types.MESSAGE_SENT, (mesId) => {
         ensureMessageIds();
+        queueCompletedMessageMaintenance(mesId);
     });
 
     const historyMutationHandler = (mesId) => {

@@ -1,7 +1,7 @@
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
-import { getBaselinePair, getPairTexts, getPairs } from './ids.js';
+import { getBaselinePair, getPairTexts, getPairs, getFrozenPairs } from './ids.js';
 import { mergeExtractResult, renderStateTableCompact } from './merge.js';
-import { EXTRACT_JSON_SCHEMA, EXTRACT_SYSTEM } from './prompts.js';
+import { EXTRACT_JSON_SCHEMA, EXTRACT_SYSTEM, CONFIRMED_MEMORY_SYSTEM, CONFIRMED_MEMORY_JSON_SCHEMA } from './prompts.js';
 import { appendLog, assertChatData, getChatData, getSettings, saveChatData } from './settings.js';
 import { normalizeExtractOutput } from './validate.js';
 import { QUEUE_PRIORITY } from './constants.js';
@@ -11,12 +11,17 @@ import { stripStyleResetCommands } from './style-reset.js';
 import { automaticStateReviewRequest } from './state-review.js';
 import { pairMessageSources } from './fact-source.js';
 import { snapshotObsoleteTargets } from './obsolete.js';
+import { currentNarrativeSources, buildNarrativeBatchPrompt, validateNarrativeBatch, storeNarrativeResults, enqueueMissingNarrativeChapters } from './narrative.js';
+import { TEMPORAL_EVENT_INSTRUCTION } from './timeline.js';
 
 const extractCommitStateByChat = new WeakMap();
 const EXTRACT_MUTATION_KEYS = [
     'state_table',
     'retired_facts',
     'turn_summaries',
+    'narrative_summaries',
+    'extracted_keys',
+    'pending_floors',
     'review_queue',
     'fact_ledger',
     'floor_events',
@@ -56,7 +61,7 @@ function restoreExtractMutationState(data, snapshot) {
     for (const key of EXTRACT_MUTATION_KEYS) data[key] = snapshot[key];
 }
 
-async function runExtractOnce(pair, { retryNote = '' } = {}) {
+async function runExtractOnce(pair, { retryNote = '', unified = false } = {}) {
     const data = getChatData();
     const pairTexts = getPairTexts(pair);
     const userText = stripStyleResetCommands(pairTexts.userText).text;
@@ -65,7 +70,8 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
     const sourceText = `${userText}\n${body.text}`;
     const obsoleteTargets = snapshotObsoleteTargets(data.state_table);
     const tableRender = renderStateTableCompact(data.state_table);
-    const userPrompt = [
+    const narrativeSources = unified ? currentNarrativeSources().filter(source => [pair.userKey, pair.aiKey].includes(source.messageKey)) : [];
+    const userPrompt = unified ? [retryNote, '## 当前状态表', tableRender, buildNarrativeBatchPrompt(narrativeSources, retryNote)].filter(Boolean).join('\n\n') : [
         retryNote ? `上次校验失败原因：${retryNote}\n请修正后重新输出。\n` : '',
         '## 当前状态表\n',
         tableRender,
@@ -77,9 +83,9 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
 
     const { text } = await callAuxModel({
         purpose: 'extract',
-        systemPrompt: EXTRACT_SYSTEM,
+        systemPrompt: unified ? CONFIRMED_MEMORY_SYSTEM + TEMPORAL_EVENT_INSTRUCTION : EXTRACT_SYSTEM,
         userPrompt,
-        jsonSchema: EXTRACT_JSON_SCHEMA,
+        jsonSchema: unified ? CONFIRMED_MEMORY_JSON_SCHEMA : EXTRACT_JSON_SCHEMA,
         temperature: 0,
     });
 
@@ -87,12 +93,21 @@ async function runExtractOnce(pair, { retryNote = '' } = {}) {
     if (!raw) {
         throw new Error('提取结果不是合法 JSON');
     }
-    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode, obsoleteTargets };
+    return { raw, sourceText, userText, aiText: body.text, bodyMode: body.mode, obsoleteTargets, narrativeSources };
 }
 
 async function prepareExtract(pair, payload, retryNote = '') {
-    const { raw, sourceText, bodyMode, obsoleteTargets } = await runExtractOnce(pair, { retryNote });
+    const { raw, sourceText, bodyMode, obsoleteTargets, narrativeSources } = await runExtractOnce(pair, { retryNote, unified: payload.unified });
     const normalized = normalizeExtractOutput(raw, 'per_floor');
+    let narrativeResults = null;
+    if (payload.unified) {
+        const checked = validateNarrativeBatch(raw, narrativeSources);
+        if (!checked.ok || narrativeSources.length !== 2) throw new Error(`合并记忆记录校验失败：${checked.errors.join('；')}`);
+        narrativeResults = checked.results;
+        // Compatibility data is derived locally, never another requested summary.
+        normalized.turnSummary = checked.results.map(item => item.summary).join(' ');
+        normalized.storyTimeRaw = [...checked.results].reverse().find(item => item.storyTime)?.storyTime || null;
+    }
     if (!normalized.turnSummary) throw new Error('逐轮剧情记录为空或过长');
     if (payload.summaryOnly) {
         normalized.adds = [];
@@ -100,7 +115,7 @@ async function prepareExtract(pair, payload, retryNote = '') {
         normalized.conflicts = [];
         normalized.obsolete = [];
     }
-    return { normalized, sourceText, bodyMode, obsoleteTargets };
+    return { normalized, sourceText, bodyMode, obsoleteTargets, narrativeResults };
 }
 
 function extractionAlreadyComplete(data, pair, payload) {
@@ -113,6 +128,10 @@ function extractionAlreadyComplete(data, pair, payload) {
 }
 
 async function commitPreparedExtract({ prepared, pair, payload, originData, attempt }) {
+    if (payload.unified && !getFrozenPairs().some(current => current.floorKey === pair.floorKey
+        && current.contentFingerprint === pair.contentFingerprint)) {
+        return { stale: true, retry: false };
+    }
     const snapshot = captureExtractMutationState(originData);
     try {
         const result = mergeExtractResult(prepared.normalized, {
@@ -133,6 +152,7 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
             persist: false,
         });
         assertChatData(originData);
+        if (prepared.narrativeResults) storeNarrativeResults(originData, prepared.narrativeResults);
         if (!payload.summaryOnly && prepared.normalized.adds.length > 0 && result.discarded > 0 && result.applied === 0 && attempt === 0) {
             restoreExtractMutationState(originData, snapshot);
             return {
@@ -155,6 +175,11 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
     }
 }
 
+/** All normal and persisted live extract jobs use the same combined response. */
+export async function handleConfirmedExtractJob(payload) {
+    return handleExtractJob({ ...payload, unified: true });
+}
+
 export async function handleExtractJob(payload) {
     const originData = getChatData();
     const settings = getSettings();
@@ -170,6 +195,8 @@ export async function handleExtractJob(payload) {
         appendLog('warn', '提取跳过：找不到定格楼', payload);
         return;
     }
+
+    if (payload.unified && !getFrozenPairs().some(current => current.floorKey === pair.floorKey)) return;
 
     const baseline = getBaselinePair();
     if (!payload.ignoreBaseline && pair.pairIndex <= baseline) {
@@ -204,6 +231,7 @@ export async function handleExtractJob(payload) {
                     originData,
                     attempt,
                 });
+                if (committed.stale) return;
                 if (committed.retry) {
                     retryNote = committed.retryNote;
                     continue;
@@ -214,8 +242,9 @@ export async function handleExtractJob(payload) {
                     return;
                 }
                 appendLog('info', `提取完成 楼#${pair.pairIndex}: +${committed.result.applied} 丢${committed.result.discarded} 冲突${committed.result.conflicts}`);
+                if (payload.unified) enqueueMissingNarrativeChapters(originData);
                 if (!payload.ignoreBaseline) {
-                    maybeEnqueueChapter(pair.pairIndex);
+                    if (!payload.unified) maybeEnqueueChapter(pair.pairIndex);
                     maybeEnqueueProofread();
                     maybeEnqueueStateLifecycleReview(pair.pairIndex);
                 }

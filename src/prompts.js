@@ -215,6 +215,30 @@ export const STATE_GC_SYSTEM = `你是状态表整理员。合并同类冗余条
 pinned 条目不得改动。
 只输出 JSON：{"keep_ids":["e_0001"],"drop_ids":["e_0002"],"merged":[{"from_ids":["e_0003","e_0004"],"entry":{"slot":"...","subject":"...","object":"","value":"..."}}]}`;
 
+/** One confirmed pair, one response: per-message continuity plus the fact diff. */
+export const CONFIRMED_MEMORY_SYSTEM = NARRATIVE_FLOOR_SYSTEM.slice(0, NARRATIVE_FLOOR_SYSTEM.lastIndexOf('只输出 JSON：'))
+    + '\n同时检查完整当前事实表。事实判断以本次两个楼的剧情正文为依据。\n'
+    + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('再检查当前事实：'), EXTRACT_SYSTEM.indexOf('另写 story_time：'))
+    + EXTRACT_SYSTEM.slice(EXTRACT_SYSTEM.indexOf('槽位：'), EXTRACT_SYSTEM.indexOf('## few-shot'))
+    + '\n事实数组每项必须包含 {subject,object,topic,value,evidence}：subject 是明确主体，object 是关联对象（没有则空字符串），topic 是具体事项，value 是持续事实，evidence 是正文连续原句。关系项另用 old_value/new_value 表示变化；不能漏掉 subject，不能把主体只写在 value 里。'
+    + '\nfloors 每项的完整结构为 {floor,summary,segments:[{time_change:null,events:[{text,evidence}]}]}；保留各楼原编号，events 只放在 segments 内，不要在 floors 下重复一份。'
+    + '\n只返回一个 JSON 对象，同时包含 floors、promise、body、relationship、identity、possession、world、other、obsolete、conflicts。floors 使用上面规定的逐楼结构；不要另外生成 turn_summary 或 story_time。没有事实变化的槽位写“无变化”，obsolete/conflicts 没有则 []。';
+
+export const CONFIRMED_MEMORY_JSON_SCHEMA = {
+    ...EXTRACT_JSON_SCHEMA,
+    name: 'ConfirmedMemoryTurn',
+    description: 'Per-message narrative records and fact changes from one confirmed turn',
+    value: {
+        type: 'object',
+        properties: {
+            ...Object.fromEntries(Object.entries(EXTRACT_JSON_SCHEMA.value.properties)
+                .filter(([key]) => !['turn_summary', 'story_time'].includes(key))),
+            floors: NARRATIVE_FLOOR_JSON_SCHEMA.value.properties.floors,
+        },
+        required: ['floors', 'obsolete'],
+    },
+};
+
 export const STATE_REVIEW_SYSTEM = `你是“当前记忆”生命周期整理员，不是剧情作者。输入包含一批必须逐条判定的当前状态，以及带稳定 source_id 的剧情证据目录。
 
 目标：逐条判断状态是否仍描述“现在”。你不能新增、改写或补完事实；完整剧情历史会继续保存在逐楼记录和章节摘要中。这里提供的是按章节压缩的全局目录和最新尾部楼层，用于定位依据；后续程序会再展开对应范围的逐字原文。
