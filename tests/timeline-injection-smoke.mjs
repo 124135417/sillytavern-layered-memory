@@ -35,3 +35,21 @@ assert.equal(recordTimelineReceipt(context, 2, { message: partial, swipeId: unde
 assert.equal(buildCoreMemoryParts({ data, settings, context }).timeline.current.date, '2024-08-17');
 assert.equal(recordTimelineReceipt(context, 2, { message: partial, swipeId: undefined, stopped: false, request: { metadata: context.chatMetadata } }), true);
 assert.equal(buildCoreMemoryParts({ data, settings, context }).timeline.current.date, '2024-10-17');
+
+const { renderCurrentStoryClockMacro, registerPresetMemoryMacro } = await import('../src/inject.js');
+const macros = new Map(); context.registerMacro = (name, value) => macros.set(name, value);
+assert(registerPresetMemoryMacro());
+assert(macros.has('layered_memory_clock'));
+assert.match(renderCurrentStoryClockMacro(), /2024-10-17 12:00（中午十二点整/u);
+setActiveGenerationType('swipe', { excludeTrailingAssistant: true });
+assert.match(macros.get('layered_memory_clock')(), /2024-08-17/u);
+assert.doesNotMatch(macros.get('layered_memory_clock')(), /2024-10-17/u);
+clearActiveGenerationType();
+settings.timelineEnabled = false;
+assert.equal(renderCurrentStoryClockMacro(), '');
+settings.timelineEnabled = true; settings.enabled = false;
+assert.equal(renderCurrentStoryClockMacro(), '');
+
+settings.enabled = true;
+chat.at(-1).mes = '『书店｜2024-10-17｜14:28』\n他看向时钟。';
+assert.match(renderCurrentStoryClockMacro(), /14:28（下午两点二十八分/u);

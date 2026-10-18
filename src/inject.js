@@ -93,7 +93,7 @@ export function buildCoreMemoryParts({
     const trailingMessage = resolvedExcludeTrailingAssistant && !context?.chat?.at?.(-1)?.is_user ? context?.chat?.at?.(-2) : context?.chat?.at?.(-1);
     const trailingUserText = trailingMessage?.is_user ? getActiveMesText(trailingMessage) : '';
     const recentNarrativeText = [
-        ...resolvedNarrativeSources.slice(-12).map(source => source.narrativeText || source.text || ''),
+        ...resolvedNarrativeSources.slice(-12).map(source => source.narrativeText ?? source.text ?? ''),
         trailingUserText,
     ].filter(Boolean).join('\n');
     const dormantAllowance = Math.min(600, Math.max(0, Math.floor(Number(settings.budgetL1 || 2000) * 0.25)));
@@ -150,6 +150,24 @@ export function renderPresetMemoryMacro() {
     return renderCoreMemoryPayload({ settings, generationType: activeGenerationType });
 }
 
+/** Optional short clock anchor for a preset's final instructions. No history duplication. */
+export function renderCurrentStoryClockMacro() {
+    const settings = getSettings();
+    if (!settings.enabled || settings.timelineEnabled === false) return '';
+    const now = buildChatTimeline().current;
+    if (!now?.date) return '';
+    const minute = Number.isInteger(now.minute)
+        ? ` ${String(Math.floor(now.minute / 60)).padStart(2, '0')}:${String(now.minute % 60).padStart(2, '0')}` : '';
+    const hour = Number.isInteger(now.minute) ? Math.floor(now.minute / 60) : null;
+    const period = hour === null ? '' : hour < 6 ? '凌晨' : hour < 9 ? '早晨'
+        : hour < 12 ? '上午' : hour < 13 ? '中午' : hour < 18 ? '下午' : hour < 19 ? '傍晚' : '晚上';
+    const chinese = value => value < 10 ? '零一二三四五六七八九'[value]
+        : `${value >= 20 ? '零一二三四五六七八九'[Math.floor(value / 10)] : ''}十${value % 10 ? '零一二三四五六七八九'[value % 10] : ''}`;
+    const spokenHour = hour === null ? '' : hour === 0 ? '零' : hour % 12 === 2 ? '两' : chinese(hour % 12 || 12);
+    const spoken = period ? `${period}${spokenHour}点${now.minute % 60 ? `${chinese(now.minute % 60)}分` : '整'}` : '';
+    return `本轮承接时钟：${now.date}${minute}${spoken ? `（${spoken}，24小时制）` : ''}。未明确跳时不倒退；时段称呼、正文当前报时和摘要起止使用同一条时间线。正文无须报时就不额外编精确钟点。`;
+}
+
 export function registerPresetMemoryMacro() {
     const context = SillyTavern.getContext();
     if (typeof context?.registerMacro !== 'function') {
@@ -157,6 +175,7 @@ export function registerPresetMemoryMacro() {
         console.warn('[layered-memory] 当前 SillyTavern 未提供 registerMacro，使用兼容注入');
         return false;
     }
+    context.registerMacro('layered_memory_clock', () => renderCurrentStoryClockMacro(), '只插入当前分支的简短剧情时钟，适合预设末尾核对时间');
     context.registerMacro(
         MEMORY_ANCHOR_MACRO,
         () => renderPresetMemoryMacro(),

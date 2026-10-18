@@ -1,3 +1,4 @@
+import { filterAssistantBlocks } from './assistant-blocks.js';
 import { filterModelSource } from './request-context.js';
 
 /**
@@ -9,7 +10,7 @@ export function stripHtmlComments(value) {
 }
 
 export function extractAiBody(aiText, pattern = '') {
-    const fullText = filterModelSource(String(aiText ?? ''));
+    const fullText = filterAssistantBlocks(filterModelSource(String(aiText ?? '')));
     const rule = String(pattern ?? '').trim();
     if (!rule) {
         return { text: stripHtmlComments(fullText), mode: 'full', matched: true, error: '' };
