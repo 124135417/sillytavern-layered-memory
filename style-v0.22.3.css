@@ -1060,3 +1060,83 @@ body.lm-memory-center-open {
 @media (max-width: 480px) { .lm-time-event-head { display: grid; gap: 4px; } .lm-time-actions > span { flex-basis: 100%; } }
 
 @media (max-width: 430px) { .lm-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 42px; } }
+
+/* Own control contrast instead of inheriting the host's native dark check marks. */
+.layered-memory-root,
+.lm-dialog { color-scheme: dark; }
+.layered-memory-root input:is([type="checkbox"], [type="radio"]),
+.lm-dialog input:is([type="checkbox"], [type="radio"]) {
+    appearance: none;
+    -webkit-appearance: none;
+    display: inline-grid;
+    place-content: center;
+    box-sizing: border-box;
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0;
+    margin: 0;
+    flex: 0 0 22px;
+    vertical-align: middle;
+    background: #242424;
+    border: 2px solid #bdbdbd;
+    border-radius: 5px;
+    color: #fff;
+    cursor: pointer;
+    box-shadow: none;
+}
+.layered-memory-root input[type="radio"],
+.lm-dialog input[type="radio"] { border-radius: 50%; }
+.layered-memory-root input:is([type="checkbox"], [type="radio"])::after,
+.lm-dialog input:is([type="checkbox"], [type="radio"])::after {
+    content: "";
+    display: block;
+    width: 10px;
+    height: 6px;
+    border: solid #fff;
+    border-width: 0 0 3px 3px;
+    transform: translateY(-2px) rotate(-45deg);
+    visibility: hidden;
+}
+.layered-memory-root input[type="radio"]::after,
+.lm-dialog input[type="radio"]::after {
+    width: 10px;
+    height: 10px;
+    border: 0;
+    border-radius: 50%;
+    background: #fff;
+    transform: none;
+}
+.layered-memory-root input:is([type="checkbox"], [type="radio"]):checked,
+.lm-dialog input:is([type="checkbox"], [type="radio"]):checked,
+.layered-memory-root input[type="checkbox"]:indeterminate,
+.lm-dialog input[type="checkbox"]:indeterminate { border-color: #ffd39c; background: #49321c; }
+.layered-memory-root input:checked::after,
+.lm-dialog input:checked::after,
+.layered-memory-root input:indeterminate::after,
+.lm-dialog input:indeterminate::after { visibility: visible; }
+.layered-memory-root input[type="checkbox"]:indeterminate::after,
+.lm-dialog input[type="checkbox"]:indeterminate::after { height: 0; border-width: 0 0 3px; transform: none; }
+.layered-memory-root :is(button, input, select, textarea, summary, a):focus-visible,
+.lm-dialog :is(button, input, select, textarea, summary, a):focus-visible {
+    outline: 2px solid #ffe2bc;
+    outline-offset: 3px;
+}
+.layered-memory-root input:is([type="checkbox"], [type="radio"]):disabled,
+.lm-dialog input:is([type="checkbox"], [type="radio"]):disabled { opacity: .5; cursor: not-allowed; }
+.layered-memory-root select,
+.lm-dialog select { color-scheme: dark; }
+.layered-memory-root :is(.lm-icon-button, .lm-text-button, summary):hover,
+.lm-dialog :is(.lm-icon-button, .lm-text-button, summary):hover { color: #ffe2bc; }
+@media (forced-colors: active) {
+    .layered-memory-root input:is([type="checkbox"], [type="radio"]),
+    .lm-dialog input:is([type="checkbox"], [type="radio"]) { appearance: auto; -webkit-appearance: auto; }
+    .layered-memory-root input:is([type="checkbox"], [type="radio"])::after,
+    .lm-dialog input:is([type="checkbox"], [type="radio"])::after { display: none; }
+}
+/* SillyTavern also draws a check in ::before; suppress that inherited glyph. */
+.layered-memory-root input:is([type="checkbox"], [type="radio"])::before,
+.lm-dialog input:is([type="checkbox"], [type="radio"])::before { content: none; display: none; }
+.layered-memory-root input:is([type="checkbox"], [type="radio"]),
+.lm-dialog input:is([type="checkbox"], [type="radio"]) { filter: none; transform: none; }
