@@ -1,5 +1,5 @@
 import { buildChatTimeline, buildCoreMemoryParts, isTimelineBusy, updateInjection } from '../inject.js';
-import { makeTimelineCorrection, parseCalendarDate, renderTimelinePrompt } from '../timeline.js';
+import { makeTimelineCorrection, parseCalendarDate } from '../timeline.js';
 import { getChatData, getSettings, saveChatData, saveSettings } from '../settings.js';
 import { openFormDialog, openMessageDialog } from './dialogs.js';
 import { displayNarrativeText } from '../quality.js';
@@ -61,7 +61,7 @@ async function editTime(eventKey, rerender, clockSourceKey = null) {
 }
 export function bindTimelineTab(body, rerender) {
     const reportSaveError = error => { console.error(error); void openMessageDialog({ title: '时间校正未保存', description: error?.message || '保存失败，请重试。原文没有改动。' }); };
-    body.querySelector('.lm-time-preview')?.addEventListener('toggle', event => { if (event.target.open) event.target.querySelector('pre').textContent = buildCoreMemoryParts().temporal || '当前时间定位未启用或还没有可定位的日期。'; });
+    body.querySelector('.lm-time-preview')?.addEventListener('toggle', event => { if (event.target.open) { const parts = buildCoreMemoryParts(); event.target.querySelector('pre').textContent = parts.temporal ? [parts.temporal, '以下为本轮选中的历史摘要（时间已合入，未另发完整事件表）：', parts.l2].filter(Boolean).join('\n\n') : '当前时间定位未启用或还没有可定位的日期。'; } });
     body.querySelectorAll('[data-time-clock-edit]').forEach(button => button.addEventListener('click', () => void editTime(null, rerender, button.dataset.timeClockEdit).catch(reportSaveError)));
     body.querySelectorAll('[data-time-clock-source]').forEach(button => button.addEventListener('click', () => {
         const source = buildChatTimeline().sources.find(s => s.messageKey === button.dataset.timeClockSource);

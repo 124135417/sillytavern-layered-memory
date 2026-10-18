@@ -13,6 +13,7 @@ data.narrative_summaries = [{ messageKey: 'a', contentFingerprint: messageConten
 let parts = buildCoreMemoryParts({ data, settings, context });
 assert.equal(parts.timeline.current.date, '2024-08-17');
 assert.match(parts.temporal, /距今31天/u);
+assert(!parts.temporal.includes('两人一起吃饭'), 'clock must not duplicate recent raw events');
 assert(!parts.raw.includes('一个月后'), 'current user input must not be duplicated into raw history');
 assert.match(renderCoreMemoryPayload({ data, settings, context }), /唯一当前剧情日期：2024-08-17/u);
 settings.timelineEnabled = false;

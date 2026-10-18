@@ -219,34 +219,90 @@ export function buildTimeline({ sources = [], records = [], corrections = [], in
     }), conflicts, sources };
 }
 
-export function renderTimelinePrompt(timeline, { query = '', maxChars = 5000 } = {}) {
+/** Compact clock only. Event prose belongs to selected history, never a second retrieval list. */
+export function renderTimelinePrompt(timeline, { rawFloors = [] } = {}) {
     if (!timeline?.current && !timeline?.events?.length && !timeline?.conflicts?.length) return '';
     const now = timeline.current;
     const weekday = now ? ['日', '一', '二', '三', '四', '五', '六'][dateObject(now.date).getUTCDay()] : '';
     const time = Number.isInteger(now?.minute) ? ` ${String(Math.floor(now.minute / 60)).padStart(2, '0')}:${String(now.minute % 60).padStart(2, '0')}` : '';
-    const intro = `[剧情时间定位]\n唯一当前剧情日期：${now ? `${now.date} 星期${weekday}${time}（来源第${now.floor}楼）` : '尚未明确；不使用现实日期补齐'}。\n以下日期由可见分支计算，历史正文中的“昨天、明天、一个月前”一律相对当时，不能相对现在重用。记录日期不等于事件发生日期；过去经历不能重演成刚发生，未来提及不等于已兑现；过期约定不是新的待办，不能拉回旧剧情。回忆、假设、预约不推动当前日期；允许真实剧情跳时。未知日期保持未知。\n`;
-    const terms = new Set((text(query).match(/[\p{L}\p{N}]{2,}/gu) || []).flatMap(t => [...t].slice(0, -1).map((_, i) => t.slice(i, i + 2))));
-    const score = e => [...terms].reduce((n, term) => n + (e.text.includes(term) ? 1 : 0), 0);
-    const scores = new Map(timeline.events.map(e => [e.key, score(e)]));
-    const ranked = [...timeline.events].sort((a, b) => scores.get(b.key) - scores.get(a.key) || b.floor - a.floor);
-    const warning = timeline.conflicts.slice(-5).map(c => `- 时间冲突，第${c.floor}楼：${c.reason}`).join('\n');
-    const selected = [];
-    let used = intro.length + warning.length + 20;
-    for (const event of ranked) {
-        const line = `- 第${event.floor}楼｜${event.date || '发生日期未知'}｜${event.relative}${event.kind === 'future' ? '｜未来提及/安排，不能据日期认定已发生' : ''}${event.recordedDate ? `｜记录于${event.recordedDate}` : ''}${event.referenceDate ? `｜原文“${event.referenceLabel}”指${event.referenceDate}（${relativeCalendarLabel(event.referenceDate, now?.date)}）` : ''}：${event.text}\n`;
-        if (used + line.length > maxChars) continue;
-        used += line.length; selected.push({ line, floor: event.floor });
-    }
-    return `${intro}${selected.sort((a, b) => a.floor - b.floor).map(e => e.line).join('')}${warning}\n[/剧情时间定位]`;
+    const raw = new Set(rawFloors);
+    const clocks = (timeline.clocks || []).filter(c => raw.has(c.floor) && c.date);
+    const span = clocks.length ? `近期原文第${clocks[0].floor}–${clocks.at(-1).floor}楼记录于${recordSpan(clocks, now?.date)}。\n` : '';
+    return `[剧情时间定位]\n唯一当前剧情日期：${now ? `${now.date} 星期${weekday}${time}（来源第${now.floor}楼）` : '尚未明确；不使用现实日期补齐'}。\n历史“昨天/明天”等相对原记录日期，不相对现在；记录日期不等于事件发生日期。摘要内事件时间优先于段落记录时点，未标注的往事发生日保持未知。过去经历不重演成刚发生；回忆、假设、预约不推进当前日期；未来安排即使到期也不代表已兑现，不得重演成刚发生或新的待办。\n${span}[/剧情时间定位]`;
 }
 
-/** Add record-time bounds to compressed history without changing its prose. */
+function recordSpan(clocks, now) {
+    const first = clocks[0].date, last = clocks.at(-1).date;
+    return first === last ? `${first}（${relativeCalendarLabel(first, now)}）`
+        : `${first}→${last}（${relativeCalendarLabel(first, now)}→${relativeCalendarLabel(last, now)}）`;
+}
+
+function eventTimeLabel(event) {
+    const occurrence = event.kind === 'future' ? `未来安排：${event.date || '日期未知'}，${event.relative}，兑现未确认`
+        : event.kind === 'ongoing' ? event.relative
+            : `${event.date || '发生日未知'}${event.date ? `，${event.relative}` : ''}`;
+    return `${occurrence}${event.referenceDate ? `；原文“${event.referenceLabel}”指${event.referenceDate}` : ''}`;
+}
+
+/** Attach dates only to event wording already present in a selected summary.
+ * No fuzzy semantic match: conflicting dates for identical wording stay unassigned.
+ * Most same-day events inherit the section's record date without per-event overhead.
+ */
 export function annotateTimelineHistory(value, timeline) {
     const clocks = timeline?.clocks || [];
-    return String(value || '').replace(/^(### [^\n]*?第 (\d+)(?:[–—-](\d+))? 楼[^\n]*)$/gmu, (heading, _title, first, last) => {
-        const matched = clocks.filter(c => c.floor >= Number(first) && c.floor <= Number(last || first) && c.date);
-        if (!matched.length) return heading;
-        const start = matched[0].date, end = matched.at(-1).date;
-        return `${heading}\n【本段记录时点：${start}${end !== start ? ` → ${end}` : ''}；${start !== end ? `${relativeCalendarLabel(start, timeline.current?.date)} → ` : ''}${relativeCalendarLabel(end, timeline.current?.date)}。段内往事、计划按各自发生时间理解】`;
+    const events = timeline?.events || [];
+    return String(value || '').replace(/^(### [^\n]*?第 (\d+)(?:[–—-](\d+))? 楼[^\n]*)\n([\s\S]*?)(?=^### |^## 剧情记忆结束|(?![\s\S]))/gmu, (_block, heading, first, last, body) => {
+        const start = Number(first), end = Number(last || first);
+        const matched = clocks.filter(c => c.floor >= start && c.floor <= end && c.date);
+        const dateSet = new Set(matched.map(c => c.date));
+        const candidates = events.filter(e => e.floor >= start && e.floor <= end);
+        const labels = new Map();
+        for (const event of candidates) {
+            const phrase = text(event.text).replace(/[。！？.!?]+$/u, '');
+            if (phrase.length < (start === end ? 2 : 4) || !body.includes(phrase)) continue;
+            const entry = labels.get(phrase) || { labels: new Set(), special: false };
+            entry.labels.add(eventTimeLabel(event));
+            entry.special ||= event.manual || event.referenceDate || event.kind !== 'current'
+                || event.date !== event.recordedDate || dateSet.size > 1;
+            labels.set(phrase, entry);
+        }
+        const spans = [];
+        for (const [phrase, entry] of labels) {
+            let offset = 0, at;
+            while ((at = body.indexOf(phrase, offset)) !== -1) {
+                const end = at + phrase.length;
+                spans.push({ at, end, entry, label: [...entry.labels][0] });
+                offset = end;
+            }
+        }
+        const overlaps = (a, b) => a.at < b.end && a.end > b.at;
+        const conflicts = span => spans.some(other => overlaps(span, other)
+            && (other.entry.labels.size !== 1 || other.label !== span.label));
+        const positions = [];
+        // Prefer a longer exact match only when all overlapping matches agree.
+        for (const span of spans.sort((a, b) => (b.end - b.at) - (a.end - a.at))) {
+            if (span.entry.special && span.entry.labels.size === 1 && !conflicts(span)
+                && !positions.some(p => overlaps(span, p))) positions.push(span);
+        }
+        // Compression can remove punctuation or retain just a verbatim clause.
+        // Require that entire clause (>=12 letters/digits) exists in source event
+        // wording, and all supporting events agree. Do not date semantic paraphrases.
+        const normalize = value => value.replace(/[^\p{L}\p{N}]/gu, '');
+        const normalized = candidates.map(event => ({ event, value: normalize(event.text) }));
+        for (const match of body.matchAll(/[^，。！？；\n]+/gu)) {
+            const clause = normalize(match[0]);
+            if (clause.length < 12 || /^\s*(?:###|【)/u.test(match[0])) continue;
+            const supporting = normalized.filter(item => item.value.includes(clause)).map(item => item.event);
+            if (!supporting.length) continue;
+            const agreed = new Set(supporting.map(eventTimeLabel));
+            const special = supporting.some(event => event.manual || event.referenceDate || event.kind !== 'current'
+                || event.date !== event.recordedDate || dateSet.size > 1);
+            const at = match.index, end = at + match[0].length;
+            const span = { at, end, label: [...agreed][0] };
+            if (special && agreed.size === 1 && !conflicts(span) && !positions.some(p => overlaps(span, p))) positions.push(span);
+        }
+        for (const { at, label } of positions.sort((a, b) => b.at - a.at)) body = `${body.slice(0, at)}〔事件：${label}〕${body.slice(at)}`;
+        const bounds = matched.length ? `\n【本段记录时点：${recordSpan(matched, timeline.current?.date)}；仅为记录时间，往事/计划不据此定日】` : '';
+        return `${heading}${bounds}\n${body}`;
     });
 }

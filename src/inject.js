@@ -130,7 +130,7 @@ export function buildCoreMemoryParts({
         narrativeSources: resolvedNarrativeSources,
         styleReset,
         timeline,
-        temporal: settings.timelineEnabled !== false ? renderTimelinePrompt(timeline, { query: trailingUserText || recentNarrativeText.slice(-1600) }) : '',
+        temporal: settings.timelineEnabled !== false ? renderTimelinePrompt(timeline, { rawFloors: rawWindow.sources.map(source => source.messageIndex) }) : '',
     }, readInjectionFilter(context));
 }
 

@@ -21,7 +21,8 @@ assert.equal(t.current.date, '2024-08-17');
 assert.equal(t.events[0].date, '2024-07-17');
 assert.match(t.events[0].relative, /31天/u);
 assert.match(renderTimelinePrompt(t), /2024-08-17 星期六/u);
-assert.match(renderTimelinePrompt(t), /2024-07-17.*距今31天/u);
+assert.match(renderTimelinePrompt(t, { rawFloors: [0] }), /2024-07-17.*距今31天/u);
+assert(!renderTimelinePrompt(t).includes('两人一起吃饭'), 'clock block never repeats event prose');
 assert.match(annotateTimelineHistory('### 章节摘要｜第 0–1 楼\n旧事', t), /本段记录时点.*距今/u);
 
 let c = source(2, '他回忆：“昨天我们吵过架。”', '2024-08-17');
@@ -44,7 +45,7 @@ t = buildTimeline({ sources: [a, plan], records: [record(plan, plan.narrativeTex
 assert.equal(t.current.date, '2024-07-17');
 assert.equal(t.events[0].date, '2024-07-18');
 assert.equal(t.events[0].kind, 'future');
-assert.match(renderTimelinePrompt(t), /尚未发生/u);
+assert.match(annotateTimelineHistory('### 逐楼剧情记录｜第 1 楼\n他约好明天来见面。', t), /未来安排：2024-07-18/u);
 
 let recall = source(1, '他想起小时候的第一次远行。');
 t = buildTimeline({ sources: [a, recall], records: [record(recall, recall.narrativeText)] });
@@ -84,7 +85,7 @@ const question = source(1, '他问昨天的钥匙在哪里。', '2024-07-18');
 const asked = buildTimeline({ sources: [a, question], records: [record(question, question.narrativeText)] });
 assert.equal(asked.events[0].date, '2024-07-18', 'asking today about yesterday is not an event that happened yesterday');
 assert.equal(asked.events[0].referenceDate, '2024-07-17');
-assert.match(renderTimelinePrompt(asked), /原文“昨天”指2024-07-17/u);
+assert.match(annotateTimelineHistory('### 逐楼剧情记录｜第 1 楼\n他问昨天的钥匙在哪里。', asked), /原文“昨天”指2024-07-17/u);
 assert(renderTimelinePrompt(t, { maxChars: 1000 }).length <= 1000);
 const multi = source(1, '第二天，他开门。三天后，他关门。');
 const multiRecord = { ...record(multi, '先开门后关门'), segments: [
@@ -101,3 +102,52 @@ assert.equal(buildTimeline({ sources: [midnight] }).current.date, '2025-01-01');
 assert.equal(buildTimeline({ sources: [midnight] }).current.minute, 5);
 const noTime = { ...source(1, '他开门。'), text: '『书店｜2024-07-18｜清晨』\n他开门。' };
 assert.equal(buildTimeline({ sources: [a, noTime] }).current.minute, null, 'new day with unknown hour must not inherit yesterday exact hour');
+
+// Multiple events in one floor keep their own occurrence dates; GUI data stays complete.
+const mixed = source(1, '他今天来吃饭。他回忆昨天在码头丢失钥匙。他约好明天再来。', '2024-07-18');
+const mixedRecord = { ...record(mixed, mixed.narrativeText), segments: [{ events: [
+ { text: '他今天来吃饭。', evidence: '他今天来吃饭。' },
+ { text: '他回忆昨天在码头丢失钥匙。', evidence: '昨天在码头丢失钥匙', when: { kind: 'past', label: '昨天', evidence: '昨天在码头丢失钥匙' } },
+ { text: '他约好明天再来。', evidence: '他约好明天再来。' },
+] }] };
+const mixedTimeline = buildTimeline({ sources: [a, mixed], records: [mixedRecord] });
+const body = '### 逐楼剧情记录｜第 1 楼\n他今天来吃饭。他回忆昨天在码头丢失钥匙。他约好明天再来。\n【本段范围结束｜第 1 楼】';
+const annotated = annotateTimelineHistory(body, mixedTimeline);
+assert.match(annotated, /〔事件：2024-07-17，距今1天[^〕]*〕他回忆昨天/u);
+assert.match(annotated, /〔事件：未来安排：2024-07-19/u);
+assert(!annotated.includes('〔事件：2024-07-18'), 'ordinary same-day events share section date');
+assert.equal(mixedTimeline.events.length, 3, 'complete GUI timeline is not pruned');
+assert.equal(annotated.replace(/〔事件：[^〕]*〕/gu, '').replace(/【本段记录时点：[^\n]*】\n/gu, ''), body, 'only time metadata is added, event prose is unchanged');
+const compressed = '### 长期摘要｜第 0–1 楼\n他今天来吃饭。\n【本段范围结束｜第 0–1 楼】';
+const compressedTime = annotateTimelineHistory(compressed, mixedTimeline);
+assert(!compressedTime.includes('码头') && !compressedTime.includes('明天再来'), 'compression must not resurrect omitted events');
+assert.match(compressedTime, /〔事件：2024-07-18，同一剧情日〕他今天来吃饭/u);
+const notExact = annotateTimelineHistory('### 长期摘要｜第 0–1 楼\n他在码头经历了一场意外。', mixedTimeline);
+assert(!notExact.includes('〔事件：'), 'paraphrases are not assigned guessed occurrence dates');
+const conflictTimeline = { ...mixedTimeline, events: [
+ ...mixedTimeline.events,
+ { ...mixedTimeline.events[1], date: '2024-07-16', relative: '距今2天' },
+] };
+assert(!annotateTimelineHistory(body, conflictTimeline).includes('〕他回忆昨天'), 'ambiguous identical wording on different days stays unassigned');
+assert(!annotateTimelineHistory('### 长期摘要｜第 0 楼\n他约好明天再来。', mixedTimeline).includes('〔事件：'), 'out-of-range events cannot annotate an earlier summary');
+const budget = renderTimelinePrompt({ ...mixedTimeline, events: Array.from({ length: 5000 }, () => mixedTimeline.events[0]) });
+assert(budget.length < 400 && !budget.includes('吃饭'), 'clock size is independent of event count');
+const rebased = buildTimeline({ sources: [a, mixed, source(2, '一个月后，回到书店。', null, 'user')], records: [mixedRecord] });
+assert.match(annotateTimelineHistory(body, rebased), /2024-07-17，距今32天/u);
+assert.match(annotateTimelineHistory(body, rebased), /约定日期已过30天/u);
+const rewound = buildTimeline({ sources: [a, mixed], records: [mixedRecord] });
+assert.match(annotateTimelineHistory(body, rewound), /2024-07-17，距今1天/u);
+console.log('Timeline dedup: selected-event dates, same-floor mixed times, compression boundaries, conservative matching, constant clock size and branch rebasing passed.');
+const retainedClause = '他们昨天在码头找到遗失的蓝色钥匙';
+const compressedEvent = { ...mixedTimeline.events[1], text: `他解释，${retainedClause}，后来才回家。` };
+const literalClauseTimeline = { ...mixedTimeline, events: [compressedEvent] };
+const clauseSummary = `### 长期摘要｜第 0–1 楼\n${retainedClause}。`;
+assert.match(annotateTimelineHistory(clauseSummary, literalClauseTimeline), /2024-07-17，距今1天[^〕]*〕他们昨天/u, 'verbatim retained clauses can receive occurrence dates without restoring omitted prose');
+assert(!annotateTimelineHistory(clauseSummary, { ...literalClauseTimeline, events: [compressedEvent, { ...compressedEvent, date: '2024-07-16', relative: '距今2天' }] }).includes('〔事件：'), 'conflicting verbatim clause matches must not guess a date');
+assert.match(annotateTimelineHistory('### 逐楼剧情记录｜第 1 楼\n他开门。他关门。', crossed), /2024-07-18，距今3天[^〕]*〕他开门/u, 'multiple dated scenes within one floor keep event-level dates');
+
+const nestedTimeline = { ...mixedTimeline, events: [
+ { ...mixedTimeline.events[1], text: '他回忆昨天在码头丢失钥匙' },
+ { ...mixedTimeline.events[1], text: '码头丢失钥匙', date: '2024-07-16', relative: '距今2天' },
+] };
+assert(!annotateTimelineHistory(body, nestedTimeline).includes('〔事件：'), 'overlapping wording with conflicting dates cannot choose a misleading longer match');
