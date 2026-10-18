@@ -1,3 +1,4 @@
+import { renderTimelineTab, bindTimelineTab } from './timeline-panel.js';
 import { SLOT_LABELS, SLOTS } from '../constants.js';
 import { listConnectionProfiles, listDirectModels, testAuxModelConnection } from '../aux-model.js';
 import {
@@ -156,6 +157,7 @@ export function injectPanel() {
             <nav class="lm-tabs" role="tablist" aria-label="记忆中心页面">
                 <button id="lm-tab-state" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="true" data-tab="state" class="lm-tab active">当前记忆</button>
                 <button id="lm-tab-turns" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="turns" class="lm-tab">对话记录</button>
+                <button id="lm-tab-time" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="time" class="lm-tab">时间</button>
                 <button id="lm-tab-chapters" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="chapters" class="lm-tab">章节</button>
                 <button id="lm-tab-review" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="review" class="lm-tab">待处理 <span class="lm-tab-count" hidden></span></button>
                 <button id="lm-tab-settings" type="button" role="tab" aria-controls="lm-tab-panel" aria-selected="false" tabindex="-1" data-tab="settings" class="lm-tab">设置</button>
@@ -662,6 +664,9 @@ export function renderActiveTab() {
     } else if (tab === 'turns') {
         body.innerHTML = renderTurnsTab();
         bindTurnsTab(body);
+    } else if (tab === 'time') {
+        body.innerHTML = renderTimelineTab();
+        bindTimelineTab(body, renderActiveTab);
     } else if (tab === 'chapters') {
         body.innerHTML = renderChaptersTab();
         bindChaptersTab(body);
@@ -1154,7 +1159,7 @@ function renderInjectionFooter() {
     const coreParts = buildCoreMemoryParts({ data, settings, context, pairs });
     const l1 = coreParts.l1;
     const l2 = coreParts.l2;
-    const coreMemory = [coreParts.l1, coreParts.l2, coreParts.raw].filter(Boolean).join('\n\n');
+    const coreMemory = [coreParts.temporal, coreParts.l1, coreParts.l2, coreParts.raw].filter(Boolean).join('\n\n');
     const hits = settings.l4Enabled ? retrieveHits(data, settings.budgetL4) : [];
     const l4 = settings.l4Enabled ? renderL4Block(hits, settings.budgetL4) : '';
     const presentation = injectionPresentation(false);

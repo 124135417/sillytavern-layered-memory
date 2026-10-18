@@ -29,6 +29,8 @@ const remove = api.registerContextProvider('test-independent-owner', () => 'EXTE
 assert.equal(renderCoreMemoryPayload().split('EXTERNAL_AUTHOR_NOTE').length - 1, 1);
 remove();
 assert.doesNotMatch(renderCoreMemoryPayload(), /EXTERNAL_AUTHOR_NOTE/);
+context.chat.push({ is_user: false, mes: '『书店｜2024-07-17｜12:00』\n他放下书。', extra: { layered_memory_id: 'dated-floor' } });
+assert.match(api.getStoryContext().l2, /唯一当前剧情日期：2024-07-17/u, 'optional consumers such as backstage must receive the same calendar anchor');
 context.extensionSettings.layered_memory.enabled = false;
 assert.equal(api.isEnabled(), false);
 assert.equal(api.getStoryContext(), null);

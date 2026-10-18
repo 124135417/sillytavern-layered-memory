@@ -925,7 +925,7 @@ body.lm-memory-center-open {
     .lm-metric:nth-child(odd) { border-left: 0; }
     .lm-metric b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .lm-connection { display: none; }
-    .lm-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); min-height: 46px; padding: 0 var(--lm-space-1); overflow: hidden; }
+    .lm-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); min-height: 46px; padding: 0 var(--lm-space-1); overflow: hidden; }
     .lm-tab { min-width: 0; justify-content: center; padding: 0 var(--lm-space-1); font-size: clamp(.72rem, 3.3vw, var(--lm-type-small)); text-align: center; white-space: nowrap; }
     .lm-tab-count { display: none; }
     .lm-memory-main { padding: var(--lm-space-4) var(--lm-page-gutter) var(--lm-space-6); }
@@ -1041,3 +1041,22 @@ body.lm-memory-center-open {
     .layered-memory-root { animation: none; }
     .layered-memory-root * { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Story calendar: flat, source-first chronology within the existing memory center. */
+.lm-time-page { display: grid; gap: 18px; min-width: 0; }
+.lm-time-now { padding: 8px 0 18px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
+.lm-time-now h3 { font-size: clamp(25px, 5vw, 34px); font-weight: 650; letter-spacing: -.03em; margin: 8px 0; }
+.lm-time-now p, .lm-time-help { opacity: .8; line-height: 1.6; margin: 6px 0; }
+.lm-time-toggle { display: flex; align-items: center; gap: 10px; }
+.lm-time-group h4 { margin: 0 0 8px; font-size: 1em; }
+.lm-time-event { padding: 14px 0; border-bottom: 1px solid var(--SmartThemeBorderColor); }
+.lm-time-event-head { display: flex; gap: 8px 14px; flex-wrap: wrap; align-items: baseline; }
+.lm-time-event-head span, .lm-time-actions > span { font-size: .85em; opacity: .8; }
+.lm-time-event p { margin: 8px 0; line-height: 1.65; overflow-wrap: anywhere; }
+.lm-time-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lm-time-actions > span { margin-right: auto; }
+.lm-time-conflicts, .lm-time-preview { line-height: 1.65; }
+.lm-time-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .9em; max-height: 360px; overflow: auto; }
+@media (max-width: 480px) { .lm-time-event-head { display: grid; gap: 4px; } .lm-time-actions > span { flex-basis: 100%; } }
+
+@media (max-width: 430px) { .lm-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 42px; } }

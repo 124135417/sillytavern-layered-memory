@@ -67,7 +67,7 @@ assert.doesNotMatch(css, /\.lm-workflow-progress \{[^}]*var\(--lm-page-gutter\)/
     'child sections must not reimplement page gutters');
 assert.doesNotMatch(css, /\.lm-turn-records(?:-loose)? \{[^}]*margin:[^;}]*(?:14px|18px|48px)/u,
     'turn record rows must not retain arbitrary outer offsets');
-assert.match(css, /grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/u,
+assert.match(css, /grid-template-columns: repeat\(6, minmax\(0, 1fr\)\)/u,
     'five phone navigation items must share equal width');
 assert.match(css, /\.lm-tabs \{[^}]*overflow: hidden;/u,
     'phone navigation must not create horizontal scrolling');

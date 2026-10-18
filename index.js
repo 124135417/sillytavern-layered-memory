@@ -1,3 +1,4 @@
+import { recordTimelineReceipt } from './src/timeline-receipt.js';
 import { registerMemoryIntegration } from './src/integration.js';
 import { handleChapterSummaryJob } from './src/chapter.js';
 import { handleExtractJob } from './src/extract.js';
@@ -241,9 +242,10 @@ jQuery(async () => {
         void onChatChanged();
     });
 
-    eventSource.on(event_types.MESSAGE_RECEIVED, (mesId, type) => {
+    eventSource.on(event_types.MESSAGE_RECEIVED, (mesId, type, receipt) => {
         const normalizedId = typeof mesId === 'number' ? mesId : Number(mesId);
         ensureMessageIds();
+        if (recordTimelineReceipt(ctx(), normalizedId, receipt)) scheduleInjectionRefresh();
         if (type === 'swipe') {
             queueHistoryMutation(normalizedId);
             return;

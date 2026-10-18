@@ -1,5 +1,6 @@
+import { buildTimeline, renderTimelinePrompt, annotateTimelineHistory } from './timeline.js';
 import { PROMPT_KEYS, QUEUE_PRIORITY } from './constants.js';
-import { getActiveMesText, getPairs } from './ids.js';
+import { getActiveMesText, getPairs, messageStableKey, messageContentFingerprint } from './ids.js';
 import { inspectPresetAnchor, MEMORY_ANCHOR_MACRO } from './preset-anchor.js';
 import { retrieveHits } from './retrieve.js';
 import { renderDormantRetrievalBlock, renderL1Block, renderL2Block, renderL4Block } from './render.js';
@@ -89,7 +90,7 @@ export function buildCoreMemoryParts({
             ...source,
             fallbackSummary: fallbackNarrativeSummary(source),
         }));
-    const trailingMessage = context?.chat?.at?.(-1);
+    const trailingMessage = resolvedExcludeTrailingAssistant && !context?.chat?.at?.(-1)?.is_user ? context?.chat?.at?.(-2) : context?.chat?.at?.(-1);
     const trailingUserText = trailingMessage?.is_user ? getActiveMesText(trailingMessage) : '';
     const recentNarrativeText = [
         ...resolvedNarrativeSources.slice(-12).map(source => source.narrativeText || source.text || ''),
@@ -111,12 +112,14 @@ export function buildCoreMemoryParts({
             && (!Number.isInteger(latestNarrativeFloor) || latestNarrativeFloor < styleReset.messageIndex)
             ? styleReset.messageIndex - 1
             : null;
-    const l2 = renderL2Block(data, {
+    const timeline = buildChatTimeline({ data, context, sources: resolvedNarrativeSources, trailingUser: !Array.isArray(narrativeSources) && trailingMessage?.is_user ? trailingMessage : null, excludeTrailingAssistant: resolvedExcludeTrailingAssistant });
+    const rawL2 = renderL2Block(data, {
         forInjection: true,
         pairs: resolvedPairs,
         narrativeSources: resolvedNarrativeSources,
         maxFloor,
     });
+    const l2 = settings.timelineEnabled !== false ? annotateTimelineHistory(rawL2, timeline) : rawL2;
     const authorNotes = renderContextContributions();
     return filterInjectedMemory({
         l1,
@@ -126,6 +129,8 @@ export function buildCoreMemoryParts({
         rawWindow,
         narrativeSources: resolvedNarrativeSources,
         styleReset,
+        timeline,
+        temporal: settings.timelineEnabled !== false ? renderTimelinePrompt(timeline, { query: trailingUserText || recentNarrativeText.slice(-1600) }) : '',
     }, readInjectionFilter(context));
 }
 
@@ -227,3 +232,15 @@ export function updateInjection({
     setExtensionPrompt(PROMPT_KEYS.L4, l4, IN_CHAT, settings.depthL4 ?? 4, false, SYSTEM);
     return anchor;
 }
+
+export function buildChatTimeline({ data = getChatData(), context = SillyTavern.getContext(), sources = null, trailingUser = null, excludeTrailingAssistant = null } = {}) {
+    const last = context?.chat?.at?.(-1);
+    const skip = excludeTrailingAssistant ?? Boolean(activeGenerationType && last && !last.is_user);
+    let visible = sources || currentNarrativeSources({ includeTrailingUser: true, excludeTrailingAssistant: skip });
+    if (trailingUser && !visible.some(source => source.messageKey === messageStableKey(trailingUser))) {
+        visible = [...visible, { message: trailingUser, messageKey: messageStableKey(trailingUser), contentFingerprint: messageContentFingerprint(trailingUser), messageIndex: context.chat.indexOf(trailingUser), role: 'user', text: getActiveMesText(trailingUser), narrativeText: getActiveMesText(trailingUser) }];
+    }
+    return buildTimeline({ sources: visible, records: data.narrative_summaries || [], corrections: data.timeline_corrections || [], incomplete: data.timeline_incomplete || [] });
+}
+
+export function isTimelineBusy() { return activeGenerationType !== null; }

@@ -1,3 +1,4 @@
+import { TEMPORAL_EVENT_INSTRUCTION, validateEventWhen } from './timeline.js';
 import { filterModelSource } from './request-context.js';
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { summarizeChapterNotes } from './archive.js';
@@ -370,7 +371,8 @@ function normalizeNarrativeSegments(rawSegments, source, floorErrors, warnings, 
                 if (source.role === 'user' && !text.includes('<user>')) {
                     text = `<user>${text.replace(/^(?:用户|你)/u, '')}`;
                 }
-                events.push({ text, evidence });
+                const when = validateEventWhen(rawEvent.when, source.narrativeText ?? source.text);
+                events.push({ text, evidence, ...(when ? { when } : {}) });
                 eventCount += 1;
             }
         }
@@ -460,7 +462,7 @@ async function summarizeNarrativeBatch(data, sources) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
         const { text, finishReason } = await callAuxModel({
             purpose: 'narrative_summary',
-            systemPrompt: NARRATIVE_FLOOR_SYSTEM,
+            systemPrompt: NARRATIVE_FLOOR_SYSTEM + TEMPORAL_EVENT_INSTRUCTION,
             userPrompt: buildNarrativeBatchPrompt(pending, retryNote),
             jsonSchema: NARRATIVE_FLOOR_JSON_SCHEMA,
             temperature: 0,

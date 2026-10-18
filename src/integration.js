@@ -14,8 +14,8 @@ export function registerMemoryIntegration() {
         },
         getStoryContext() {
             if (!getSettings().enabled) return null;
-            const { l2, raw } = buildCoreMemoryParts({ generationType: null, excludeTrailingAssistant: false });
-            return { l2, raw };
+            const { l2, raw, temporal } = buildCoreMemoryParts({ generationType: null, excludeTrailingAssistant: false });
+            return { l2: [temporal, l2].filter(Boolean).join('\n\n'), raw };
         },
         registerContextProvider,
         refreshContext: () => updateInjection(),

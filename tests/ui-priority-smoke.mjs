@@ -13,7 +13,7 @@ assert.doesNotMatch(sentHandler, /\bawait\b|rebuildAndEnqueuePending|waitForBran
     '发送监听器不得等待分支恢复、队列重建或网络保存');
 
 const receivedHandler = indexSource.match(/eventSource\.on\(event_types\.MESSAGE_RECEIVED,[\s\S]*?\n    \}\);/u)?.[0] || '';
-assert.match(receivedHandler, /MESSAGE_RECEIVED, \(mesId, type\) =>/u,
+assert.match(receivedHandler, /MESSAGE_RECEIVED, \(mesId, type, receipt\) =>/u,
     '回复完成事件必须立即返回给 SillyTavern');
 assert.doesNotMatch(receivedHandler, /\bawait\b|rebuildAndEnqueuePending|waitForBranchRecovery/u,
     '回复完成监听器不得把后台维护留在前台结束路径');

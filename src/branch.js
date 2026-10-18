@@ -260,6 +260,9 @@ function finishBranchData(data, parentData, livePairs, parentChat, method, trust
         const message = liveMessageByKey.get(item.messageKey);
         return { ...clone(item), messageIndex: message.messageIndex, role: message.role };
     });
+    // Calendar corrections carry full candidate-prefix proofs and are revalidated by the time layer.
+    data.timeline_corrections = clone(parentData.timeline_corrections || []);
+    data.timeline_incomplete = clone(parentData.timeline_incomplete || []);
     data.floor_events = (parentData.floor_events || [])
         .filter(item => withinTrustedPrefix(item) && matchesFloor(item, liveByKey)).map(clone);
     data.manual_events = (parentData.manual_events || [])

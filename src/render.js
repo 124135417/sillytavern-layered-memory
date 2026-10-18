@@ -220,11 +220,11 @@ function renderSceneTransition(item, timeState) {
     const time = String(item.sceneTime || '').trim();
     const location = String(item.sceneLocation || '').trim();
     if (time && time !== timeState.current) {
-        lines.push(`【当前剧情时间：${time}】`);
+        lines.push(`【本段剧情时间：${time}】`);
         timeState.current = item.sceneTimeEnd || time;
     }
     if (location && location !== timeState.location) {
-        lines.push(`【当前剧情地点：${location}】`);
+        lines.push(`【本段剧情地点：${location}】`);
         timeState.location = item.sceneLocationEnd || location;
     }
     return lines.join('\n');
