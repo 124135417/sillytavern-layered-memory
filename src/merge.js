@@ -1,11 +1,12 @@
 import { applyNpcDriveUpdates, authorNpcDrives, applyNpcDriveChanges } from './npc-drives.js';
 import { appendLog, getChatData, getSettings, getContext, saveChatData } from './settings.js';
-import { validateEntry, validateUpdateId } from './validate.js';
+import { validateEntry } from './validate.js';
 import { recordFloorEvent } from './branch.js';
 import { factIdentityKey, isFactCandidateDeleted, makeFactCandidate, upsertFactCandidate } from './facts.js';
 import { normalizeStoryTime } from './story-time.js';
 import { locateFactEvidence } from './fact-source.js';
 import { applyObsoleteFacts, isObsoleteDiscovery } from './obsolete.js';
+import { memoryConflictGuard } from './memory-conflicts.js';
 
 function nextEntryId(data) {
     const seq = data.progress.next_entry_seq || 1;
@@ -41,6 +42,11 @@ export function mergeExtractResult(normalized, ctx) {
     let discarded = 0;
     let conflicts = 0;
     const entryChanges = [];
+    const authorDrives = authorNpcDrives(getSettings(), getContext());
+    const guard = memoryConflictGuard(normalized.conflicts, {
+        entries: table.entries, drives: [...(data.npc_drives || []), ...authorDrives], sourceText: ctx.sourceText,
+    });
+    let guarded = 0;
 
     const floorLabel = ctx.floorLabel ?? ctx.pairIndex ?? '?';
     const floorKey = ctx.floorKey ?? null;
@@ -80,6 +86,11 @@ export function mergeExtractResult(normalized, ctx) {
             continue;
         }
         const dup = findDuplicate(table.entries, item);
+        if (guard.ids.has(dup?.id) || guard.blocksEvidence(item.evidence)) {
+            discarded += 1;
+            guarded += 1;
+            continue;
+        }
         if (dup) {
             // treat as update
             if (dup.pinned) {
@@ -95,18 +106,14 @@ export function mergeExtractResult(normalized, ctx) {
                     fact: item, floor: Number(ctx.pairIndex ?? ctx.floorLabel), floorKey, contentFingerprint: ctx.contentFingerprint || null, source: ctx.source || 'auto', index: itemIndex,
                     errors: [v.conflict.note],
                 });
-                data.review_queue.push({
-                    id: crypto.randomUUID(),
-                    kind: 'flag_conflict',
-                    entry_id: v.conflict.entry_id,
-                    note: v.conflict.note,
-                    candidate_id: conflictCandidate.id,
-                    floorKey,
-                    createdAt: Date.now(),
-                });
-                conflicts += 1;
+                guard.ids.add(dup.id);
+                guard.conflicts.push({ ...v.conflict, action: 'review', candidate_id: conflictCandidate.id,
+                    evidence: v.ok ? item.evidence : '' });
                 data.fact_ledger = upsertFactCandidate(data.fact_ledger, conflictCandidate);
                 discarded += 1;
+                // Preserve the existing concurrency retry when the model used
+                // the correct old value from its now-stale input snapshot.
+                if (ctx.obsoleteTargets?.[dup.id]?.value !== item.old_value) guarded += 1;
                 continue;
             }
             if (!v.ok) {
@@ -204,7 +211,8 @@ export function mergeExtractResult(normalized, ctx) {
         }));
     }
 
-    const obsolete = applyObsoleteFacts(data, normalized.obsolete, ctx, new Set(entryChanges.map(change => change.id)));
+    const obsolete = applyObsoleteFacts(data, normalized.obsolete, { ...ctx, keepIds: new Set(normalized.keepIds || []) },
+        new Set([...entryChanges.map(change => change.id), ...guard.ids]));
     discarded += obsolete.discarded;
     for (const record of obsolete.records) {
         pushChangelog(data, { op: 'delete', id: record.entry_id, floorKey, floor: floorLabel, before: record.entry });
@@ -212,25 +220,23 @@ export function mergeExtractResult(normalized, ctx) {
         applied += 1;
     }
 
-    for (const c of normalized.conflicts || []) {
-        if (!validateUpdateId(c.entry_id, table)) {
-            discarded += 1;
-            continue;
-        }
+    for (const c of guard.conflicts) {
         data.review_queue.push({
             id: crypto.randomUUID(),
             kind: 'flag_conflict',
             entry_id: c.entry_id,
             action: c.action || 'review',
             note: c.note || '',
+            evidence: c.evidence,
+            ...(c.candidate_id ? { candidate_id: c.candidate_id } : {}),
             floorKey,
             createdAt: Date.now(),
         });
         conflicts += 1;
     }
 
-    const npcDriveChanges = applyNpcDriveUpdates(data, normalized.npcDrives, { ...ctx,
-        authorDrives: authorNpcDrives(getSettings(), getContext()) });
+    const npcDriveChanges = applyNpcDriveUpdates(data, normalized.npcDrives, { ...ctx, authorDrives,
+        conflictGuard: guard });
     if (ctx.pipeline === 'per_floor' && floorKey) {
         recordFloorEvent(data, {
             floorKey,
@@ -244,6 +250,8 @@ export function mergeExtractResult(normalized, ctx) {
         });
     }
     const result = { applied, discarded, conflicts };
+    if (guarded) result.guarded = guarded;
+    if (guard.conflicts.length) result.sourceConflicts = guard.conflicts;
     if (ctx.persist === false) return result;
     return saveChatData(data).then(() => result);
 }

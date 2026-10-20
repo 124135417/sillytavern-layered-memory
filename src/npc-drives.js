@@ -64,7 +64,7 @@ export function selectNpcDriveRows(data, settings, context, budget, options = {}
 export function renderNpcDriveReview(data, settings, context) {
     const rows = effectiveNpcDrives(data, settings, context);
     return ['## 已有角色驱动力（作者方向受保护，当前进展随分支）',
-        rows.length ? rows.map(row => JSON.stringify({ character: row.character, drive: row.drive, progress: row.progress, author_fixed: row.source === 'author' })).join('\n') : '暂无；只在本次正文明确形成持续目的时建立，不要求每个出场人物都建一条。',
+        rows.length ? rows.map(row => JSON.stringify({ id: row.id, character: row.character, drive: row.drive, progress: row.progress, author_fixed: row.source === 'author' })).join('\n') : '暂无；只在本次正文明确形成持续目的时建立，不要求每个出场人物都建一条。',
     ].join('\n');
 }
 export function snapshotNpcDriveTargets(data) {
@@ -81,6 +81,7 @@ export function applyNpcDriveUpdates(data, commands, ctx) {
     const changes = [], seen = new Set(), authors = ctx.authorDrives || [];
     for (const command of Array.isArray(commands) ? commands : []) {
         const character = clean(command?.character), id = npcDriveId(character), evidence = clean(command?.evidence);
+        if (ctx.conflictGuard?.ids.has(id) || ctx.conflictGuard?.blocksEvidence(evidence)) continue;
         if (seen.has(id)) continue;
         seen.add(id);
         const before = data.npc_drives?.find(row => row.id === id) || null;

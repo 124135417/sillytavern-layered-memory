@@ -175,8 +175,8 @@ async function commitPreparedExtract({ prepared, pair, payload, originData, atte
             persist: false,
         });
         assertChatData(originData);
-        if (prepared.narrativeResults) storeNarrativeResults(originData, prepared.narrativeResults);
-        if (!payload.unified && !payload.summaryOnly && prepared.normalized.adds.length > 0 && result.discarded > 0 && result.applied === 0 && attempt === 0) {
+        if (prepared.narrativeResults) storeNarrativeResults(originData, prepared.narrativeResults, result.sourceConflicts);
+        if (!payload.unified && !payload.summaryOnly && prepared.normalized.adds.length > 0 && result.discarded > (result.guarded || 0) && result.applied === 0 && attempt === 0) {
             restoreExtractMutationState(originData, snapshot);
             return {
                 retry: true,

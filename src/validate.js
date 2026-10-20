@@ -87,6 +87,7 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
         updates: [],
         conflicts: [],
         obsolete: [],
+        keepIds: [],
         npcDrives: [],
         storyTimeRaw: raw?.story_time ?? null,
         pipeline,
@@ -144,6 +145,9 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
             entry_id: item.entry_id, category: item.category, reason: item.reason, evidence: item.evidence,
         }));
     }
+    if (pipeline === 'per_floor' && Array.isArray(raw.keep_ids)) {
+        out.keepIds = [...new Set(raw.keep_ids.filter(id => typeof id === 'string'))];
+    }
 
     if (pipeline === 'per_floor' && Array.isArray(raw.npc_drives)) out.npcDrives = raw.npc_drives.filter(item => item && typeof item === 'object');
 
@@ -151,7 +155,7 @@ export function normalizeExtractOutput(raw, pipeline = 'per_floor') {
         for (const c of raw.conflicts) {
             if (c?.entry_id) {
                 const action = ['replace', 'retire', 'review'].includes(c.action) ? c.action : 'review';
-                out.conflicts.push({ entry_id: c.entry_id, action, note: c.note || '' });
+                out.conflicts.push({ entry_id: c.entry_id, action, note: c.note || '', evidence: c.evidence || '' });
             }
         }
     }

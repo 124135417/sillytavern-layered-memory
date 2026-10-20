@@ -2,6 +2,7 @@ import { selectNpcDriveRows } from './npc-drives.js';
 import { SLOT_LABELS, SLOTS } from './constants.js';
 import { estimateTokens, truncateToBudget } from './tokens.js';
 import { usableMemoryEntries } from './quality.js';
+import { renderRecordEvents, renderNarrativeBody } from './narrative-text.js';
 
 function numericFloor(entry) {
     const value = Number(entry?.updated_floor ?? entry?.established_floor);
@@ -178,22 +179,6 @@ function narrativeRangeLabel(startPair, endPair, pairs = []) {
     return firstTurn === lastTurn ? `第 ${firstTurn} 轮对话` : `第 ${firstTurn}–${lastTurn} 轮对话`;
 }
 
-function renderStructuredSegments(segments, timeState) {
-    const lines = [];
-    for (const segment of Array.isArray(segments) ? segments : []) {
-        const label = String(segment?.time_change?.label || '').trim();
-        if (label && label !== timeState.current) {
-            lines.push(`【剧情时间推进：${label}】`);
-            timeState.current = label;
-        }
-        for (const event of Array.isArray(segment?.events) ? segment.events : []) {
-            const text = String(event?.text || '').trim();
-            if (text) lines.push(`- ${text}`);
-        }
-    }
-    return lines.join('\n');
-}
-
 function renderSceneTransition(item, timeState) {
     const lines = [];
     const time = String(item.sceneTime || '').trim();
@@ -213,14 +198,11 @@ function renderNarrativeItem(item, pairs, timeState = { current: '' }) {
     const range = item.floorUnit === 'message'
         ? (item.start === item.end ? `第 ${item.start} 楼` : `第 ${item.start}–${item.end} 楼`)
         : narrativeRangeLabel(item.start, item.end, pairs);
-    const structured = renderStructuredSegments(item.segments, timeState);
+    const structured = item.manual_override ? '' : renderRecordEvents(item.segments, timeState);
     const scene = renderSceneTransition(item, timeState);
-    const summary = String(item.summary ?? '').trim();
     const storyTime = !structured && !scene && item.storyTime ? `（剧情时间：${item.storyTime}）` : '';
     if (!structured && !scene && item.storyTime) timeState.current = item.storyTimeEnd || item.storyTime;
-    const body = structured
-        ? [`本楼摘要：${summary}`, '补充事件：', structured].join('\n')
-        : summary;
+    const body = renderNarrativeBody(item, structured);
     return [
         `### ${item.kind}｜${range}${storyTime}`,
         scene,
@@ -312,6 +294,9 @@ function renderVisibleFloorNarrative(data, narrativeSources, maxFloor = null) {
             kind: matches ? '逐楼剧情记录' : '逐楼临时记录', summary: String(summary).trim(),
             storyTime: matches ? stored.story_time?.label : null,
             segments: matches ? stored.segments : null,
+            injection_format: matches ? stored.injection_format : null,
+            manual_override: matches ? stored.manual_override : false,
+            memory_conflicts: matches ? stored.memory_conflicts : null,
             sceneTime: matches ? stored.scene_context?.time : null,
             sceneLocation: matches ? stored.scene_context?.location : null,
         });

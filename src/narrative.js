@@ -13,6 +13,7 @@ import { resolveStyleReset, stripStyleResetCommands } from './style-reset.js';
 import { evidenceSpansInSource } from './tokens.js';
 import { isBackstageMarker } from './message-semantics.js';
 import { attachSceneContexts, sameSceneContext, sceneContextRange } from './scene-context.js';
+import { narrativeConflictNotes } from './memory-conflicts.js';
 
 const MAX_BATCH_MESSAGES = 6;
 const MAX_BATCH_CHARS = 12_000;
@@ -192,13 +193,15 @@ function standaloneNarrativeSources(data, sources) {
     return sources.filter(source => !reserved.has(source.messageKey));
 }
 
-export function storeNarrativeResults(data, results) {
+export function storeNarrativeResults(data, results, conflicts = []) {
     data.narrative_summaries = data.narrative_summaries || [];
-    for (const { source, summary, segments, storyTime } of results) {
+    for (const { source, summary, segments, storyTime, eventsComplete } of results) {
         const next = {
             messageKey: source.messageKey, messageIndex: source.messageIndex, role: source.role,
             contentFingerprint: source.contentFingerprint, summary, segments,
             story_time: storyTime, scene_context: structuredClone(source.sceneContext), updatedAt: Date.now(),
+            ...(eventsComplete ? { injection_format: 'events-v1' } : {}),
+            ...((conflicts || []).length ? { memory_conflicts: narrativeConflictNotes(conflicts, source.narrativeText ?? source.text) } : {}),
         };
         const index = data.narrative_summaries.findIndex(item => item.messageKey === source.messageKey);
         // A manually edited record survives automatic background maintenance.
@@ -453,6 +456,7 @@ export function validateNarrativeBatch(raw, sources, { allowPartial = false } = 
         if (source.role === 'user' && !summary.includes('<user>')) {
             summary = `<user>${summary.replace(/^(?:用户|你)/u, '')}`;
         }
+        const warningCount = warnings.length;
         const { segments, storyTime } = normalizeNarrativeSegments(
             matches[0]?.segments,
             source,
@@ -461,7 +465,8 @@ export function validateNarrativeBatch(raw, sources, { allowPartial = false } = 
             { allowPartial },
         );
         errors.push(...floorErrors);
-        if (!floorErrors.length) results.push({ source, summary, segments, storyTime });
+        if (!floorErrors.length) results.push({ source, summary, segments, storyTime,
+            eventsComplete: segments.length > 0 && warnings.length === warningCount });
     }
     const returned = floors.map(item => Number(item?.floor)).filter(Number.isInteger);
     if (returned.some(floor => !expected.includes(floor))) errors.push('返回了未请求的楼号');
@@ -581,6 +586,9 @@ export async function handleNarrativeChapterJob(payload) {
             story_time: item.story_time || null,
             segments: item.segments || [],
             scene_context: item.scene_context || null,
+            injection_format: item.injection_format,
+            manual_override: item.manual_override,
+            memory_conflicts: item.memory_conflicts,
         }));
     const result = await summarizeChapterNotes(notes, startFloor, endFloor, () => assertChatData(data), { unit: 'floor' });
     assertChatData(data);

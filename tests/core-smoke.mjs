@@ -142,7 +142,9 @@ const conflictResult = await mergeExtractResult(conflicting, {
     pipeline: 'per_floor', sourceText: '周衡声称已经和解', stateTable: chatData.state_table,
     floorKey: 'floor-conflict', contentFingerprint: 'conflict-fp', pairIndex: 2, floorLabel: 2, source: 'auto',
 });
-assert.deepEqual(conflictResult, { applied: 0, discarded: 1, conflicts: 1 });
+assert.deepEqual({ applied: conflictResult.applied, discarded: conflictResult.discarded, conflicts: conflictResult.conflicts }, { applied: 0, discarded: 1, conflicts: 1 });
+assert.equal(conflictResult.guarded, 1, 'known old-value conflicts must not trigger paid re-extraction');
+assert.equal(conflictResult.sourceConflicts[0].evidence, '周衡声称已经和解', 'known conflicts must reach narrative annotation');
 assert.equal(chatData.state_table.entries.find(entry => entry.id === 'e_0099').value, '仍在冷战', 'old_value 冲突不得偷偷覆盖当前事实');
 assert.equal(chatData.review_queue.at(-1).candidate_id != null, true, '冲突必须关联可审阅的事实发现');
 await rollbackFloor('floor-conflict');

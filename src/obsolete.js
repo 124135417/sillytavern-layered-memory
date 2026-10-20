@@ -36,7 +36,7 @@ export function applyObsoleteFacts(data, decisions, ctx, touched = new Set()) {
         const validEvidence = Boolean(evidence && evidence.length <= 50 && evidenceInSource(evidence, reviewSource));
         if (ctx.pipeline !== 'per_floor' || !ctx.floorKey || !ctx.contentFingerprint
             || !Number.isInteger(ctx.pairIndex) || !entry || !shown || protectedEntry(entry)
-            || JSON.stringify(entry) !== JSON.stringify(shown) || touched.has(id)
+            || JSON.stringify(entry) !== JSON.stringify(shown) || touched.has(id) || ctx.keepIds?.has(id)
             || !reason || reason.length > 300
             || (evidence && !validEvidence)) {
             discarded += 1;

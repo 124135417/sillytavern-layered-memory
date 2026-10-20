@@ -1,6 +1,8 @@
 import { callAuxModel, parseJsonFromModel } from './aux-model.js';
 import { CHAPTER_JSON_SCHEMA, CHAPTER_SYSTEM } from './prompts.js';
 import { storyTimeRange } from './story-time.js';
+import { renderNarrativeBody } from './narrative-text.js';
+import { renderNarrativeConflicts } from './memory-conflicts.js';
 
 function promptForNotes(notes, retryNote = '', unit = 'turn') {
     const label = unit === 'floor' ? '楼' : '轮';
@@ -9,7 +11,10 @@ function promptForNotes(notes, retryNote = '', unit = 'turn') {
         `本章绝对编号：${notes.map(item => item.pairIndex).join('、')}。每项 coverage.floor 必须落在它引用的 key_events[event_index].floor_range 内；event_index 从 0 开始。关键事件范围必须覆盖全部编号，包括最后的第 ${notes.at(-1)?.pairIndex} ${label}，不得只列出 coverage 却遗漏对应事件。`,
         ...notes.map(item => {
             const time = storyTimeRange([item]);
-            return `【第 ${item.pairIndex} ${label}${time?.label ? `｜剧情时间：${time.label}` : ''}】${item.summary}`;
+            const body = item.injection_format === 'events-v1' && !item.manual_override
+                ? renderNarrativeBody(item)
+                : [renderNarrativeConflicts(item.memory_conflicts), item.summary].filter(Boolean).join('\n');
+            return `【第 ${item.pairIndex} ${label}${time?.label ? `｜剧情时间：${time.label}` : ''}】${body}`;
         }),
     ].join('\n\n');
 }
