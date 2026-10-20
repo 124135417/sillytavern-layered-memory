@@ -56,6 +56,11 @@ function buildMustKeepList(chaptersToCompress, laterChapters, stateTable, mode) 
     return [...new Set(must)].slice(0, 30);
 }
 
+export function buildVolumePrompt(chapters, mustKeep = []) {
+    const input = chapters.map(c => `### ${c.id}${c.floor_range ? ` [${c.floor_range[0]}-${c.floor_range[1]}]` : ''}\n${c.summary}`).join('\n\n');
+    return `必须保留清单（下列名称必须出现在卷摘要中）：\n${mustKeep.join('、') || '（无）'}\n\n章节摘要：\n${input}\n\n以上是待压缩素材。现在请输出一份 summary（500–900字，上限900字）和全部 covered_chapter_ids；合并跨章进展，保留持续状态的具体含义与明示时长，删除低影响过场，不要拼接或逐章复述。`;
+}
+
 export function validateVolumeResult(raw, chapters, mustKeep = []) {
     const summary = String(raw?.summary || '').trim();
     const expectedIds = chapters.map(chapter => chapter.id);
@@ -136,8 +141,7 @@ export async function handleVolumeCompressJob(payload = {}) {
     const later = activeChapters.slice(toCompress.length);
     const mustKeep = buildMustKeepList(toCompress, later, data.state_table, settings.mentionStatMode);
 
-    const input = toCompress.map(c => `### ${c.id} [${c.floor_range[0]}-${c.floor_range[1]}]\n${c.summary}`).join('\n\n');
-    const userPrompt = `必须保留清单（下列名称必须出现在卷摘要中）：\n${mustKeep.join('、') || '（无）'}\n\n章节摘要：\n${input}`;
+    const userPrompt = buildVolumePrompt(toCompress, mustKeep);
 
     const summary = await createValidatedVolume(toCompress, mustKeep, userPrompt, data);
     if (!summary) {
@@ -183,11 +187,10 @@ async function recompressVolume(volId, data = getChatData(), narrative = String(
     // Temporarily treat as toCompress set
     const later = allChapters.filter(c => !vol.chapter_ids.includes(c.id) && !c.demoted);
     const mustKeep = buildMustKeepList(chapters, later, data.state_table, getSettings().mentionStatMode);
-    const input = chapters.map(c => `### ${c.id}\n${c.summary}`).join('\n\n');
     const summary = await createValidatedVolume(
         chapters,
         mustKeep,
-        `必须保留清单：${mustKeep.join('、') || '（无）'}\n\n${input}`,
+        buildVolumePrompt(chapters, mustKeep),
         data,
     );
     if (!summary) {

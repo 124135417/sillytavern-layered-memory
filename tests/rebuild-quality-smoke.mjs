@@ -213,10 +213,12 @@ assert.equal(veryShortCheck.ok, true, 'summary length alone must never discard s
 assert.equal(veryShortCheck.warnings.length, 1);
 assert.equal(validateChapterArchive({ ...validChapter, summary: '' }, 0, 24).ok, false,
     'an empty chapter summary must still be rejected');
-const oversizedCheck = validateChapterArchive({ ...validChapter, summary: '完整剧情。'.repeat(230) }, 0, 24);
+const oversizedSummary = '完整剧情。'.repeat(230) + '双方此后持续共同生活，原文明示已经三个月。';
+const oversizedCheck = validateChapterArchive({ ...validChapter, summary: oversizedSummary }, 0, 24);
 assert.equal(oversizedCheck.ok, true);
-assert.equal([...oversizedCheck.chapter.summary].length, 900, 'overlong chapter prose should be deterministically capped');
-assert.match(oversizedCheck.warnings.join('；'), /已保留前 900 字/u);
+assert.equal(oversizedCheck.chapter.summary, oversizedSummary, 'overlong prose must retain the complete final state instead of losing its tail');
+assert.equal(oversizedCheck.needsExpansion, false, 'oversized prose must not request an expansion retry');
+assert.match(oversizedCheck.warnings.join('；'), /已完整保留/u);
 assert.equal(formatRebuildFloorList([113, 114, 115, 117, 118, 124]), '113–115、117–118、124');
 assert.equal(rebuildStage({ type: 'history_rebuild_segment', payload: { startPair: 100, endPair: 124, pairIndexes: [113, 114, 115] } }, { phase: '旧进度' }),
     '正在逐轮核对第 113–115 轮', 'the active queue job must win over stale saved progress text');
@@ -423,6 +425,25 @@ const acceptedShortChapter = await summarizeChapterNotes(
 assert.equal(shortChapterAttempts, 2, 'a short chapter should receive one quality retry');
 assert.match(acceptedShortChapter.quality_warnings.join('；'), /较精简/u,
     'a second structurally complete short result must be saved with a quality warning');
+
+let oversizedChapterAttempts = 0;
+globalThis.SillyTavern = { getContext: () => ({
+    chat: [], name1: '伯滔', chatMetadata: { layered_memory: { state_table: { entries: [] } } },
+    extensionSettings: { layered_memory: { memoryModelSource: 'current' } },
+    generateRaw: async () => {
+        oversizedChapterAttempts += 1;
+        return JSON.stringify({ ...validChapter, summary: oversizedSummary });
+    },
+    saveMetadata: async () => {}, saveSettingsDebounced: () => {}, saveChat: async () => {},
+}) };
+const acceptedOversizedChapter = await summarizeChapterNotes(
+    Array.from({ length: 25 }, (_, pairIndex) => ({ pairIndex, summary: `第 ${pairIndex} 轮已有记录。` })),
+    0, 24,
+);
+assert.equal(oversizedChapterAttempts, 1, 'a complete oversized chapter must not spend another model call on length alone');
+assert.equal(acceptedOversizedChapter.summary, oversizedSummary);
+assert.deepEqual(acceptedOversizedChapter.coverage, coverage, 'removing truncation must preserve existing coverage');
+assert.deepEqual(acceptedOversizedChapter.key_events, validChapter.key_events);
 
 const progressChat = Array.from({ length: 132 }, (_, pairIndex) => [
     { is_user: true, mes: `用户 ${pairIndex}`, extra: { layered_memory_id: `progress-u-${pairIndex}` } },

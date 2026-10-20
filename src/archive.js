@@ -71,15 +71,14 @@ export function validateChapterArchive(raw, startPair, endPair) {
     const warnings = [];
     const recommendedLength = Math.min(450, Math.max(180, expected.length * 18));
     const summaryLength = [...rawSummary].length;
-    let summary = rawSummary;
+    const summary = rawSummary;
     if (!summaryLength) {
         errors.push('章节概述为空');
     } else if (summaryLength < recommendedLength) {
         warnings.push(`章节概述较精简（${summaryLength} 字，建议至少 ${recommendedLength} 字）`);
     }
     if (summaryLength > 900) {
-        summary = [...rawSummary].slice(0, 900).join('').trimEnd();
-        warnings.push(`章节概述超过 900 字，已保留前 900 字`);
+        warnings.push('章节概述超过 900 字，已完整保留以避免丢失事实');
     }
     if (!keyEvents.length) errors.push('缺少关键事件');
     if (keywords.length < 3) errors.push('关键词少于 3 个');
@@ -143,6 +142,7 @@ export function validateChapterArchive(raw, startPair, endPair) {
         ok: errors.length === 0,
         errors,
         warnings,
+        needsExpansion: summaryLength > 0 && summaryLength < recommendedLength,
         chapter: {
             summary,
             key_events: normalizedEvents,
@@ -169,7 +169,7 @@ export async function summarizeChapterNotes(notes, startPair, endPair, assertCur
         });
         assertCurrent();
         const checked = validateChapterArchive(parseJsonFromModel(text), startPair, endPair);
-        if (checked.ok && (!checked.warnings.length || attempt === 1)) {
+        if (checked.ok && (!checked.needsExpansion || attempt === 1)) {
             checked.chapter.story_time_range = storyTimeRange(notes);
             return checked.chapter;
         }

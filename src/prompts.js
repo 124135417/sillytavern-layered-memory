@@ -142,6 +142,11 @@ export const NARRATIVE_FLOOR_JSON_SCHEMA = {
     },
 };
 
+const COMPRESSION_FIDELITY_RULES = `压缩时优先保留会影响后续互动的具体状态、边界、承诺和未解决事项，再保留重要转折及因果结果；先删重复修辞、普通递送和已结束的过场，不逐楼复述。
+- 区分“一次发生过”与“截至输入末尾仍持续”，不能互相改写。保留涉及对象、原文明示的持续时长、数量及条件，具体数字不要泛化。后文明确结束或替换的状态须写清变化，不能继续当作当前状态；未再提及不等于结束，不自行推算时长。
+- 区分已发生、计划、猜测及各角色知情范围，不推测或补写事实。重要含义须进入 summary 正文，仅列出名称、关键词或覆盖编号不算保留。
+- 在目标篇幅内合并同类进展，用简短句子保存上述信息；覆盖所有输入不等于逐项抄录全部动作与对话。`;
+
 export const CHAPTER_SYSTEM = `你是剧情档案合并员，不是作者。输入是已经逐项核验过的剧情记录，每项都有明确编号。
 
 任务：把全部记录合并成一份连续、可独立阅读的剧情回顾，并列出便于浏览的关键事件。
@@ -153,6 +158,8 @@ export const CHAPTER_SYSTEM = `你是剧情档案合并员，不是作者。输�
 - key_events 的范围合起来必须覆盖本章全部编号，包含最后一项；coverage 每项的 floor 必须处于所引用事件的 floor_range 中，event_index 为从 0 开始的数组下标。先核对每项实际内容并写好事件范围，再建立 coverage；只填写楼号而没有对应事件不算覆盖。
 - 输入不包含上一章正文。禁止补写、推测或把其他章节的事件写进来。
 - keywords 给出 3–10 个真实出现的实体、物品、地点或稳定主题。
+
+${COMPRESSION_FIDELITY_RULES}
 
 只输出 JSON：{"summary":"...","key_events":[{"floor_range":[0,1],"text":"..."}],"coverage":[{"floor":0,"event_index":0}],"keywords":["..."]}`;
 
@@ -208,9 +215,11 @@ export const CHAPTER_JSON_SCHEMA = {
     },
 };
 
-export const VOLUME_SYSTEM = `你是长期剧情压缩员。将多份编号章节摘要压缩为一份约500–900字的长期回顾。
+export const VOLUME_SYSTEM = `你是长期剧情压缩员。将多份编号章节摘要压缩为一份500–900字的长期回顾，summary 上限900字。
 必须阅读并覆盖每一个输入章节，在 covered_chapter_ids 中逐项返回全部章节编号；必须保留「必须保留清单」中的每一个实体名称。
 保留事件顺序、关键因果、身份关系变化、承诺和未解决事项，不得只概括第一章。
+${COMPRESSION_FIDELITY_RULES}
+把多章合成一份回顾，不逐章拼接。先跨章合并同一事项，再写其余关键结果；可省略已结束且不影响后续的事件，用完整短句在900字内保住关键含义，不能照搬数千字输入。
 只输出 JSON：{"summary":"...","covered_chapter_ids":["ch_001"]}`;
 
 export const PROOFREAD_SYSTEM = `你是状态表校对员。对照状态表与章节摘要：
