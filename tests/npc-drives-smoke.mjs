@@ -28,3 +28,24 @@ changes=applyNpcDriveUpdates(fork,[{character:'陌生人',drive:'想统治世界
 const f={id:'same',slot:'other',subject:'舟',value:'完整重复方向',evidence:'完整重复方向',source:'auto'};data.state_table.entries=[f];author.covered_facts=[{id:f.id,subject:f.subject,value:f.value}];let selected=selectL1Entries(data,2000,context);assert.equal(selected.covered,1);assert.equal(selected.entries.length,0);assert(selected.tokens<=2000);f.value='不同分支复用ID的另一个事实';selected=selectL1Entries(data,2000,context);assert.equal(selected.covered,0);assert(selected.entries.some(x=>x.id===f.id));assert(selected.tokens<=2000);
 assert.equal(npcDriveId(' 舟 '),author.id);
 console.log('NPC drives: single-call extraction, author protection, exact branch rollback, secret gating, scope isolation, evidence checks, deduplication and unchanged budget passed');
+
+// Admission is stricter than ordinary evidence matching, without an extra call.
+const automatic = EMPTY_CHAT_DATA();
+const autoCtx = text => ({ floorKey: 'auto-floor', contentFingerprint: 'auto-fp', pairIndex: 0,
+    sourceText: text, npcDriveTargets: snapshotNpcDriveTargets(automatic) });
+let command = { character: '岚', drive: '想查清来意', progress: '当场追问', evidence: '岚问：“你来做什么？”' };
+assert.equal(applyNpcDriveUpdates(automatic, [command], autoCtx(command.evidence)).length, 0,
+    'one-off action evidence cannot create a persistent drive');
+const pledge = '岚说：“以后无论迁去哪里，我都会继续寻找失散的家人。”';
+command = { character: '岚', drive: '寻找失散的家人', progress: '决定持续寻找', evidence: pledge,
+    scope: 'enduring', why_persistent: '明确表示换住处后仍会继续寻找。', persistence_evidence: pledge };
+assert.equal(applyNpcDriveUpdates(automatic, [{ ...command, persistence_evidence: '不存在的承诺' }], autoCtx(pledge)).length, 0);
+assert.equal(applyNpcDriveUpdates(automatic, [command], autoCtx(pledge)).length, 1,
+    'an explicit durable commitment can be established immediately');
+const found = '岚说：“已经查明是认错人，没必要再追查。”';
+assert.equal(applyNpcDriveUpdates(automatic, [{character:'岚',drive:'改为报复路人',evidence:found}], autoCtx(found)).length, 0,
+    'rewriting a core goal also requires durable evidence');
+assert.equal(applyNpcDriveUpdates(automatic, [{character:'岚',progress:'收到了地址',evidence:'岚收到地址。'}], autoCtx('岚收到地址。')).length, 1,
+    'progress updates do not need to re-establish the goal');
+assert.equal(applyNpcDriveUpdates(automatic, [{character:'岚',op:'remove',evidence:found}], autoCtx(found)).length, 1);
+assert.equal(automatic.npc_drives.length, 0);

@@ -48,7 +48,7 @@ export function effectiveNpcDrives(data = {}, settings = {}, context = {}, { inc
 export function renderNpcDriveRows(rows) {
     if (!rows.length) return '';
     return ['## 角色持续驱动力',
-        '驱动力影响角色在合适机会下的主动选择与反应，不要求每轮出场或重复索求，不替用户决定行动。一次实现可改变进展，长期渴望继续承接；较新剧情更新当前进展。',
+        '持续愿望在合适机会下影响选择，不是每轮必须执行的任务，也不替用户决定行动。作者指定方向保持；自动目标随实际进展可调整、完成或退出。目标里的人物猜测不等于世界事实，证据不足允许悬置，反证可以改变判断；不靠补造阴谋使旧猜测永远成立。',
         ...rows.map(row => `- ${row.character}${row.source === 'author' ? '（作者指定）' : ''}：${row.drive}${row.progress ? `\n  当前进展：${row.progress}` : ''}`),
     ].join('\n');
 }
@@ -64,7 +64,7 @@ export function selectNpcDriveRows(data, settings, context, budget, options = {}
 export function renderNpcDriveReview(data, settings, context) {
     const rows = effectiveNpcDrives(data, settings, context);
     return ['## 已有角色驱动力（作者方向受保护，当前进展随分支）',
-        rows.length ? rows.map(row => JSON.stringify({ id: row.id, character: row.character, drive: row.drive, progress: row.progress, author_fixed: row.source === 'author' })).join('\n') : '暂无；只在本次正文明确形成持续目的时建立，不要求每个出场人物都建一条。',
+        rows.length ? rows.map(row => JSON.stringify({ id: row.id, character: row.character, drive: row.drive, progress: row.progress, author_fixed: row.source === 'author' })).join('\n') : '暂无；仅在本次正文有明确的跨场景持续性依据时建立。临时猜疑与眼前任务留在剧情记录，不必建档。',
     ].join('\n');
 }
 export function snapshotNpcDriveTargets(data) {
@@ -98,8 +98,22 @@ export function applyNpcDriveUpdates(data, commands, ctx) {
             const drive = author?.drive || clean(command.drive) || before?.drive || '';
             const progress = clean(command.progress ?? before?.progress);
             if (!drive || drive.length > 200 || progress.length > 160) continue;
+            // Creation and core-goal rewrites require an explicit persistence
+            // claim backed by the current source. Progress-only updates and
+            // authored directions keep their existing, protected contract.
+            const changesCore = !author && (!before || drive !== before.drive);
+            const whyPersistent = clean(command.why_persistent);
+            const persistenceEvidence = clean(command.persistence_evidence);
+            if (changesCore && (command.scope !== 'enduring'
+                || !whyPersistent || whyPersistent.length > 160
+                || !persistenceEvidence || persistenceEvidence.length > 120
+                || !evidenceInSource(persistenceEvidence, ctx.sourceText || ''))) continue;
             const after = { id, character: author?.character || before?.character || character,
                 drive: author ? '' : drive, progress, evidence, source: 'auto',
+                ...(!author && (changesCore || before?.scope === 'enduring') ? {
+                    scope: 'enduring', why_persistent: changesCore ? whyPersistent : before.why_persistent,
+                    persistence_evidence: changesCore ? persistenceEvidence : before.persistence_evidence,
+                } : {}),
                 floorKey: ctx.floorKey, pairIndex: ctx.pairIndex, contentFingerprint: ctx.contentFingerprint };
             changes.push({ id, before: before ? structuredClone(before) : null, after });
         }
