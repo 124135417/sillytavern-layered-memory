@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EMPTY_CHAT_DATA } from '../src/constants.js';
-import { setAuthorNpcDrive, effectiveNpcDrives, snapshotNpcDriveTargets, applyNpcDriveUpdates, npcDriveId } from '../src/npc-drives.js';
+import { setAuthorNpcDrive, effectiveNpcDrives, snapshotNpcDriveTargets, applyNpcDriveUpdates, npcDriveId, selectNpcDriveRows, renderNpcDriveReview } from '../src/npc-drives.js';
 import { selectL1Entries } from '../src/render.js';
 const msg=(id,user,mes)=>({is_user:user,mes,extra:{layered_memory_id:id}});
 const context={characterId:0,characters:[{avatar:'fixture.png'}],chat:[],chatMetadata:{},extensionSettings:{layered_memory:{enabled:true,memoryModelSource:'current',chapterSize:1000,proofreadEvery:1000}},saveMetadata:async()=>{},saveChat:async()=>{},saveSettingsDebounced(){},name1:'玩家'};
@@ -49,3 +49,20 @@ assert.equal(applyNpcDriveUpdates(automatic, [{character:'岚',progress:'收到�
     'progress updates do not need to re-establish the goal');
 assert.equal(applyNpcDriveUpdates(automatic, [{character:'岚',op:'remove',evidence:found}], autoCtx(found)).length, 1);
 assert.equal(automatic.npc_drives.length, 0);
+
+// Old branches retain their records for management, but cannot bypass admission.
+const legacy = EMPTY_CHAT_DATA();
+legacy.npc_drives = [{id:npcDriveId('岚'),character:'岚',source:'auto',drive:'检查门口的人',progress:'还在检查',evidence:'岚看了一眼门口。'}];
+const savedLegacy = structuredClone(legacy.npc_drives);
+assert(!selectNpcDriveRows(legacy, settings, context, 2000).text.includes('检查门口的人'));
+assert(!renderNpcDriveReview(legacy, settings, context).includes('检查门口的人'));
+assert.deepEqual(legacy.npc_drives,savedLegacy,'injection must not delete old branch records');
+assert(selectNpcDriveRows(legacy, settings, context, 2000).text.includes(author.drive),
+    'authored directions do not need automatic admission fields');
+let legacyCtx={floorKey:'next',contentFingerprint:'next-fp',sourceText:'岚看了一眼门口。',npcDriveTargets:snapshotNpcDriveTargets(legacy)};
+assert.equal(applyNpcDriveUpdates(legacy,[{character:'岚',progress:'继续检查',evidence:'岚看了一眼门口。'}],legacyCtx).length,0,
+    'a progress-only refresh cannot grandfather an unqualified inherited goal');
+legacyCtx={...legacyCtx,sourceText:pledge,npcDriveTargets:snapshotNpcDriveTargets(legacy)};
+assert.equal(applyNpcDriveUpdates(legacy,[command],legacyCtx).length,1,
+    'an inherited record can qualify later with real persistence evidence');
+assert(selectNpcDriveRows(legacy, settings, context, 2000).text.includes('寻找失散的家人'));

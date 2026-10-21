@@ -45,7 +45,15 @@ export function effectiveNpcDrives(data = {}, settings = {}, context = {}, { inc
     })).filter(row => includeHidden || row.visible)
         .sort((a, b) => (a.source === 'author' ? 0 : 1) - (b.source === 'author' ? 0 : 1) || a.character.localeCompare(b.character));
 }
+function hasPersistenceEvidence(row) {
+    return row?.scope === 'enduring' && Boolean(clean(row.why_persistent))
+        && Boolean(clean(row.persistence_evidence));
+}
+function admittedDrive(row) {
+    return row.source !== 'auto' || hasPersistenceEvidence(row);
+}
 export function renderNpcDriveRows(rows) {
+    rows = rows.filter(admittedDrive);
     if (!rows.length) return '';
     return ['## 角色持续驱动力',
         '持续愿望在合适机会下影响选择，不是每轮必须执行的任务，也不替用户决定行动。作者指定方向保持；自动目标随实际进展可调整、完成或退出。目标里的人物猜测不等于世界事实，证据不足允许悬置，反证可以改变判断；不靠补造阴谋使旧猜测永远成立。',
@@ -53,7 +61,7 @@ export function renderNpcDriveRows(rows) {
     ].join('\n');
 }
 export function selectNpcDriveRows(data, settings, context, budget, options = {}) {
-    const all = effectiveNpcDrives(data, settings, context, options), selected = [];
+    const all = effectiveNpcDrives(data, settings, context, options).filter(admittedDrive), selected = [];
     for (const row of all) if (estimateTokens(renderNpcDriveRows([...selected, row])) <= budget) selected.push(row);
     const covered = new Set();
     for (const row of selected) for (const ref of [...(row.covered_facts || []), ...(row.progress_facts || [])]) {
@@ -62,7 +70,7 @@ export function selectNpcDriveRows(data, settings, context, budget, options = {}
     return { rows: selected, text: renderNpcDriveRows(selected), total: all.length, covered };
 }
 export function renderNpcDriveReview(data, settings, context) {
-    const rows = effectiveNpcDrives(data, settings, context);
+    const rows = effectiveNpcDrives(data, settings, context).filter(admittedDrive);
     return ['## 已有角色驱动力（作者方向受保护，当前进展随分支）',
         rows.length ? rows.map(row => JSON.stringify({ id: row.id, character: row.character, drive: row.drive, progress: row.progress, author_fixed: row.source === 'author' })).join('\n') : '暂无；仅在本次正文有明确的跨场景持续性依据时建立。临时猜疑与眼前任务留在剧情记录，不必建档。',
     ].join('\n');
@@ -101,7 +109,7 @@ export function applyNpcDriveUpdates(data, commands, ctx) {
             // Creation and core-goal rewrites require an explicit persistence
             // claim backed by the current source. Progress-only updates and
             // authored directions keep their existing, protected contract.
-            const changesCore = !author && (!before || drive !== before.drive);
+            const changesCore = !author && (!before || !hasPersistenceEvidence(before) || drive !== before.drive);
             const whyPersistent = clean(command.why_persistent);
             const persistenceEvidence = clean(command.persistence_evidence);
             if (changesCore && (command.scope !== 'enduring'
