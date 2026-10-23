@@ -415,6 +415,7 @@ export function retryFailedJob(jobId) {
     if (!isDuplicateJob(scopeId, failed.type, failed.payload || {})) {
         memoryQueue.push(normalizeJob({
             ...failed,
+            payload: failed.type === 'extract' ? { ...failed.payload, retryNote: String(failed.lastError || '').slice(0, 500) } : failed.payload,
             attempt: 0,
             lastError: null,
             nextRetryAt: null,

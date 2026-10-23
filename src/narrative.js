@@ -11,6 +11,7 @@ import { appendLog, assertChatData, getChatData, getSettings, saveChatData } fro
 import { normalizeStoryTime, storyTimeEvidencePosition } from './story-time.js';
 import { resolveStyleReset, stripStyleResetCommands } from './style-reset.js';
 import { evidenceSpansInSource } from './tokens.js';
+import { recoverShortUserEvents } from './narrative-user-evidence.js';
 import { isBackstageMarker } from './message-semantics.js';
 import { attachSceneContexts, sameSceneContext, sceneContextRange } from './scene-context.js';
 import { narrativeConflictNotes } from './memory-conflicts.js';
@@ -448,7 +449,12 @@ export function validateNarrativeBatch(raw, sources, { allowPartial = false } = 
             continue;
         }
         const floorErrors = [];
-        let summary = String(matches[0]?.summary || '').replace(/\s+/g, ' ').trim();
+        const rawSegments = matches[0]?.segments;
+        const safeSegments = recoverShortUserEvents(rawSegments, source);
+        // The failed extraction may also have summarized the assistant's
+        // embellished account as player input. Retain only the actual input.
+        let summary = safeSegments !== rawSegments ? safeSegments[0].events[0].text
+            : String(matches[0]?.summary || '').replace(/\s+/g, ' ').trim();
         const length = [...summary].length;
         if (length < 4 || length > 240) {
             floorErrors.push(`第 ${source.messageIndex} 楼摘要长度异常`);
@@ -458,7 +464,7 @@ export function validateNarrativeBatch(raw, sources, { allowPartial = false } = 
         }
         const warningCount = warnings.length;
         const { segments, storyTime } = normalizeNarrativeSegments(
-            matches[0]?.segments,
+            safeSegments,
             source,
             floorErrors,
             warnings,

@@ -84,7 +84,7 @@ async function runExtractOnce(pair, { retryNote = '', unified = false } = {}) {
     const allNarrativeSources = unified ? currentNarrativeSources().map(source => ({ ...source, fallbackSummary: source.narrativeText })) : [];
     const narrativeSources = allNarrativeSources.filter(source => [pair.userKey, pair.aiKey].includes(source.messageKey));
     const obsoleteHistory = unified ? renderObsoleteHistory(data, pair, getPairs(), allNarrativeSources) : '';
-    const userPrompt = unified ? [retryNote, obsoleteHistory, '## 当前状态表', tableRender, driveReview, buildNarrativeBatchPrompt(narrativeSources, retryNote)].filter(Boolean).join('\n\n') : [
+    const userPrompt = unified ? [obsoleteHistory, '## 当前状态表', tableRender, driveReview, buildNarrativeBatchPrompt(narrativeSources, retryNote)].filter(Boolean).join('\n\n') : [
         retryNote ? `上次校验失败原因：${retryNote}\n请修正后重新输出。\n` : '',
         '## 当前状态表\n',
         tableRender,
@@ -238,7 +238,7 @@ export async function handleExtractJob(payload) {
     let prepared = null;
     let preparationError = null;
     try {
-        prepared = await prepareExtract(pair, payload);
+        prepared = await prepareExtract(pair, payload, payload.retryNote || '');
     } catch (error) {
         preparationError = error;
     }
