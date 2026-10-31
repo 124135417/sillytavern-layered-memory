@@ -653,6 +653,9 @@ function activeTab() {
 }
 
 export function renderActiveTab() {
+    // A closed panel is rebuilt when opened. Background events must not
+    // render its entire history/ledger and editor tree while it is hidden.
+    if (document.getElementById(ROOT_ID)?.hasAttribute('hidden')) return;
     const body = document.querySelector(`#${ROOT_ID} .lm-body`);
     if (!body) {
         return;

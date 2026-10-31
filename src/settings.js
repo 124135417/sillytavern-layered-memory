@@ -123,7 +123,9 @@ export function getChatData() {
 }
 
 export function assertChatData(data) {
-    if (getActiveChatData() !== data) {
+    // This is an identity guard, not a migration/read operation. Re-running
+    // ledger reconciliation at every await boundary stalls long chats.
+    if (!data || getContext().chatMetadata?.[MODULE_NAME] !== data) {
         const error = new Error('聊天已切换，已取消旧聊天任务的保存');
         error.code = 'CHAT_SCOPE_CHANGED';
         throw error;
